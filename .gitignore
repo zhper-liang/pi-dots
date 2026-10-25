@@ -1,0 +1,25 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.log
+
+# 运行数据与凭证（仓库只保留 .env.example）
+.env
+.env.local
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# 本地实施过程、旧规划与历史快照：不进仓库，需要追溯时查 git 历史
+.scratch/
+.planning/
+archive/
+
+# 本地工具缓存
+.playwright-cli/
+.codegraph/
+.claude/
+
+# 临时导出
+docs.zip

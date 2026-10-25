@@ -1,0 +1,3 @@
+export default function WorkspaceIdentity({ sourceId, authority, scope, epoch }: { sourceId: string; authority: 'local' | 'external'; scope: string; epoch?: number }) {
+  return <dl className="workspace-identity" aria-label="来源与权限摘要"><div><dt>来源</dt><dd>{sourceId}</dd></div><div><dt>权威来源 authority</dt><dd>{authority === 'local' ? 'local · 本地权威' : 'external · 飞书权威，缓存仅作观察'}</dd></div><div><dt>当前用户权限</dt><dd>{authority === 'local' ? '本机所有者 · 完整读写（无需授权）' : scope === 'full' ? '正文与已授权操作' : scope === 'busy' ? 'busy-only · 仅忙闲，不展开正文' : '未授权'}{authority !== 'local' && epoch !== undefined && ` · epoch ${epoch}`}</dd></div><div><dt>主体边界</dt><dd>Bot 按当前工具与资源勾选使用；模型不获得凭证</dd></div></dl>
+}

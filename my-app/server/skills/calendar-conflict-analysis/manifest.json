@@ -1,0 +1,26 @@
+{
+  "id": "calendar-conflict-analysis",
+  "name": "日程冲突分析",
+  "description": "依据模拟日程列表及事项详情，逐对核对冲突、给出可追溯依据和调整建议。",
+  "version": "1.1.0",
+  "applicability": "用户明确指定日期并需要检查个人模拟日程冲突；不适用于真实日历写入。",
+  "botIds": [
+    "calendar"
+  ],
+  "requiredTools": [
+    "calendar_read_schedule",
+    "calendar_read_event",
+    "skill_read_resource"
+  ],
+  "requiredResources": [
+    "mock:personal"
+  ],
+  "scripts": [],
+  "references": [
+    {
+      "id": "adjustment-checklist",
+      "title": "调整建议核对表",
+      "file": "references/adjustment-checklist.md"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+# These SDK install hooks are unnecessary for the local, model-free iss2 flow.
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false
+# Explicitly reviewed 1.3.0 release family approved for iss2 on 2026-10-16.
+# Keep the release-age policy intact for every other dependency/version.
+minimumReleaseAgeExclude:
+  - '@earendil-works/chord@1.3.0'
+  - '@earendil-works/pi-ai@1.3.0'
+  - '@earendil-works/pi-codemode@1.3.0'
+  - '@earendil-works/pi-durable@1.3.0'
+  - '@earendil-works/pi-telemetry@1.3.0'
