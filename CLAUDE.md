@@ -16,10 +16,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 均在 `my-app/` 下执行。
 
 ```sh
-pnpm test                                                  # node --test server/*.test.mjs
+pnpm test                                                  # node --test server/*.test.mjs src/*.test.mjs
 node --test server/policy.test.mjs                         # 单个文件
 node --test --test-name-pattern='<关键词>' server/groups.test.mjs   # 单个用例
-node --test src/calendar-layout.test.mjs                   # src/ 下的测试不在 pnpm test 的 glob 里，需单独跑
 pnpm lint                                                  # oxlint
 pnpm build                                                 # tsc -b + vite build；前端唯一的类型检查
 ```

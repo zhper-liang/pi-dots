@@ -72,7 +72,7 @@ export default function ShellSidebar(props: Props) {
               <span className="pd-session-text"><span className="pd-session-title">{item.title}</span><span className="pd-session-meta">{item.group ? '群聊' : item.botName}{item.note ? ` · ${item.note}` : ''}</span></span>
               <span className="pd-session-time">{relativeTime(item.at, now)}</span>
             </button>
-            <button type="button" className={`pd-pin${pins.includes(item.id) ? ' is-pinned' : ''}`} aria-pressed={pins.includes(item.id)} aria-label={`${pins.includes(item.id) ? '取消置顶' : '置顶'}：${item.title}`} title={pins.includes(item.id) ? '取消置顶' : '置顶'} onClick={() => pin(item.id)}><PinIcon size={13} /></button>
+            <button type="button" className={`pd-pin${pins.includes(item.id) ? ' is-pinned' : ''}`} aria-pressed={pins.includes(item.id)} aria-label={`${pins.includes(item.id) ? '取消置顶' : '置顶'}：${item.title}`} title={pins.includes(item.id) ? '取消置顶' : '置顶'} onClick={() => pin(item.id)}><PinIcon size={13} filled={pins.includes(item.id)} /></button>
           </li>)}</ul>
         </section>)}
       </div>

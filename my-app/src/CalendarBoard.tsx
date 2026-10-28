@@ -207,7 +207,7 @@ export default function CalendarBoard({ token }: { token: string }) {
       {WEEK.map(w => <div key={w} className="cal-month-week">周{w}</div>)}
       {days.map(d => { const list = byDay[d] ?? []; const out = d.slice(0, 7) !== anchor.slice(0, 7)
         return <div key={d} className={`cal-month-day${d === today ? ' is-today' : ''}${out ? ' is-out' : ''}`} onClick={() => slotCreate(d, 9)}>
-          <button type="button" className="cal-month-date" onClick={e => { e.stopPropagation(); setAnchor(d); setMode('day') }} aria-label={`查看${label(d)}`}>{Number(d.slice(8))}</button>
+          <button type="button" className="cal-month-date" onClick={e => { e.stopPropagation(); setAnchor(d); setMode('day') }} aria-label={`查看${label(d)}`}><span>{Number(d.slice(8))}</span></button>
           <div className="cal-due-row">{dueChips(d)}</div>
           {list.slice(0, 3).map(ev => evButton(ev, undefined, true))}
           {list.length > 3 && <button type="button" className="cal-more" onClick={e => { e.stopPropagation(); setAnchor(d); setMode('day') }}>+{list.length - 3} 更多</button>}

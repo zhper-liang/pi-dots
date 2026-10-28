@@ -205,7 +205,8 @@
 .workspace-page label { display:flex; flex-direction:column; gap:6px; font-size:12px; line-height:1.7; margin:8px 8px 8px 0; max-width:100%; }
 .workspace-page input, .workspace-page textarea, .workspace-page select { min-width:0; max-width:100%; box-sizing:border-box; border:1px solid var(--c-border-strong); border-radius:var(--radius); padding:9px 10px; background:var(--c-bg); font:inherit; color:inherit; }
 .workspace-page input[type="checkbox"] { width:18px; height:18px; }
-.workspace-page button { font:inherit; font-size:12px; line-height:1.5; border:1px solid var(--c-border-strong); color:var(--c-text-2); padding:9px 12px; margin:4px; border-radius:var(--radius); background:var(--c-hover); max-width:100%; white-space:normal; overflow-wrap:anywhere; }
+/* The calendar styles its own buttons (calendar.css); this generic look would turn hour slots and events into gray boxes. */
+.workspace-page button:not(:where(.cal *)) { font:inherit; font-size:12px; line-height:1.5; border:1px solid var(--c-border-strong); color:var(--c-text-2); padding:9px 12px; margin:4px; border-radius:var(--radius); background:var(--c-hover); max-width:100%; white-space:normal; overflow-wrap:anywhere; }
 .workspace-page button:disabled { opacity:.5; cursor:not-allowed; }
 .workspace-page [role="alert"] { border-left:4px solid var(--c-danger); background:var(--c-danger-bg); padding:12px; color:var(--c-danger); }
 .workspace-page [role="status"], .workspace-receipt { border-left:4px solid var(--c-ok); background:var(--c-ok-bg); padding:12px; }

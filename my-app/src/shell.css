@@ -194,13 +194,18 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .shell-login form { display: grid; gap: var(--space-2); text-align: left; margin: var(--space-6) 0 var(--space-3); }
 .shell-login input { border: 1px solid var(--c-border); border-radius: var(--radius-sm); padding: 10px 12px; font: inherit; }
 
+.shell-details-scrim { display: none; }
 @media (max-width: 1000px) {
   .shell-chat.details-open { grid-template-columns: minmax(0, 1fr); }
-  .shell-details { position: fixed; inset: 0 0 0 auto; top: 0; width: min(380px, 92vw); max-height: none; border-radius: 0; z-index: 40; border-width: 0 0 0 1px; }
+  /* align-self: start (the docked column) would size the drawer to its content and push its end off-screen. */
+  .shell-details { position: fixed; inset: 0 0 0 auto; top: 0; width: min(380px, 92vw); max-height: none; align-self: stretch; border-radius: 0; z-index: 40; border-width: 0 0 0 1px; overscroll-behavior: contain; }
+  /* Clicking outside the details drawer closes it, as with the navigation drawer. */
+  .shell-details-scrim { display: block; position: fixed; inset: 0; background: var(--c-overlay); z-index: 39; }
 }
 @media (max-width: 719px) {
   .shell, .shell-collapsed { grid-template-columns: minmax(0, 1fr); }
   .shell-sidebar { position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); z-index: 45; transform: translateX(-100%); transition: transform .2s ease; }
+  .pd-side-list { overscroll-behavior: contain; }
   .shell-drawer-open .shell-sidebar { transform: none; border-right: 1px solid var(--c-border); }
   /* The drawer is never a rail on a phone, even if the desktop sidebar was collapsed. */
   .shell-collapsed .shell-label, .shell-collapsed .pd-count { display: revert; }
@@ -222,7 +227,10 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
   .pd-new-session { margin-top: 6vh; }
   .shell-composer { padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom)); }
 }
-@media (prefers-reduced-motion: reduce) { .shell-sidebar { transition: none; } }
+/* Reduced motion: drawers, panels and switches change state without sliding; scrolling jumps. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}
 
 .bot-avatar { display: inline-flex; flex: none; }
 .shell-notice { top: auto; bottom: var(--space-4); background: var(--c-surface); border: 1px solid var(--c-border); padding: var(--space-3) var(--space-4); display: flex; gap: var(--space-3); align-items: center; }
@@ -374,7 +382,8 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .routine-create > summary { cursor: pointer; font-weight: 500; }
 .routine-create[open] > summary { margin-bottom: var(--space-3); }
 .routine-check { display: flex; gap: var(--space-2); align-items: flex-start; font-size: 14px; }
-.routine-check input { margin-top: 3px; flex: none; }
+/* index.css gives every input width 100%; a checkbox keeps its own size so the label text has room. */
+.routine-check input { margin-top: 3px; flex: none; width: auto; }
 .routine-run-note { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; justify-content: space-between; }
 
 /* Composer "/" menu and Skill traces (Skills are picked on demand; no activation panel). */
@@ -433,7 +442,6 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .pd-switch input[role=switch]:checked { background: var(--c-accent); }
 .pd-switch input:checked::before { transform: translateX(16px); }
 .pd-switch input[role=switch]:focus-visible { outline: none; box-shadow: var(--focus); }
-@media (prefers-reduced-motion: reduce) { .pd-switch input, .pd-switch input::before { transition: none; } }
 @media (max-width: 519px) {
   .bot-edit { padding: var(--space-4); }
   .pd-row:has(select), .pd-row:has(.pd-input), .pd-row:has(.bot-picker) { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
@@ -441,3 +449,36 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 }
 
 .group-reply { border-left: 3px solid var(--c-accent); padding-left: var(--space-3); }
+
+/* State is never color alone: the selected row is also bold, a picked chip carries a check, a pinned
+   pin is filled; switches print 开/关 and tabs use an underline. */
+.pd-session[aria-current="page"] .pd-session-title, .pd-nav-row[aria-current="page"] { font-weight: 600; }
+.pd-chip.is-picked::before { content: '✓'; content: '✓' / ''; font-size: 12px; }
+
+/* Phones: every control a finger aims at is at least 44×44px. Excluded: hour slots, and events and
+   "+N 更多" inside the day grid and month cells, which are dense data. The phone opens the agenda list
+   by default, and calendar.css gives its rows 44px. */
+@media (max-width: 719px) {
+  /* :is() so this beats older per-form heights (e.g. .group-creation input at 42px). */
+  .app-shell :is(button, select, summary, input:not([type="checkbox"], [type="radio"], [type="hidden"]), label.pd-chip, label.pd-switch, .pd-search):not(.cal-event, .cal-slot, .cal-more, .pd-search input) { min-height: 44px; }
+  .app-shell summary { padding-block: 12px; box-sizing: border-box; }
+  .app-shell :where(.shell-icon-button, .pd-pin, .pd-tool, .pd-tabs button, .pd-subtabs button, .shell-filter button, .cal-mode, .cal-btn, .cal-link, .text-button) { min-width: 44px; }
+  .shell-sidebar .shell-icon-button, .shell-icon-button { width: 44px; height: 44px; }
+  .pd-pin { width: 44px; height: 44px; right: 0; }
+  .pd-session { padding-right: 48px; }
+  /* A native checkbox stays small; the label around it is the target. */
+  .app-shell label:has(> input:is([type="checkbox"], [type="radio"])) { min-height: 44px; box-sizing: border-box; }
+  .pd-tool { height: auto; }
+  /* At 44px the composer bar keeps only controls: the model name and the character count drop out. */
+  .pd-tool-static, .pd-composer-count { display: none; }
+  .app-shell .pd-composer-bar button.primary { margin-left: auto; }
+  /* Chat header: status on its own line, then 对话/时间线 · 归档 · Bot 设置, with ⓘ at the end. */
+  .shell-chat-header { row-gap: 0; }
+  .shell-chat-header .status-badge { max-width: 100%; }
+  .shell-chat-header::after { content: ''; flex-basis: 100%; order: 1; }
+  .shell-chat-header > :not(h2, .status-badge) { order: 2; }
+  .shell-chat-header .shell-pane-toggle { margin-right: 0; padding: 0; }
+  .shell-chat-header > .shell-icon-button { margin-left: auto; }
+  .app-shell .pd-tool select { padding: 0 6px; }
+  .swatch, .shape-option { width: 44px; height: 44px; }
+}
