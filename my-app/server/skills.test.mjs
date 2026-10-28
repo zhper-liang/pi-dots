@@ -130,10 +130,11 @@ for (const dependency of ['tool', 'resource', 'script']) {
   })
 }
 
-test('inapplicable Bot and deterministic test Task expose failure, not false activation', async (t) => {
+test('a Bot without the Skill dependencies and a deterministic test Task expose failure, not false activation', async (t) => {
   const { store } = await fixture(t)
+  // Skills are listed for every Bot; a Bot lacking the required tools gets the concrete reason.
   const chief = await store.create({ botId: 'chief' })
-  assert.equal((await activate(store, chief.taskId)).skillState.lastFailure.error.code, 'SKILL_NOT_APPLICABLE')
+  assert.equal((await activate(store, chief.taskId)).skillState.lastFailure.error.code, 'SKILL_DEPENDENCY_MISSING')
   const other = await fixture(t, { bots: listBots() })
   const task = await other.store.create({ botId: 'calendar' })
   assert.equal((await activate(other.store, task.taskId)).skillState.lastFailure.error.code, 'SKILL_MODEL_REQUIRED')

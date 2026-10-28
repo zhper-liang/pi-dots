@@ -1,12 +1,12 @@
 import { FeishuCalendar } from './feishu-calendar.mjs'
 import { MANAGEMENT_TOOLS } from './management-tools.mjs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { assertBotActive, BotDirectory, createDirectoryBot } from './bot-directory.mjs'
 import { ToolAccess, toolCatalog } from './tools.mjs'
 import { TaskInputError, taskParameters } from './task-config.mjs'
-import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
-
-export const NEW_BOT_WORKSPACE_TOOLS = WORKSPACE_TOOLS.filter((n) => n !== 'workspace.prepare_schedule')
+import { PolicyRules, WRITE_TOOLS, groupRule } from './policy.mjs'
+import { describeGroups, toolLabel } from './tool-group-settings.mjs'
+import { TOOL_GROUPS } from './tool-groups.mjs'
 
 const copy = (x) => JSON.parse(JSON.stringify(x))
 const canonical = (x) => Array.isArray(x) ? x.map(canonical) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, canonical(x[k])])) : x
@@ -25,6 +25,35 @@ export function initializeConfiguration(directory, access) {
     access.assignments[bot.id] ??= { tools: [...(bot.defaults.tools ?? [])], resources: [...(bot.defaults.toolResources ?? [])] }
     directory.configurations[bot.id] ??= [{ ...copy(bot), source: bot.source === 'legacy-task' ? 'legacy-task' : bot.createdAt ? 'authenticated-user-creation' : 'legacy-persisted-config', savedAt: bot.createdAt ?? new Date().toISOString() }]
   }
+}
+// Every assignable tool (catalog minus management and main-session tools); all Bots get all groups.
+export const allGroupTools = () => names()
+// 2026-10-28: tool groups default to on. One-time move from per-tool assignment and narrowed rules:
+// every Bot gets every assignable tool and no revocations; a group with any ask/deny rule becomes 关
+// (one tool-level ask per write), other rules there are dropped. What was replaced stays on ToolAccess.
+export const TOOL_GROUPS_VERSION = 1
+export function migrateToolGroups(directory, access, rules) {
+  if ((access.groupsVersion ?? 0) >= TOOL_GROUPS_VERSION) return false
+  const all = names(), record = {}, migratedAt = new Date().toISOString()
+  access.revoked ??= {}
+  for (const bot of directory.items) {
+    const assigned = access.assignments[bot.id] ??= { tools: [], resources: [] }
+    const before = { tools: [...assigned.tools], revoked: [...(access.revoked[bot.id] ?? [])], rules: [] }
+    assigned.tools = [...new Set([...assigned.tools, ...all])]
+    delete access.revoked[bot.id]
+    for (const group of TOOL_GROUPS) {
+      const writes = group.tools.filter((t) => WRITE_TOOLS.has(t))
+      const owned = rules.items.filter((r) => groupRule(r, bot.id, writes))
+      if (!owned.length) continue
+      before.rules.push(...copy(owned))
+      rules.items = rules.items.filter((r) => !groupRule(r, bot.id, writes))
+      if (owned.some((r) => r.effect !== 'allow')) for (const tool of writes) rules.items.push({ id: randomUUID(), botId: bot.id, match: { tool }, effect: 'ask', origin: 'group', createdAt: migratedAt })
+    }
+    if (before.revoked.length || before.rules.length || assigned.tools.length !== before.tools.length) record[bot.id] = before
+  }
+  access.groupsVersion = TOOL_GROUPS_VERSION
+  access.groupsMigration = { version: TOOL_GROUPS_VERSION, migratedAt, bots: record }
+  return true
 }
 function shape(input, fields) {
   if (!object(input) || Object.keys(input).some((k) => !fields.includes(k)) || typeof input.requestId !== 'string' ||
@@ -86,7 +115,10 @@ export function configurationApi({ harness, context, catalog, models }) {
       initializeConfiguration(d, a)
       const bot = d.items.find((b) => b.id === botId)
       if (!bot) fail(404, 'BOT_NOT_FOUND', '指定的Bot不存在。')
-      return copy({ bot, versions: d.configurations[botId], installed: names(), assigned: a.assignments[botId], revoked: a.revoked[botId] ?? [],
+      const rules = (await tx.doc(PolicyRules)).items, assigned = a.assignments[botId], revoked = a.revoked[botId] ?? []
+      return copy({ bot, versions: d.configurations[botId], installed: names(), toolLabels: Object.fromEntries(names().map((n) => [n, toolLabel(n)])),
+        toolGroups: describeGroups({ rules, botId, assigned: assigned.tools, revoked, mainSession: botId !== 'group' }),
+        assigned, revoked,
         models: models.map((m) => ({ id: m.id, provider: m.provider })), resources: [...supportedResources, ...((await tx.doc(FeishuCalendar)).binding ? [(await tx.doc(FeishuCalendar)).binding.resource, `workspace:feishu:${hash([(await tx.doc(FeishuCalendar)).binding.connectionId, (await tx.doc(FeishuCalendar)).binding.calendarId])}`] : [])],
         audit: d.managementAudit.filter((e) => !e.botId || e.botId === botId) })
     }, context)
@@ -110,12 +142,9 @@ export async function createConfiguredBot(tx, parsed, configuredModels) {
   const created = createDirectoryBot(directory, parsed)
   if (created.created && created.bot.defaults.mode === 'model' && !configuredModels.some((m) => JSON.stringify(m) === JSON.stringify(created.bot.defaults.model))) throw new TaskInputError(400, 'MODEL_NOT_CONFIGURED', '仅可选择已配置模型。')
   if (created.created) {
-    // S1/D-15: a new Bot starts with local workspace tools (no pool filtering).
-    const local = NEW_BOT_WORKSPACE_TOOLS.filter((n) => !created.bot.defaults.tools.includes(n))
-    if (local.length) {
-      created.bot.defaults.tools.push(...local)
-      if (!created.bot.defaults.toolResources.includes('workspace:local')) created.bot.defaults.toolResources.push('workspace:local')
-    }
+    // A new Bot starts with every tool group and the local workspace source.
+    created.bot.defaults.tools = [...new Set([...created.bot.defaults.tools, ...names()])]
+    if (!created.bot.defaults.toolResources.includes('workspace:local')) created.bot.defaults.toolResources.push('workspace:local')
     directory.items[directory.items.findIndex((b) => b.id === created.bot.id)] = JSON.parse(JSON.stringify(created.bot))
     directory.requests[parsed.requestId].bot = JSON.parse(JSON.stringify(created.bot))
     initializeConfiguration(directory, access)

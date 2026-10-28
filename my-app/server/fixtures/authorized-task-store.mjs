@@ -21,14 +21,16 @@ export async function assignCapabilities(store, { operation, tools = [], resourc
   }, context)
 }
 export async function openTaskStore(options) {
-  const { legacyApprovalRules = true, ...storeOptions } = options
-  const store = await openStore(storeOptions)
+  // Legacy scenarios keep per-tool assignment from Bot defaults: no tool-group migration unless asked.
+  const { legacyApprovalRules = true, toolGroupsMigration = false, ...storeOptions } = options
+  const store = await openStore({ ...storeOptions, toolGroupsMigration })
   try {
     await store.harness.commit(async (tx) => {
       const d = await tx.doc(BotDirectory), a = await tx.doc(ToolAccess)
       for (const bot of d.items) a.assignments[bot.id] ??= { tools: [...bot.defaults.tools], resources: [...bot.defaults.toolResources] }
-      // Approval/recovery fixtures opt into ask. Production still uses S3's direct-write defaults.
-      if (legacyApprovalRules) for (const bot of d.items) for (const name of ['calendar_reschedule_event', 'calendar_feishu_create_event', 'calendar_feishu_update_event', 'workspace.prepare_change']) {
+      // Approval/recovery fixtures opt into ask, including the Feishu delete that asked by default
+      // before tool groups. Production writes run directly unless a group is switched off.
+      if (legacyApprovalRules) for (const bot of d.items) for (const name of ['calendar_reschedule_event', 'calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_feishu_delete_event', 'workspace.prepare_change']) {
         const match = { tool: name }
         if (!(await tx.doc(PolicyRules)).items.some(r => r.botId === bot.id && JSON.stringify(r.match) === JSON.stringify(match)))
           await addRule(tx, { botId: bot.id, match, effect: 'ask' })

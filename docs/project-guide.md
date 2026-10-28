@@ -287,7 +287,7 @@ flowchart TD
 | 本地日程 | 在“日历”管理普通定时事件，填写起止时间和时区 | `CalendarBoard.tsx`、`workspace-local.mjs` 保存 Event；不支持全天/重复写 |
 | 待办关联日程 | 在待办关联区选择双方，核对具体对象后提交 | `workspace-links.mjs` 保存 ItemLink 与双方版本；删除不级联 |
 | 飞书连接和许可 | “设置 → 来源与状态 → 飞书日历来源”查看绑定、启用同步并设置来源许可；凭证按运维文档在服务端配置 | `ExternalWorkspace.tsx`、`feishu-calendar.mjs`、`workspace-feishu.mjs`；当前仅一个显式绑定来源 |
-| 飞书读取和修改 | 为 Bot 勾选对应工具和来源资源，再问“查询这段时间的飞书日程”；新建/修改按规则执行，默认删除先问 | `feishu-calendar.mjs`、`feishu-write.mjs`、`feishu-mutation.mjs`；真实 Provider 读写与回执 |
+| 飞书读取和修改 | 为 Bot 勾选飞书来源资源，再问“查询这段时间的飞书日程”；新建、修改、删除默认直接执行，日历组关闭时先问 | `feishu-calendar.mjs`、`feishu-write.mjs`、`feishu-mutation.mjs`；真实 Provider 读写与回执 |
 | 窗口同步 | 在来源面板查看同步窗口、成功时间、coverage 和错误 | `workspace-sync.mjs` 只读重扫；失败有限退避。缓存不是外部写回 |
 | 本地自动修改撤销 | 在自动执行卡或收件箱中检查原操作并撤销 | `workspace-mcp-business.mjs` 用当前对象版本验证；版本变化不能直接撤销；外部写入不可撤销 |
 
@@ -297,14 +297,14 @@ flowchart TD
 
 | 功能 | 怎么用 | 简要实现 / 主要代码 |
 |---|---|---|
-| Bot 工具与资源 | 侧栏“Bot 模板”打开 Bot 编辑，勾选工具及 `workspace:local` 等资源 | `BotConfiguration.tsx`、`bot-configuration.mjs`；更改从所有已有 Task 的下一次调用起生效 |
-| 直接做 / 先问 / 禁止 | 在 Bot 规则中按工具、动作、来源和类型设置 | `policy.mjs` 选最具体规则，同级 `deny > ask > allow`；工具和来源许可检查仍先执行 |
+| Bot 工具与资源 | 每个 Bot 默认拥有全部工具组；侧栏“Bot 模板”打开 Bot 编辑，只需勾选 `workspace:local` 等资源 | `BotConfiguration.tsx`、`bot-configuration.mjs`；更改从所有已有 Task 的下一次调用起生效 |
+| 直接做 / 先问 | 在 Bot 规则中每个工具组一个开关：开 = 组内写入全部直接做（含删除），关 = 全部先问 | `BotRules.tsx`、`tool-group-settings.mjs`、`policy.mjs`；工具和来源许可检查仍先执行 |
 | 审批与补充 | 从输入框上方、主会话镜像卡或收件箱处理；批准前查看精确内容 | `approvals.mjs`、`blockers.mjs`、`SystemCard.tsx`；同一操作身份持久化 |
 | 全局暂停 | 在设置暂停全部自动化；也可让有权限的 Bot 暂停 | `policy.mjs` 把写入 allow 降为 ask，停止例行任务与事件触发；恢复只由用户操作，不补跑 |
 | Skill 方法加载 | 输入 `/` 选择本条消息的方法，或由 Bot 按需选择 | `skills.mjs` 扫描本地 manifest，核对当前依赖，按输入激活/退出；Skill 不授予权限 |
 | 模型配置与迁移 | 在 Bot 编辑模型；旧任务要改模型/提示词时，查看配置差异并显式迁移 | `task-migration.mjs` 在安全边界更新运行配置；工具、资源、规则实时生效，不用迁移 |
 
-当前默认：读取与内部协作直接允许；已获能力的写入默认直接执行，只有工作区删除、飞书删除、停用 Bot 默认先问。未知工具/动作拒绝。暂停中及 unknown 后重做的审批不提供“以后直接做”。无人值守的 routine/event/detector 遇到 ask 会跳过并记录“这一步需要你来做”，不会一直挂审批。
+当前默认（[ADR-015](decisions/README.md#adr-015-工具组默认开开即直接做)）：读取与内部协作直接允许；工具组默认开，组内写入（含删除）直接执行；组关闭或全局暂停时先问；“以后直接做”把该工具所在组设为开。未知工具/动作拒绝。暂停中及 unknown 后重做的审批不提供“以后直接做”。无人值守的 routine/event/detector 遇到 ask 会跳过并记录“这一步需要你来做”，不会一直挂审批。
 
 仓库内置 Skill 为 **日程冲突分析**（`calendar-conflict-analysis`），面向日程 Bot 的模拟日程工具及 `mock:personal`，不是任意真实飞书日历的通用写入方法。
 
@@ -312,7 +312,7 @@ flowchart TD
 
 | 功能 | 怎么用 | 简要实现 / 主要代码 |
 |---|---|---|
-| Chief 管理 Bot | 向 Chief 说“创建一个叫学习助理的 Bot”，再让它分配工作 | `chief-management.mjs`、`management-tools.mjs`；创建/配置默认直接执行，停用默认询问；不能停用 Chief 自身 |
+| Chief 管理 Bot | 向 Chief 说“创建一个叫学习助理的 Bot”，再让它分配工作 | `chief-management.mjs`、`management-tools.mjs`；创建、配置、停用默认直接执行（Bot 管理组关闭时先问）；不能停用 Chief 自身 |
 | 跨 Bot 委派 | 在具备协作工具的任务中明确目标、执行者与完成标准 | `collaboration.mjs`、`collaboration-tools.mjs` 创建父子 Task 关系；目标 Bot 独立校验权限 |
 | 结果验收和返工 | 主管接受提交或给出修改意见；在协作面板跟踪 | `review-tools.mjs` 和协作记录保存结果与责任事件；最多两次返工，超限交用户 |
 | 阻塞上报 | Bot 缺信息或无法继续时报告 blocker，用户/主管补充或上报 | `blockers.mjs`、`blocker-actions.mjs`；解决关联等待后恢复原 Task，主管不能代替用户批准 |
@@ -342,7 +342,7 @@ MCP 实际工作区工具为 `workspace.list`、`workspace.get`、`workspace.pre
 1. 按 [工程 README](../my-app/README.md) 配置本地 API token 并启动，先确认当前是真实模型还是测试模式。
 2. 在“待办”和“日历”手动建少量本地事项，理解 Todo、Event 及显式关联。
 3. 回到首页向 Chief 提问；打开 Bot 主会话和时间线，观察输入、模型、工具与结果。
-4. 新建一个 Bot，在“Bot 模板”检查工具、资源、规则；先用本地来源验证直接做与先问。
+4. 新建一个 Bot，在“Bot 模板”检查资源与工具组开关；先用本地来源验证开（直接做）与关（先问）。
 5. 创建例行任务，先测试运行，再启用真实计划；在执行记录中找到原 Task。
 6. 需要真实外部日历时再接飞书；需要外部工具客户端时再发放独立 stdio 凭证。
 
@@ -397,6 +397,6 @@ pidot/
 - 外部连接器只有当前飞书应用日历；没有邮件或外部待办。普通事件之外的邀请、会议室、重复/例外、全天写不支持。
 - 外部 unknown 必须保留并核查，不能盲重试；本地撤销有版本条件，外部写入不可撤销。
 - 对话摘要与上下文压缩已实现，但不等于完整长期记忆产品。
-- 部分旧专题正文仍含“八页导航”“能力池/档位/Task 权限快照”“主会话只读”“所有 prepare 都必须人工确认”等描述。当前界面以 `workspace-navigation.mjs` 的七个视图为准：今天、日历、待办、收件箱、自动化、设置、任务；当前权限以 `policy.mjs`、`workspace-mcp-business.mjs` 及 ADR-014 为准。历史方案和历史测试数字不能当成当前重新验收结果。
+- 部分旧专题正文仍含“八页导航”“能力池/档位/Task 权限快照”“主会话只读”“所有 prepare 都必须人工确认”等描述。当前界面以 `workspace-navigation.mjs` 的七个视图为准：今天、日历、待办、收件箱、自动化、设置、任务；当前权限以 `policy.mjs`、`tool-group-settings.mjs`、`workspace-mcp-business.mjs` 及 ADR-014、ADR-015 为准。历史方案和历史测试数字不能当成当前重新验收结果。
 
 继续查阅：[功能范围](product/mvp-scope.md)、[Agent 专题](architecture/agent-runtime.md)、[HTTP 契约](interfaces/http-api.md)、[运行手册](engineering/operations.md)。本文依据源码与现有测试用例梳理，没有启动真实模型、修改正式数据库或执行飞书写入，也未重新运行业务测试。

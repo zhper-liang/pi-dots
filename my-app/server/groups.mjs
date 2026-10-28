@@ -6,15 +6,20 @@ import { TaskInputError } from './task-config.mjs'
 // Identity/membership only. Scheduling, input, usage and recovery remain ChatTask's.
 export const GroupDirectory = defineDoc({ kind: 'pidot.groups', version: 1, scope: 'session', initial: () => ({ items: [] }) })
 const copy = x => JSON.parse(JSON.stringify(x))
-export function assertGroupMessage(card, message) {
-  // Only explicit addressing syntax is rejected; email, quotes and fenced code are data.
-  if (card.kind !== 'group' || typeof message !== 'string') return
+// Literal "@名" in the body may address group members directly. Fenced code, inline code, quoted text,
+// block quotes and e-mail addresses are data, not addressing.
+const MENTION = /(^|\s)[@＠]([^\s@＠，。！？、；：,.!?;:]+)/gu
+export function mentionNames(message) {
+  if (typeof message !== 'string') return []
+  const names = []
   let fenced = false
-  for (const line of message.split('\n')) {
+  for (const line of message.normalize('NFKC').split('\n')) {
     if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue }
-    const prose = line.replace(/`[^`]*`/g, '').replace(/"[^"]*"|“[^”]*”/g, '')
-    if (!fenced && !/^\s*>/.test(line) && /(?:^|\s)[@＠][^\s@]+/u.test(prose)) throw new TaskInputError(400, 'GROUP_MENTION_UNSUPPORTED', '本票仅支持管理员普通群聊；定向@尚未开放，请勿通过正文派发。')
+    if (fenced || /^\s*>/.test(line)) continue
+    const prose = line.replace(/`[^`]*`/g, ' ').replace(/"[^"]*"|“[^”]*”|「[^」]*」/g, ' ').replace(/[\w.+-]+@[\w.-]+/g, ' ')
+    for (const match of prose.matchAll(MENTION)) names.push(match[2])
   }
+  return names
 }
 function parse(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !['requestId', 'title', 'adminBotId', 'memberBotIds', 'parameters'].includes(k)) ||
@@ -60,25 +65,54 @@ export async function createGroup(tx, input, createTask, TaskCard) {
 }
 
 // Input receipts are data on the existing group document, not another scheduler.
+// A message may address several members: structured targetBotIds (member picker) and literal "@名" are
+// merged, in order, deduplicated. Each target later runs in its own bounded fork and replies publicly.
+export const MAX_GROUP_TARGETS = 8
 export async function admitGroupTarget(tx, card, input, bots) {
   const group = await assertGroupTask(tx, card)
   if (!group) throw new TaskInputError(400, 'GROUP_TARGET_DENIED', '定向目标只能用于群聊。')
-  if (!input || Object.keys(input).some(k => !['message','targetBotId','requestId'].includes(k)) || typeof input.message !== 'string' || !input.message.trim() || input.message.length > 4000 || typeof input.requestId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(input.requestId) || typeof input.targetBotId !== 'string') throw new TaskInputError(400, 'INVALID_GROUP_TARGET', '须提供单个targetBotId、message和稳定requestId。')
-  assertGroupMessage(card, input.message)
-  if (!group.memberBotIds.includes(input.targetBotId)) throw new TaskInputError(400, 'GROUP_TARGET_DENIED', '目标必须是本群成员。')
-  await assertBotActive(tx, input.targetBotId)
-  if (input.targetBotId !== group.adminBotId) {
+  // The requestId only gates durable receipts; a plain message may omit it (no targets → nothing to record).
+  const hasRequest = input && Object.hasOwn(input, 'requestId')
+  if (!input || Object.keys(input).some(k => !['message','targetBotId','targetBotIds','requestId'].includes(k)) || typeof input.message !== 'string' || !input.message.trim() || input.message.length > 4000 ||
+    hasRequest && (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(input.requestId)) ||
+    (input.targetBotId !== undefined && typeof input.targetBotId !== 'string') ||
+    (input.targetBotIds !== undefined && (!Array.isArray(input.targetBotIds) || input.targetBotIds.some((id) => typeof id !== 'string')))) {
+    throw new TaskInputError(400, 'INVALID_GROUP_TARGET', '须提供 message、稳定 requestId，以及 targetBotId 或 targetBotIds。')
+  }
+  const members = await groupMembers(tx, group)
+  const byName = new Map(members.map((member) => [member.name.normalize('NFKC').trim(), member]))
+  const mentions = mentionNames(input.message)
+  const unknown = mentions.filter((name) => !byName.has(name.normalize('NFKC').trim()))
+  if (unknown.length) throw new TaskInputError(400, 'GROUP_MENTION_UNKNOWN', `群里没有叫「${unknown[0]}」的 Bot；请从成员列表选择。`)
+  const listed = [...(input.targetBotIds ?? []), ...(input.targetBotId ? [input.targetBotId] : [])]
+  // The limit counts what the sender asked for, not duplicates collapsed afterwards.
+  if (listed.length > MAX_GROUP_TARGETS || mentions.length > MAX_GROUP_TARGETS) throw new TaskInputError(400, 'GROUP_TARGET_LIMIT', `一条消息最多 @ ${MAX_GROUP_TARGETS} 个 Bot。`)
+  const targets = [...new Set([...listed, ...mentions.map((name) => byName.get(name.normalize('NFKC').trim()).id)])]
+  if (!targets.length) return null
+  if (targets.length && !hasRequest) throw new TaskInputError(400, 'INVALID_GROUP_TARGET', '定向消息需要稳定的 requestId，以便重试时不重复派发。')
+  for (const id of targets) {
+    if (!group.memberBotIds.includes(id)) throw new TaskInputError(400, 'GROUP_TARGET_DENIED', '目标必须是本群成员。')
+    if (byName.get(id)?.status === 'inactive') throw new TaskInputError(409, 'BOT_INACTIVE', `「${byName.get(id)?.name ?? id}」已停用，不能接收新消息。`)
+    await assertBotActive(tx, id)
+  }
+  // The admin's collaboration tools stay required for the private fork itself; the user's explicit @ is
+  // not a grant, so it cannot stand in for a missing tool. The reply reaches the group only when the
+  // admin can review it, so a fork is never created for a reply that could never be published.
+  const others = targets.filter((id) => id !== group.adminBotId)
+  if (others.length) {
     const { toolSets, ToolAccess } = await import('./tools.mjs')
     const sets = toolSets(card, bots, await tx.doc(ToolAccess))
-    if (!['collaborators_list','task_assign','task_review'].every(n => sets.authorized.includes(n))) throw new TaskInputError(409, 'COLLABORATION_NOT_AUTHORIZED', '群管理员须已有协作及精确验收许可，手动@不授予权限。')
+    if (!['collaborators_list','task_assign','task_review'].every(n => sets.authorized.includes(n))) throw new TaskInputError(409, 'COLLABORATION_NOT_AUTHORIZED', '这个 Bot 尚未开启“Bot 协作”工具组，@ 未发出，也不会因此获得权限；请先在 Bot 设置里打开该组。')
     const { feishuTaskAllowed, isFeishuResource } = await import('./feishu-calendar.mjs')
     const access = await tx.doc(ToolAccess)
-    const targetResources = access.assignments?.[input.targetBotId]?.resources ?? []
-    if (!await feishuTaskAllowed(tx, card, sets) || sets.resources.filter(isFeishuResource).some(r => !targetResources.includes(r)) ||
-      sets.resources.some(isFeishuResource) && !['calendar_feishu_read_schedule', 'calendar_feishu_read_event', 'calendar_feishu_freebusy'].some(n => sets.authorized.includes(n))) throw new TaskInputError(403, 'GROUP_FORK_DENIED', '群上下文真实日历来源当前未获准。')
+    for (const id of others) {
+      const targetResources = access.assignments?.[id]?.resources ?? []
+      if (!await feishuTaskAllowed(tx, card, sets) || sets.resources.filter(isFeishuResource).some(r => !targetResources.includes(r)) ||
+        sets.resources.some(isFeishuResource) && !['calendar_feishu_read_schedule', 'calendar_feishu_read_event', 'calendar_feishu_freebusy'].some(n => sets.authorized.includes(n))) throw new TaskInputError(403, 'GROUP_FORK_DENIED', '群上下文真实日历来源当前未获准。')
+    }
   }
   group.inputs ??= []
-  const signature = JSON.stringify([input.targetBotId,input.message]), prior = group.inputs.find(r => r.requestId === input.requestId)
+  const signature = JSON.stringify([targets, input.message]), prior = hasRequest ? group.inputs.find(r => r.requestId === input.requestId) : undefined
   if (prior && prior.signature !== signature) throw new TaskInputError(409, 'GROUP_INPUT_CONFLICT', '同一消息标识不能改变内容或目标。')
-  return { group, signature, prior }
+  return { group, signature, prior, targets, members }
 }

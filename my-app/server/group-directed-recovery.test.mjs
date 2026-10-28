@@ -23,7 +23,7 @@ for(const phase of ['before-dispatch','dispatched','collected'])test(`group dire
  }})
  const done=await until(()=>s.get(saved.taskId),v=>v.activeInputId===null&&v.collaborations[0]?.businessStatus==='accepted')
  assert.equal(done.collaborations.length,1);const r=done.collaborations[0];assert.equal(r.parentInputId,saved.messageId);assert.equal(r.forkAnchor,saved.messageId)
- assert.equal(done.messages.filter(m=>m.role==='user').length,1);assert.equal(done.messages.filter(m=>m.role==='assistant'&&!m.intermediate&&!m.assistant).length,1)
+ assert.equal(done.messages.filter(m=>m.role==='user').length,1);assert.equal(done.messages.filter(m=>m.role==='assistant'&&!m.intermediate&&!m.assistant&&!m.systemKind).length,1)
  const exec=await s.get(r.childTaskId);assert.equal(exec.messages.filter(m=>m.role==='user').length,1)
  assert.equal(r.revisions.length,1);assert.ok(r.consumedEntryId);assert.equal(r.decisions.length,1)
  assert.equal(exec.callUsage.modelCalls,phase==='dispatched'?2:1)

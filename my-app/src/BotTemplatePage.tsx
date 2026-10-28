@@ -34,19 +34,26 @@ export default function BotTemplatePage({ bot, token, tasks, creating, onNewTask
     <p className="bot-detail-desc">{bot.description}</p>
     {inactive && <p role="status" className="shell-note">这个 Bot 已停用：不能再新建任务。历史任务和真实结果都保留。</p>}
 
-    <div id="bot-edit" hidden={!editing} className="today-card">
-      <p className="shell-note" role="note">工具、资源与规则从所有会话的下一次调用起生效。模型与职责在新任务中生效，旧会话可另行迁移。</p>
-      <fieldset className="bot-picker" disabled={inactive}><legend>颜色</legend>
-        {avatarColors.map((c, i) => <label key={c} className="swatch" style={{ background: c }}><input type="radio" name={`look-color-${bot.id}`} checked={look.color === c} onChange={() => updateLook({ ...look, color: c })} aria-label={`颜色 ${i + 1}`} /></label>)}
-      </fieldset>
-      <fieldset className="bot-picker" disabled={inactive}><legend>形状</legend>
-        {avatarShapes.map(s => <label key={s} className="shape-option" title={shapeLabels[s]}><input type="radio" name={`look-shape-${bot.id}`} checked={look.shape === s} onChange={() => updateLook({ ...look, shape: s })} aria-label={shapeLabels[s]} /><ShapeIcon shape={s} color={look.shape === s ? look.color : '#a1a1aa'} size={28} /></label>)}
-      </fieldset>
-      <label htmlFor={`look-role-${bot.id}`}>角色</label>
-      <input id={`look-role-${bot.id}`} maxLength={40} value={look.role ?? ''} disabled={inactive} onChange={e => updateLook({ ...look, role: e.target.value || undefined })} />
-      <BotRules token={token} botId={bot.id} readOnly={inactive} />
+    <div id="bot-edit" hidden={!editing} className="bot-edit">
+      <section className="bot-edit-section" aria-label="外观">
+        <h2>外观</h2>
+        <ul className="pd-rows">
+          <li className="pd-row"><span className="pd-row-title">颜色</span>
+            <fieldset className="bot-picker" disabled={inactive}><legend className="sr-only">颜色</legend>
+              {avatarColors.map((c, i) => <label key={c} className="swatch" style={{ background: c }}><input type="radio" name={`look-color-${bot.id}`} checked={look.color === c} onChange={() => updateLook({ ...look, color: c })} aria-label={`颜色 ${i + 1}`} /></label>)}
+            </fieldset></li>
+          <li className="pd-row"><span className="pd-row-title">形状</span>
+            <fieldset className="bot-picker" disabled={inactive}><legend className="sr-only">形状</legend>
+              {avatarShapes.map(s => <label key={s} className="shape-option" title={shapeLabels[s]}><input type="radio" name={`look-shape-${bot.id}`} checked={look.shape === s} onChange={() => updateLook({ ...look, shape: s })} aria-label={shapeLabels[s]} /><ShapeIcon shape={s} color={look.shape === s ? look.color : '#a1a1aa'} size={28} /></label>)}
+            </fieldset></li>
+          <li className="pd-row"><label className="pd-row-title" htmlFor={`look-role-${bot.id}`}>角色</label>
+            <input id={`look-role-${bot.id}`} className="pd-input" maxLength={40} placeholder="例如：日程管家" value={look.role ?? ''} disabled={inactive} onChange={e => updateLook({ ...look, role: e.target.value || undefined })} /></li>
+        </ul>
+      </section>
+      <BotRules key={`rules:${bot.id}:${token}`} token={token} botId={bot.id} readOnly={inactive} />
       <BotConfiguration key={`config:${bot.id}:${token}`} botId={bot.id} token={token} readOnly={inactive} onSaved={onSaved} />
-      {!chief && !inactive && <section className="bot-danger" aria-label="停用 Bot">
+      {!chief && !inactive && <section className="bot-edit-section bot-danger" aria-label="停用 Bot">
+        <p className="bot-edit-hint">停用后不能再用它新建任务，历史和已发生的结果保留。</p>
         <button type="button" onClick={() => {
           if (window.confirm(`停用 ${bot.name}？之后不能再用它新建任务，在途操作会尽力停止。历史与真实结果保留，已发生的效果不会回滚，目前不能重新启用。`)) onDeactivate()
         }}>停用此 Bot</button>

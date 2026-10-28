@@ -16,6 +16,7 @@ import { TaskInputError } from './task-config.mjs'
 import { RESULT_READ_TOOL, resultReadTool, validDate, validResultReadArgs } from './tool-results.mjs'
 import { AUTOMATION_PAUSE_TOOL, automationPauseTool, validAutomationPauseArgs } from './policy.mjs'
 import { mainTools, MAIN_TOOLS, MAIN_READ_TOOLS, validMainArgs } from './main-tools.mjs'
+import { TOOL_GROUPS } from './tool-groups.mjs'
 
 export const CALENDAR_TOOL = 'calendar_read_schedule'
 export const CALENDAR_EVENT_TOOL = 'calendar_read_event'
@@ -66,6 +67,8 @@ export function toolSets(card, bots, access) {
   if (card.bot.id === 'chief') for (const name of [...MANAGEMENT_TOOLS, BLOCKER_TOOL]) {
     if (card.managementTools?.includes(name) && !access.revoked.chief?.includes(name) && !authorized.includes(name)) authorized.push(name)
   }
+  // Tools only offered inside a Bot's main session (Chief hands work out, pauses automation).
+  authorized.splice(0, authorized.length, ...authorized.filter((name) => !TOOL_GROUPS.some((g) => g.requiresMainSession && g.tools.includes(name)) || card.kind === 'main'))
   let resources = [...assigned.resources]
   // Routine runs keep to workspace tools (D-12). Only writes=true routines (never test runs or
   // legacy read-only briefs, D-13) may propose changes, and decide() still arbitrates each one.
@@ -85,8 +88,38 @@ export function toolSets(card, bots, access) {
   }
   return { installed: names, assigned: [...assigned.tools], authorized, displayed: [...authorized], resources }
 }
+const MOCK_TOOLS = [CALENDAR_TOOL, CALENDAR_EVENT_TOOL, CALENDAR_WRITE_TOOL]
+const FEISHU_ALL = [...FEISHU_TOOLS, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS]
+// Every Bot holds every group, so the model is only offered tools whose fixed resource the Bot has.
+// Presentation only: authorization and resource denial stay in toolSets and checkToolCall.
+export const modelVisible = (names, resources) => names.filter(name => resourceReady(name, resources))
+function resourceReady(name, resources) {
+  if (MOCK_TOOLS.includes(name)) return resources.includes('mock:personal')
+  if (FEISHU_ALL.includes(name)) return resources.some(isFeishuResource)
+  if (WORKSPACE_TOOLS.includes(name)) return resources.some(r => r.startsWith('workspace:'))
+  return true
+}
+// Chinese labels for model tool descriptions and Bot settings. Kept here (not in tool-groups.mjs) so the
+// pure toolSets() module graph stays free of policy/rule storage imports.
+export const TOOL_LABELS = Object.freeze({
+  skill_activate: '按需加载 Skill', skill_deactivate: '结束 Skill', skill_read_resource: '读取 Skill 资料',
+  calendar_read_schedule: '读取模拟日程', calendar_read_event: '读取模拟日程详情', calendar_reschedule_event: '调整模拟日程',
+  calendar_feishu_read_schedule: '读取飞书日程', calendar_feishu_read_event: '读取飞书日程详情', calendar_feishu_freebusy: '查看飞书忙闲',
+  calendar_feishu_create_event: '新建飞书日程', calendar_feishu_update_event: '修改飞书日程', calendar_feishu_delete_event: '删除飞书日程',
+  'workspace.list': '列出待办和日程', 'workspace.get': '查看事项详情', 'workspace.prepare_change': '新建、修改或删除事项', 'workspace.operation_status': '查询事项操作结果',
+  routine_propose: '创建例行任务', 'workspace.prepare_schedule': '提议定时计划',
+  collaborators_list: '查看其他 Bot', task_assign: '派发任务', task_review: '验收结果', shared_publish: '发布共享信息', shared_read: '读取共享信息', shared_link: '分享给其他 Bot',
+  report_blocker: '上报阻塞', blocker_resolve: '解除阻塞', blocker_escalate: '升级阻塞', task_status: '查看任务进度',
+  task_history_read: '回读会话历史', tool_result_read: '回读工具结果', automation_pause: '暂停自动化', bot_manage: '管理 Bot', task_create: '派给独立任务',
+})
+export const toolLabel = (name) => TOOL_LABELS[name] ?? name
+
 export function toolDefinitions(names) {
-  return installed.filter((tool) => names.includes(tool.name)).map(({ name, description, parameters }) => copy({ name, description, parameters }))
+  // The model sees the Chinese label first so tool choice does not depend on reading internal ids.
+  return installed.filter((tool) => names.includes(tool.name)).map(({ name, description, parameters }) => {
+    const label = toolLabel(name)
+    return copy({ name, description: label === name ? description : `【${label}】${description}`, parameters })
+  })
 }
 export function toolCatalog() { return copy(installed.filter(t => !MANAGEMENT_TOOLS.includes(t.name) && !MAIN_TOOLS.includes(t.name))) }
 export function callLimits(parameters) {

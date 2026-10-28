@@ -69,14 +69,17 @@ test('a "/" Skill handles one message: loaded before the model, audited as user-
   assert.equal((await reopened.get(task.taskId)).skillState.history.filter(e => e.source === 'user-command').length, 1)
 })
 
-test('"/" Skill refusals: unknown, Bot without Skill tools, group, bad id; a queued Skill message cannot become an insert', async (t) => {
+test('"/" Skill refusals: unknown, missing dependency, no Skill tools needed, group, bad id; a queued Skill message cannot become an insert', async (t) => {
   const { store, state } = await fixture(t)
   const task = await store.create({ botId: 'calendar' })
   await assert.rejects(store.send(task.taskId, '分析', undefined, { skillId: 'no-such-skill' }), { code: 'SKILL_UNAVAILABLE' })
   await assert.rejects(store.send(task.taskId, '分析', undefined, { skillId: '../etc' }), { code: 'INVALID_SKILL' })
-  // This Skill's manifest names the calendar Bot only: Chief is not offered it.
+  // Every registered Skill is listed for every Bot; applicability is advice, not a hidden gate. Chief
+  // lacks the calendar tools this one needs, so it stays listed with the real reason and is refused.
   const chief = await store.create({ botId: 'chief' })
-  assert.deepEqual(await store.taskSkills(chief.taskId), [])
+  const chiefSkills = await store.taskSkills(chief.taskId)
+  assert.deepEqual(chiefSkills.map(s => [s.id, s.available, s.error?.code]), [[skillId, false, 'SKILL_DEPENDENCY_MISSING']])
+  await assert.rejects(store.send(chief.taskId, '分析', undefined, { skillId }), { code: 'SKILL_UNAVAILABLE' })
   // A queued message sent with a Skill stays its own input.
   let release; state.gate = new Promise(r => { release = r })
   await store.send(task.taskId, '先做这个')
@@ -84,12 +87,13 @@ test('"/" Skill refusals: unknown, Bot without Skill tools, group, bad id; a que
   assert.equal(queued.status, 'queued')
   await assert.rejects(store.steer(task.taskId, { messageId: queued.messageId }), { code: 'SKILL_COMMAND_NOT_STEERABLE' })
   state.gate = null; release(); await settled(store, task.taskId)
-  // Without the Skill tools from the pool the Skill is listed with the reason and refused (auto-registered ≠ authorized).
+  // Picking a Skill with "/" no longer needs the Skill lifecycle tools: one message still loads it.
   await store.updateToolAccess('calendar', { revoked: ['skill_activate'] })
   const revokedTask = await store.create({ botId: 'calendar' })
-  const listed = await store.taskSkills(revokedTask.taskId)
-  assert.deepEqual(listed.map(s => [s.available, s.error?.code]), [[false, 'SKILL_TOOLS_NOT_GRANTED']])
-  await assert.rejects(store.send(revokedTask.taskId, '分析', undefined, { skillId }), { code: 'SKILL_UNAVAILABLE' })
+  assert.deepEqual((await store.taskSkills(revokedTask.taskId)).map(s => [s.available]), [[true]])
+  await store.send(revokedTask.taskId, '按时限分析这类问题', undefined, { skillId })
+  const afterRevoke = await settled(store, revokedTask.taskId)
+  assert.equal(afterRevoke.messages.find(m => m.systemKind === 'skill').skillStatus, 'active')
 })
 
 test('a main session offers and loads the Skill by the Bot\'s current tools, not its snapshot from before the grant', async (t) => {

@@ -62,7 +62,6 @@ async function readJson(req) {
 // Task messages may carry the Skill picked with "/" in the composer: {message, skillId?}.
 async function readTaskMessage(req) {
   const data = await readJson(req)
-  if (data && typeof data === 'object' && ['mention','mentions','targetBotId'].some(k => Object.hasOwn(data,k))) throw new RequestError(400, 'GROUP_MENTION_UNSUPPORTED', '暂不支持@定向请求。')
   if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(k => !['message', 'skillId'].includes(k)) ||
     typeof data.message !== 'string' || !data.message.trim() || data.message.length > MAX_MESSAGE_LENGTH || (data.skillId !== undefined && typeof data.skillId !== 'string')) {
     throw new RequestError(400, 'INVALID_MESSAGE', '请提供 message（1–4000 个字符的非空字符串），可选 skillId。')
@@ -71,7 +70,6 @@ async function readTaskMessage(req) {
 }
 async function readMessage(req) {
   const data = await readJson(req)
-  if (data && typeof data === 'object' && ['mention','mentions','targetBotId'].some(k => Object.hasOwn(data,k))) throw new RequestError(400, 'GROUP_MENTION_UNSUPPORTED', '暂不支持@定向请求。')
   if (
     !data || typeof data !== 'object' || Array.isArray(data) ||
     Object.keys(data).length !== 1 || typeof data.message !== 'string' ||
@@ -116,9 +114,14 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         if (req.method !== 'GET') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET。' } }, { Allow: 'GET' }); return }
         req.resume(); sendJson(res, 200, { data: await tasks.inbox() }); return
       }
+      const groupSwitchMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/tool-groups\/([a-z]+)$/.exec(req.url)
+      if (tasks && groupSwitchMatch) {
+        if (req.method !== 'POST') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '方法不支持。' } }); return }
+        const body = await readJson(req)
+        sendJson(res, 200, { data: await tasks.switchGroup(groupSwitchMatch[1], { ...body, groupId: groupSwitchMatch[2] }) }); return
+      }
       if (tasks && (req.url === '/api/rules' || req.url === '/api/rules/remove')) {
         if (req.url === '/api/rules' && req.method === 'GET') { req.resume(); sendJson(res, 200, { data: await tasks.rules.list() }); return }
-        if (req.method === 'POST') { const input = await readJson(req); sendJson(res, 200, { data: await (req.url === '/api/rules' ? tasks.rules.add(input) : tasks.rules.remove(input)) }); return }
         req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '方法不支持。' } }); return
       }
       if (tasks && req.url === '/api/findings') {
@@ -138,7 +141,7 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         if (req.method === 'POST' && Object.hasOwn(reminderMethods, path)) { sendJson(res, 200, { data: await tasks.workspaceReminders[reminderMethods[path]](await readJson(req)) }); return }
         const scheduleMethods = { 'schedule-manage': 'manage', 'schedule-list': 'list', 'schedule-test': 'testRun' }
         if (req.method === 'POST' && Object.hasOwn(scheduleMethods, path)) { sendJson(res, 200, { data: await tasks.workspaceSchedules[scheduleMethods[path]](await readJson(req)) }); return }
-        const agentMethods = { 'client-issue': 'issueClient', 'client-revoke': 'revokeClient', 'client-list': 'listClients', 'agent-pending': 'pending', 'agent-operation': 'operationStatus', 'agent-confirm-local': 'confirmLocal', 'agent-allow-rule': 'manageAllowRule', 'agent-undo': 'undoAuto' }
+        const agentMethods = { 'client-issue': 'issueClient', 'client-revoke': 'revokeClient', 'client-list': 'listClients', 'agent-pending': 'pending', 'agent-operation': 'operationStatus', 'agent-confirm-local': 'confirmLocal', 'agent-undo': 'undoAuto' }
         if (req.method === 'POST' && Object.hasOwn(agentMethods, path)) { sendJson(res, 200, { data: await tasks.workspaceAgent[agentMethods[path]](await readJson(req)) }); return }
         const methods = { query: 'query', get: 'getLocalItem', command: 'executeLocal', grant: 'manageLocalGrant', operation: 'getLocalOperation', 'external-sync-status': 'syncStatus', 'external-sync-configure': 'configureSync', 'external-sync-refresh': 'refreshSync', 'external-sources': 'externalSources', 'external-grant': 'grantExternal', 'external-query': 'queryExternal', 'external-get': 'getExternal', 'external-prepare': 'prepareExternal', 'external-confirm': 'confirmExternal', 'external-cancel': 'cancelExternal', 'external-execute': 'executeExternal', 'external-operation': 'getExternalOperation' }
         if (req.method !== 'POST' || !Object.hasOwn(methods, path)) {
@@ -161,10 +164,20 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         } else { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '日历接口方法无效。' } }); return }
         sendJson(res, 200, { data }); return
       }
+      // Literal "@名" → member ids, so the composer can show exactly who a message will reach.
+      const mentionsMatch = /^\/api\/groups\/([a-f0-9-]{36})\/mentions$/.exec(req.url)
+      if (tasks && mentionsMatch) {
+        if (req.method !== 'POST') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持POST。' } }); return }
+        const body = await readJson(req)
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => k !== 'message') || typeof body.message !== 'string' || body.message.length > MAX_MESSAGE_LENGTH) throw new RequestError(400, 'INVALID_MESSAGE', '仅提供 message（最多4000字符）。')
+        const groupTask = await tasks.getGroup(mentionsMatch[1])
+        sendJson(res, 200, await tasks.groupMentions(groupTask.taskId, body.message)); return
+      }
       const groupRoute = /^\/api\/groups(?:\/([a-f0-9-]{36})(\/.*)?)?$/.exec(req.url)
       if (tasks && groupRoute) {
         if (!groupRoute[1]) {
           if (req.method === 'GET') { req.resume(); sendJson(res, 200, { groups: await tasks.listGroups() }) }
+
           else if (req.method === 'POST') { const result = await tasks.createGroup(await readJson(req)); sendJson(res, result.created ? 201 : 200, result) }
           else { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持GET/POST。' } }) }
           return
@@ -238,6 +251,13 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
       if (tasks && deactivationMatch) {
         if (req.method !== 'POST') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持POST。' } }, { Allow: 'POST' }); return }
         sendJson(res, 200, await tasks.deactivateBot(deactivationMatch[1], await readJson(req))); return
+      }
+      const parametersMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/tasks\/([1-9]\d*)\/parameters$/.exec(req.url)
+      if (tasks && parametersMatch) {
+        if (req.method !== 'PATCH') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '方法不支持。' } }); return }
+        const body = await readJson(req)
+        const task = await tasks.setThinkingLevel(parametersMatch[1], Number(parametersMatch[2]), body)
+        sendJson(res, 200, { task }); return
       }
       const configurationMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/configuration$/.exec(req.url)
       if (tasks && configurationMatch) {

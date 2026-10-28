@@ -7,6 +7,7 @@
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px;
   --sidebar-w: 260px; --rail-w: 64px; --column-w: 760px;
   --focus: 0 0 0 2px var(--c-bg), 0 0 0 4px #3b82f6;
+  --c-accent: #2563eb; --c-accent-soft: #eef4ff;
 }
 body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 .app-shell { max-width: none; margin: 0; min-height: 100vh; }
@@ -116,7 +117,7 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .shell-composer .message-controls { display: flex; align-items: center; gap: var(--space-2); justify-content: flex-end; }
 .shell-composer .message-controls > span { margin-right: auto; }
 .shell-composer .steer-button { border-radius: var(--radius-pill); padding: 9px 14px; cursor: pointer; }
-.shell-composer-target { display: flex; align-items: center; gap: var(--space-2); font-size: 14px; }
+.shell-composer-target { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: 14px; }
 .shell-composer-target select { border: 1px solid var(--c-border); border-radius: var(--radius-pill); padding: 4px 10px; background: var(--c-bg); }
 .shell-details { position: sticky; top: 64px; align-self: start; max-height: calc(100vh - 88px); overflow: auto; border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-bg); padding: var(--space-4); font-size: 14px; display: grid; gap: var(--space-3); }
 .shell-details[hidden] { display: none; }
@@ -204,7 +205,7 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .bot-form { display: grid; gap: var(--space-2); }
 .bot-advanced[open] { display: grid; gap: var(--space-2); }
 .bot-advanced > summary { cursor: pointer; color: var(--c-muted); }
-.bot-form input, .bot-form textarea, .bot-form select, .today-card input:not([type=radio]) { border: 1px solid var(--c-border); border-radius: var(--radius-sm); padding: 10px 12px; font: inherit; }
+.bot-form input, .bot-form textarea, .bot-form select, .today-card input:not([type=radio]):not([type=checkbox]) { border: 1px solid var(--c-border); border-radius: var(--radius-sm); padding: 10px 12px; font: inherit; }
 .bot-preview { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4); border-radius: var(--radius-lg); background: var(--c-surface); }
 .bot-picker { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .bot-picker legend { font-weight: 500; margin-bottom: var(--space-2); padding: 0; }
@@ -350,10 +351,55 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .skill-tag { margin-right: var(--space-2); padding: 1px 8px; border-radius: var(--radius-pill); background: #f4f4f5; color: var(--c-muted); font-size: .8em; font-weight: 400; }
 .skill-rules { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.bot-permissions { display: grid; gap: var(--space-2); min-width: 0; }
-.bot-permissions label { display: flex; align-items: flex-start; gap: var(--space-2); min-width: 0; }
-.bot-permissions code { overflow-wrap: anywhere; }
 .stdio-clients { overflow-wrap: anywhere; }
 .stdio-clients fieldset { display: grid; gap: var(--space-2); min-width: 0; }
 .stdio-client-list { display: grid; gap: var(--space-3); padding-left: var(--space-4); }
 .stdio-clients input, .stdio-clients select { max-width: 100%; }
+
+/* Bot 编辑：分区 + 设置行（左文字、右控件），开关是真正的滑块 */
+.bot-edit { display: grid; gap: var(--space-6); padding: var(--space-4) var(--space-6); border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-bg); min-width: 0; }
+.bot-edit-section { display: grid; gap: var(--space-2); min-width: 0; }
+.bot-edit-section + .bot-edit-section, .bot-edit-section + .bot-edit-diagnostics { padding-top: var(--space-6); border-top: 1px solid var(--c-border); }
+.bot-edit-section h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.bot-edit-hint { margin: 0; font-size: 13px; color: var(--c-muted); line-height: 1.6; }
+.bot-edit-error { margin: 0; font-size: 13px; color: var(--c-danger); }
+.bot-edit-form { display: grid; gap: var(--space-2); }
+.bot-edit-actions { display: flex; gap: var(--space-2); padding-top: var(--space-2); }
+.bot-edit-actions .primary { padding: 7px 18px; }
+.bot-edit-actions button:disabled { opacity: .6; cursor: default; }
+.bot-edit-diagnostics > summary { cursor: pointer; font-size: 13px; color: var(--c-muted); }
+.bot-edit-history { margin: var(--space-2) 0 0; padding-left: var(--space-4); display: grid; gap: var(--space-2); font-size: 12px; color: var(--c-muted); overflow-wrap: anywhere; }
+.bot-edit-history p { margin: 2px 0 0; color: var(--c-text); }
+.bot-edit-history pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: var(--space-1) 0 0; }
+.bot-danger { justify-items: start; }
+
+.pd-rows { list-style: none; margin: 0; padding: 0; }
+.pd-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-4); padding: var(--space-3) 0; min-width: 0; }
+.pd-rows > .pd-row + .pd-row { border-top: 1px solid var(--c-border); }
+.pd-row-text { display: grid; gap: 2px; min-width: 0; }
+.pd-row-title { font-size: 14px; color: var(--c-text); }
+.pd-row-desc { font-size: 12px; color: var(--c-muted); line-height: 1.5; overflow-wrap: anywhere; }
+.pd-row select, .pd-row .pd-input { width: 240px; max-width: 100%; box-sizing: border-box; border: 1px solid var(--c-border); border-radius: var(--radius-sm); padding: 7px 10px; font: inherit; font-size: 14px; background: var(--c-bg); color: var(--c-text); }
+.pd-field { display: grid; gap: var(--space-2); }
+.pd-field textarea { box-sizing: border-box; width: 100%; border: 1px solid var(--c-border); border-radius: var(--radius-sm); padding: 8px 10px; font: inherit; font-size: 14px; line-height: 1.6; resize: vertical; }
+.pd-button { border: 1px solid var(--c-border); border-radius: var(--radius-pill); padding: 7px 16px; background: var(--c-bg); color: var(--c-text); cursor: pointer; font: inherit; font-size: 14px; }
+
+.pd-switch { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; flex: none; }
+.pd-switch.is-disabled { cursor: default; opacity: .5; }
+.pd-switch-state { font-size: 12px; color: var(--c-muted); min-width: 3em; text-align: right; }
+/* App.css styles every non-radio input (width 100%, padding, border); the switch resets all of it. */
+.pd-switch input[role=switch] { appearance: none; -webkit-appearance: none; margin: 0; padding: 0; border: 0; position: relative; width: 36px; height: 20px; flex: none; border-radius: var(--radius-pill); background: #d4d4d8; cursor: inherit; transition: background .15s; }
+.pd-switch input::before { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .25); transition: transform .15s; }
+.pd-switch input[role=switch]:checked { background: var(--c-accent); }
+.pd-switch input:checked::before { transform: translateX(16px); }
+.pd-switch input[role=switch]:focus-visible { outline: none; box-shadow: var(--focus); }
+@media (prefers-reduced-motion: reduce) { .pd-switch input, .pd-switch input::before { transition: none; } }
+@media (max-width: 519px) {
+  .bot-edit { padding: var(--space-4); }
+  .pd-row:has(select), .pd-row:has(.pd-input), .pd-row:has(.bot-picker) { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+  .pd-row select, .pd-row .pd-input { width: 100%; }
+}
+
+.mention-option { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-pill); cursor: pointer; min-height: 32px; }
+.mention-option.is-picked { border-color: var(--c-accent); background: var(--c-accent-soft); }
+.group-reply { border-left: 3px solid var(--c-accent); padding-left: var(--space-3); }

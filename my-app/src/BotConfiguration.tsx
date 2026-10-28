@@ -1,58 +1,134 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import Switch from './Switch'
 
 type Bot = { id: string; name: string; description: string; configRef: { botId: string; version: string }; defaults: { model: { id: string } | null; tools: string[]; toolResources: string[] } }
-type View = { bot: Bot; versions: (Bot & { source: string; savedAt: string })[]; installed: string[]; assigned: { tools: string[]; resources: string[] }; revoked: string[]; resources: string[]; models: { id: string; provider: string }[]; audit: { id: number; type: string; source: string; code?: string; createdAt: string; initiatingUser?: string; executingChief?: string; taskId?: number; operationId?: string; next?: unknown; previous?: unknown }[] }
+type View = { bot: Bot; versions: (Bot & { source: string; savedAt: string })[]; assigned: { tools: string[]; resources: string[] }; resources: string[]; models: { id: string; provider: string }[]; audit: { id: number; type: string; source: string; code?: string; createdAt: string; initiatingUser?: string; executingChief?: string; taskId?: number; operationId?: string; next?: unknown; previous?: unknown }[] }
+type Change = { description: string; model: string; resources: string[] }
+
+const toggle = (items: string[], name: string) => items.includes(name) ? items.filter((n) => n !== name) : [...items, name]
 async function request<T>(path: string, token: string, body?: unknown): Promise<T> {
   const response = await fetch(path, { method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
-  const result = await response.json()
-  if (!response.ok) throw new Error(result.error?.message ?? '配置操作失败。')
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) { const error = new Error(result.error?.message ?? '配置操作失败。') as Error & { code?: string }; error.code = result.error?.code; throw error }
   return result
 }
-const toggle = (items: string[], name: string) => items.includes(name) ? items.filter((n) => n !== name) : [...items, name]
+// Readable names for source resources; the raw id stays in the row tooltip.
+function describeResource(id: string) {
+  if (id === 'mock:personal') return { title: '模拟日程', note: '测试用的个人日程，不是真实日历' }
+  if (id === 'workspace:local') return { title: '本地待办与日程', note: '本机保存的事项' }
+  if (id.startsWith('workspace:feishu:')) return { title: '飞书日历（事项）', note: '通过待办与事项工具读写飞书日程' }
+  if (id.startsWith('feishu:')) return { title: '飞书日历', note: '通过日历工具读写飞书日程' }
+  return { title: id, note: '' }
+}
+
+/** Role, model and source resources. Sources switch immediately; role and model save together. */
 export default function BotConfiguration({ botId, token, onSaved, readOnly = false }: { botId: string; token: string; readOnly?: boolean; onSaved: (bot: Bot) => void }) {
   const [view, setView] = useState<View | null>(null)
   const [description, setDescription] = useState('')
   const [model, setModel] = useState('')
-  const [tools, setTools] = useState<string[]>([])
-  const [resources, setResources] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
-  // Each mounted Bot owns its draft and CAS version; late responses never edit another Bot.
-  const load = async () => request<View>(`/api/bots/${botId}/configuration`, token)
-  const adopt = (next: View) => { setView(next); setDescription(next.bot.description); setModel(next.bot.defaults.model?.id ?? ''); setTools(next.assigned.tools); setResources(next.assigned.resources) }
+  // Mounted per Bot (keyed by botId); a late response after unmount must not touch state.
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  const load = () => request<View>(`/api/bots/${botId}/configuration`, token)
+  // A fresh view replaces the draft only when the user has not edited it.
+  const adopt = (next: View, keepDraft = false) => {
+    setView(next)
+    if (!keepDraft) { setDescription(next.bot.description); setModel(next.bot.defaults.model?.id ?? '') }
+  }
   useEffect(() => {
     let live = true
-    request<View>(`/api/bots/${botId}/configuration`, token).then((next) => { if (live) adopt(next) }).catch((e: Error) => { if (live) setError(e.message) })
+    request<View>(`/api/bots/${botId}/configuration`, token).then((next) => {
+      if (live) { setView(next); setDescription(next.bot.description); setModel(next.bot.defaults.model?.id ?? '') }
+    }).catch((e: Error) => { if (live) setError(e.message) })
     return () => { live = false }
   }, [botId, token])
-  async function save(event: FormEvent) {
-    event.preventDefault(); if (!view || busy) return
+  const dirty = !!view && (description !== view.bot.description || (!!view.bot.defaults.model && model !== view.bot.defaults.model.id))
+  async function submit(change: Change, done: string, keepDraft: boolean) {
+    if (!view || busy) return
     setBusy(true); setError(''); setNotice('')
     try {
-      await request(`/api/bots/${botId}/configuration`, token, { expectedVersion: view.bot.configRef.version, requestId: crypto.randomUUID(), description, tools, resources,
-        ...(view.bot.defaults.model ? { parameters: { model: { id: model } } } : {}) })
-      const next = await load(); adopt(next); onSaved(next.bot); setNotice('已保存。工具和资源从所有会话的下一次调用起生效；模型与职责供新任务使用，旧会话可另行迁移。')
-    } catch (e) { setError(e instanceof Error ? e.message : '保存失败。') } finally { setBusy(false) }
+      await request(`/api/bots/${botId}/configuration`, token, { expectedVersion: view.bot.configRef.version, requestId: crypto.randomUUID(),
+        description: change.description, tools: view.assigned.tools, resources: change.resources,
+        ...(view.bot.defaults.model ? { parameters: { model: { id: change.model } } } : {}) })
+      const next = await load()
+      if (!mounted.current) return
+      adopt(next, keepDraft); onSaved(next.bot); setNotice(done)
+    } catch (e) {
+      if (!mounted.current) return
+      const code = (e as { code?: string }).code
+      setError(code === 'CONFIG_VERSION_CONFLICT' ? '配置已在别处更新：先读取最新版本再改。' : e instanceof Error ? e.message : '保存失败。')
+    } finally { if (mounted.current) setBusy(false) }
   }
-  return <details className="bot-configuration"><summary>工具与资源、模型和职责</summary>
-    <p className="shell-note" role="note">勾选的工具与资源从所有会话的下一次调用起生效。</p>
-    {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status">{notice}</p>}
-    {!view ? <p>正在读取配置…</p> : <>
-      <p className="muted small">当前 Bot：{view.bot.name}<span className="sr-only" data-testid="bot-config-version">{view.bot.configRef.version}</span>。勾选后保存即可使用。</p>
-      {readOnly && <p role="status">Bot 已停用：配置与管理记录只读，历史仍可查看。</p>}<fieldset disabled={readOnly}><form onSubmit={(e) => void save(e)}>
-        <label htmlFor="bot-config-description">Bot 角色与职责</label><textarea id="bot-config-description" maxLength={2000} required value={description} onChange={(e) => setDescription(e.target.value)} disabled={busy} />
-        <label htmlFor="bot-config-model">已配置模型</label><select id="bot-config-model" value={model} onChange={(e) => setModel(e.target.value)} disabled={busy || !view.bot.defaults.model || view.models.length === 0}>
-          {!view.bot.defaults.model && <option value="">确定性测试模式（无真实模型）</option>}{view.models.map((m) => <option key={m.id} value={m.id}>{m.provider} / {m.id}</option>)}
-        </select>
-        <p className="muted small">不新增供应商、连接器或凭证。新会话使用保存后的配置；当前会话仍显示原固定版本。</p>
-        <fieldset className="bot-permissions" disabled={busy}><legend>工具</legend>{view.installed.map((name) => <label key={name}><input type="checkbox" aria-label={`分配工具 ${name}`} checked={tools.includes(name)} onChange={() => setTools(toggle(tools, name))} /><code>{name}</code>{view.revoked.includes(name) && <span className="muted small"> · 已撤销，暂不可用</span>}</label>)}</fieldset>
-        <fieldset className="bot-permissions" disabled={busy}><legend>资源</legend>{view.resources.map((name) => <label key={name}><input type="checkbox" aria-label={`分配资源 ${name}`} checked={resources.includes(name)} onChange={() => setResources(toggle(resources, name))} /><code>{name}</code></label>)}</fieldset>
-        <button className="primary" disabled={busy}>{busy ? '正在保存…' : '保存 Bot 新配置'}</button> <button type="button" disabled={busy} onClick={() => { void load().then((next) => { adopt(next); setError(''); setNotice('已重新加载最新版本；请检查后再编辑。') }).catch((e: Error) => setError(e.message)) }}>重新加载最新配置</button>
-      </form></fieldset>
-      <details><summary>不可变配置历史（{view.versions.length}）</summary>{view.versions.map((v) => <div key={v.configRef.version}><strong>{v.configRef.version}</strong><p>{v.description}</p><p className="muted small">来源：{v.source} · {new Date(v.savedAt).toLocaleString('zh-CN')} · 模型 {v.defaults.model?.id ?? '测试模式'} · 工具 {v.defaults.tools.join('、') || '无'} · 资源 {v.defaults.toolResources.join('、') || '无'}</p></div>)}</details>
-      <details><summary>配置与授权审计（{view.audit.length}）</summary><ol>{view.audit.map((e) => <li key={e.id}>#{e.id} · {e.type} · {e.source}{e.code ? ` · ${e.code}` : ''} · {new Date(e.createdAt).toLocaleString('zh-CN')}<pre>{JSON.stringify({ previous: e.previous, next: e.next, initiatingUser: e.initiatingUser, executingChief: e.executingChief, taskId: e.taskId, operationId: e.operationId }, null, 2)}</pre></li>)}</ol></details>
-    </>}
-  </details>
+  function saveRole(event: FormEvent) {
+    event.preventDefault()
+    if (!view) return
+    void submit({ description, model, resources: view.assigned.resources }, '已保存。新任务使用新的职责和模型；已开始的会话保持原设置。', false)
+  }
+  function switchResource(id: string) {
+    if (!view) return
+    // Saved role and model go with the switch; an unsaved draft stays in the form.
+    void submit({ description: view.bot.description, model: view.bot.defaults.model?.id ?? '', resources: toggle(view.assigned.resources, id) }, '来源已更新。', dirty)
+  }
+  function discard() {
+    setError(''); setNotice('')
+    void load().then((next) => { if (mounted.current) adopt(next) }).catch((e: Error) => { if (mounted.current) setError(e.message) })
+  }
+  if (!view) return <section className="bot-edit-section" aria-label="职责与模型"><h2>职责与模型</h2>
+    <p className={error ? 'bot-edit-error' : 'bot-edit-hint'} role={error ? 'alert' : undefined}>{error || '正在读取…'}</p></section>
+  return <>
+    <section className="bot-edit-section" aria-label="职责与模型">
+      <h2>职责与模型</h2>
+      <span className="sr-only" data-testid="bot-config-version">{view.bot.configRef.version}</span>
+      <form className="bot-edit-form" onSubmit={saveRole}>
+        <label className="pd-field">
+          <span className="pd-row-title">职责</span>
+          <textarea rows={3} maxLength={2000} required value={description} disabled={readOnly || busy} onChange={(e) => setDescription(e.target.value)} />
+        </label>
+        <div className="pd-row pd-row-select">
+          <label className="pd-row-text" htmlFor={`bot-model-${botId}`}>
+            <span className="pd-row-title">模型</span>
+            <span className="pd-row-desc">新任务使用；已开始的会话不变</span>
+          </label>
+          {view.bot.defaults.model && view.models.length > 0
+            ? <select id={`bot-model-${botId}`} value={model} disabled={readOnly || busy} onChange={(e) => setModel(e.target.value)}>
+              {view.models.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
+            </select>
+            : <span id={`bot-model-${botId}`} className="pd-row-desc">测试模式（未配置模型）</span>}
+        </div>
+        {!readOnly && (dirty || error) && <div className="bot-edit-actions">
+          {dirty && <button className="primary" disabled={busy}>{busy ? '正在保存…' : '保存'}</button>}
+          <button type="button" className="pd-button" disabled={busy} onClick={discard}>{dirty ? '放弃更改' : '重新读取'}</button>
+        </div>}
+      </form>
+    </section>
+    <section className="bot-edit-section" aria-label="来源">
+      <h2>来源</h2>
+      <p className="bot-edit-hint">开了才能读写这个来源。切换立即生效，用于所有会话的下一次操作。</p>
+      {view.resources.length === 0 ? <p className="bot-edit-hint">还没有可用的来源。</p>
+        : <ul className="pd-rows">{view.resources.map((id) => {
+          const { title, note } = describeResource(id)
+          return <li key={id} className="pd-row" title={id}>
+            <div className="pd-row-text"><span className="pd-row-title">{title}</span>{note && <span className="pd-row-desc">{note}</span>}</div>
+            <Switch label={title} checked={view.assigned.resources.includes(id)} disabled={readOnly || busy} onChange={() => switchResource(id)} />
+          </li>
+        })}</ul>}
+      {readOnly && <p role="status" className="bot-edit-hint">Bot 已停用：只能查看。</p>}
+      {error && <p role="alert" className="bot-edit-error">{error}</p>}
+      {notice && <p role="status" className="bot-edit-hint">{notice}</p>}
+    </section>
+    <details className="bot-edit-diagnostics">
+      <summary>配置历史与审计（{view.versions.length} 个版本 · {view.audit.length} 条记录）</summary>
+      <ol className="bot-edit-history">{view.versions.map((v) => <li key={v.configRef.version}>
+        <strong>{v.configRef.version}</strong> · {v.source} · {new Date(v.savedAt).toLocaleString('zh-CN')} · 模型 {v.defaults.model?.id ?? '测试模式'} · 资源 {v.defaults.toolResources.join('、') || '无'}
+        <p>{v.description}</p>
+      </li>)}</ol>
+      <ol className="bot-edit-history">{view.audit.map((e) => <li key={e.id}>#{e.id} · {e.type} · {e.source}{e.code ? ` · ${e.code}` : ''} · {new Date(e.createdAt).toLocaleString('zh-CN')}
+        <pre>{JSON.stringify({ previous: e.previous, next: e.next, initiatingUser: e.initiatingUser, executingChief: e.executingChief, taskId: e.taskId, operationId: e.operationId }, null, 2)}</pre>
+      </li>)}</ol>
+    </details>
+  </>
 }

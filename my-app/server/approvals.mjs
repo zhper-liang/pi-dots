@@ -7,7 +7,7 @@ import { TaskInputError } from './task-config.mjs'
 import { assertNotCancelled } from './cancellation.mjs'
 import { ChatSteering } from './steering.mjs'
 import { validDate } from './tool-results.mjs'
-import { addRule } from './policy.mjs'
+import { openGroup } from './policy.mjs'
 
 export const CALENDAR_WRITE_TOOL = 'calendar_reschedule_event'
 export const TaskApprovals = defineDoc({ kind: 'pidot.task-approvals', version: 1, scope: 'task',
@@ -341,8 +341,8 @@ export function approvalApi({ harness, context, TaskCard, ChatInput, taskKind, g
         binding: item.binding, source: 'authenticated-user', ...(input.acknowledgeDuplicateRisk ? { acknowledgeDuplicateRisk: true } : {}), createdAt: new Date().toISOString() }
       const audit = await tx.appendEntry(card.conversationId, { kind: 'pidot.approval-decided', data: decision })
       item.decision = { ...decision, id: audit.id }
-      // ADR-012 "总是": the same commit writes an exact allow rule for this Bot and tool (PLAN §8.3).
-      if (input.always) await addRule(tx, { botId: card.bot.id, match: { tool: item.toolName, ...(item.toolName === 'bot_manage' ? { action: item.arguments.action } : {}) }, effect: 'allow', origin: 'user' })
+      // "以后直接做": the same commit turns this tool's group on for the Bot.
+      if (input.always) await openGroup(tx, card.bot.id, item.toolName)
     }, context)
     harness.resume()
     return get(id)

@@ -12,6 +12,7 @@ import { listBots } from './bots.mjs'
 import { ToolAccess, CALENDAR_TOOL, CALENDAR_EVENT_TOOL, readMockSchedule } from './tools.mjs'
 import { MockCalendar, CALENDAR_WRITE_TOOL } from './approvals.mjs'
 import { createApiServer } from './app.mjs'
+import { allGroupTools } from './bot-configuration.mjs'
 
 const config = { baseUrl: 'https://fixture.invalid/v1', model: 'config-fixture', apiKey: 'do-not-persist-fixture-secret' }
 const args = { resource: 'mock:personal', date: '2026-10-20' }
@@ -84,6 +85,8 @@ test('02 immutable idempotency receipts survive newer configs, base changes and 
 test('02 installed tools can be assigned directly; assignment changes reach existing Tasks', async (t) => {
   const { store } = await fixture(t)
   const { bot } = await store.createBot({ name: '权限专家', description: '独立职责', profile: 'general', requestId: requestId() })
+  // A new Bot holds every group (T01); narrow it first so the grant below is observable.
+  await store.updateBotConfiguration(bot.id, await edit(store, bot.id, { tools: [] }))
   const old = await store.create({ botId: bot.id }), sameBotOld = await store.create({ botId: 'calendar' })
   const before = await store.getBotConfiguration(bot.id)
   assert.ok(before.installed.includes(CALENDAR_TOOL)); assert.ok(!before.assigned.tools.includes(CALENDAR_TOOL))
@@ -236,14 +239,14 @@ test('02 in-flight read receipt remains real after revoke; next dispatch denied 
   assert.equal(reads, 1); assert.equal(receipts[0].result.ok, true); assert.equal(receipts[1].result.error.code, 'TOOL_NOT_AUTHORIZED')
 })
 
-test('02 fresh and legacy runtime initialize current assignments from Bot defaults', async (t) => {
+test('02 fresh runtime assigns every tool group; a legacy record initializes from Bot defaults', async (t) => {
   const { openTaskStore: rawOpen } = await import('./tasks.mjs')
   const { BotDirectory } = await import('./bot-directory.mjs')
   const dir = await mkdtemp(join(tmpdir(), 'pidot-raw-pool-')), file = join(dir, 'task.sqlite'); let store
   t.after(async () => { if (store) await store.close(); await rm(dir, { recursive: true, force: true }) })
   store = await rawOpen({ file, bots: listBots(config), modelReply: async () => text() })
   let view = await store.getBotConfiguration('calendar')
-  assert.ok(view.installed.includes(CALENDAR_TOOL)); assert.deepEqual(view.assigned.tools, view.bot.defaults.tools)
+  assert.ok(view.installed.includes(CALENDAR_TOOL)); assert.deepEqual([...view.assigned.tools].sort(), [...new Set([...view.bot.defaults.tools, ...allGroupTools()])].sort())
   const old = await store.create({ botId: 'calendar' }); assert.ok(old.toolSets.authorized.includes(CALENDAR_TOOL))
   // A prior record without assignment metadata initializes from the current Bot defaults.
   await store.harness.commit(async (tx) => { const access = await tx.doc(ToolAccess); delete access.assignments; const directory = await tx.doc(BotDirectory); delete directory.configurations; delete directory.managementAudit; delete directory.managementRequests }, context)

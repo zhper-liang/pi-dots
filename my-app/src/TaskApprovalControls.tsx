@@ -119,7 +119,7 @@ function ManagementCard({ item, active, locked, onDecide, failed }: { item: Appr
       {args.action === 'configure' && <><dt>工具 / 资源</dt><dd>{(args.tools ?? []).join('、') || '无'} / {(args.resources ?? []).join('、') || '无'}</dd></>}
       {args.parameters !== undefined && <><dt>参数</dt><dd>{JSON.stringify(args.parameters)}</dd></>}
     </dl>
-    <p className="muted small">创建和配置默认直接做，停用默认先问。工具与资源变更从所有会话的下一次调用起生效。</p>
+    <p className="muted small">创建、配置和停用默认直接做；关闭 Bot 管理组后改为先问。工具与资源变更从所有会话的下一次调用起生效。</p>
     <div className="action-row">
       <button type="button" disabled={locked || !active} onClick={() => onDecide('approved')}>同意</button>
       {canAlways({ kind: 'approval', toolName: item.toolName, allowAlways: item.allowAlways }) && <button type="button" disabled={locked || !active} onClick={() => { if (window.confirm(ALWAYS_WARNING)) onDecide('approved', true) }}>以后直接做</button>}
