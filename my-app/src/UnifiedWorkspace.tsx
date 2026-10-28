@@ -1,5 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import LocalWorkspace from './LocalWorkspace'
 import ScheduleWorkspace from './ScheduleWorkspace'
 import ReminderWorkspace from './ReminderWorkspace'
@@ -7,6 +7,7 @@ import CalendarBoard from './CalendarBoard'
 import SettingsPage from './SettingsPage'
 import { AutomationBanner } from './AutomationControls'
 import { MenuIcon } from './Icons'
+import { useDrawer, useMediaQuery } from './useDrawer'
 import { workspaceViews, itemTabs, nextItemTab } from './workspace-navigation.mjs'
 import type { ItemTab, WorkspaceView } from './workspace-navigation.mjs'
 
@@ -25,12 +26,14 @@ export default function UnifiedWorkspace({ token, view, itemTab, onItemTab, onVi
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [automation, setAutomation] = useState<'schedules' | 'runs'>('schedules')
   const tabRefs = useRef<Partial<Record<ItemTab, HTMLButtonElement | null>>>({})
-  useEffect(() => {
-    if (!drawerOpen) return
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setDrawerOpen(false) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [drawerOpen])
+  const sidebarRef = useRef<HTMLElement>(null)
+  const menuRef = useRef<HTMLButtonElement>(null)
+  // Below 720px (shell.css) the sidebar is a drawer over the page; widening the window closes it.
+  const phone = useMediaQuery('(max-width: 719px)')
+  const [wasPhone, setWasPhone] = useState(phone)
+  if (wasPhone !== phone) { setWasPhone(phone); if (!phone) setDrawerOpen(false) }
+  const drawer = phone && drawerOpen
+  useDrawer(sidebarRef, { open: drawer, modal: true, onClose: () => setDrawerOpen(false), initialFocus: '[aria-current="page"]', returnFocus: menuRef })
   function onTabKey(event: ReactKeyboardEvent) {
     const next = nextItemTab(itemTab, event.key)
     if (next === itemTab) return
@@ -39,14 +42,15 @@ export default function UnifiedWorkspace({ token, view, itemTab, onItemTab, onVi
   const page = workspaceViews.find((item) => item.id === view)!
   const showHeader = ['items', 'inbox', 'settings'].includes(view)
 
-  return <div className={`shell ${collapsed ? 'shell-collapsed' : ''} ${drawerOpen ? 'shell-drawer-open' : ''}`}>
-    {drawerOpen && <div className="shell-scrim" onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
-    <aside id="shell-sidebar" className="shell-sidebar" aria-label="主导航">
+  // On a phone the closed drawer is inert (off-screen, out of the Tab order) and the open one makes the page inert.
+  return <div className={`shell ${collapsed ? 'shell-collapsed' : ''} ${drawer ? 'shell-drawer-open' : ''}`}>
+    {drawer && <div className="shell-scrim" onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
+    <aside ref={sidebarRef} id="shell-sidebar" className="shell-sidebar" aria-label="主导航" role={phone ? 'dialog' : undefined} aria-modal={phone ? true : undefined} inert={phone && !drawer}>
       {sidebar({ collapsed, onToggleCollapsed: () => setCollapsed((value) => !value), onClose: () => setDrawerOpen(false) })}
     </aside>
-    <div className="shell-main">
+    <div className="shell-main" inert={drawer}>
       <header className="pd-topbar">
-        <button type="button" className="shell-icon-button" aria-label="打开导航" aria-expanded={drawerOpen} aria-controls="shell-sidebar" onClick={() => setDrawerOpen(true)}><MenuIcon /></button>
+        <button ref={menuRef} type="button" className="shell-icon-button" aria-label="打开导航" aria-expanded={drawer} aria-controls="shell-sidebar" onClick={() => setDrawerOpen(true)}><MenuIcon /></button>
         <span className="pd-topbar-title">{title}</span>
       </header>
       <AutomationBanner token={token} onOpenSettings={() => onView('settings')} />

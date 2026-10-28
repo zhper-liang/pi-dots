@@ -58,8 +58,10 @@
 .cal-month-day { min-height:104px; padding:4px; border-top:1px solid var(--c-line); border-left:1px solid var(--c-line); display:flex; flex-direction:column; gap:2px; cursor:pointer; min-width:0; }
 .cal-month-day:nth-child(7n + 1) { border-left:0; }
 .cal-month-day.is-out { background:var(--c-soft); color:var(--c-mute); }
-.cal-month-date { align-self:flex-start; border:0; background:none; font:inherit; font-weight:600; width:26px; height:26px; border-radius:50%; cursor:pointer; }
-.cal-month-day.is-today .cal-month-date { background:var(--primary, var(--c-primary)); color:var(--c-on-primary); }
+/* The button is the tap target; the inner circle is what you see (they differ on phones). */
+.cal-month-date { align-self:flex-start; border:0; background:none; padding:0; font:inherit; font-weight:600; width:26px; height:26px; border-radius:var(--radius-sm); display:grid; place-items:center; cursor:pointer; }
+.cal-month-date > span { width:26px; height:26px; display:grid; place-items:center; border-radius:50%; }
+.cal-month-day.is-today .cal-month-date > span { background:var(--primary, var(--c-primary)); color:var(--c-on-primary); }
 .cal-month-day .cal-due-row { justify-content:flex-start; }
 .cal-month-day .cal-event { position:static; width:100%; }
 .cal-more { border:0; background:none; font:inherit; font-size:12px; color:var(--c-mute); text-align:left; cursor:pointer; padding:1px 4px; }
@@ -94,4 +96,9 @@
   .cal-range { width:100%; margin:4px 0 0; }
   .cal-month-day { min-height:64px; }
   .cal-month-day .cal-event-time { display:none; }
+  /* The date's tap target is the cell's full width (about 44px at 375) and 44px tall; negative margins
+     keep the layout of the 26px date, and the circle stays where it was. */
+  .cal-month-date { flex:none; width:calc(100% + 8px); height:44px; margin:-4px -4px -14px; padding:4px 0 0 4px; place-items:start; }
+  /* The agenda list is the phone's default view; its rows are the main targets. */
+  .cal-agenda .cal-event { min-height:44px; align-items:center; }
 }

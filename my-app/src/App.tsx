@@ -37,6 +37,7 @@ import type { FormEvent } from 'react'
 import './App.css'
 import './shell.css'
 import { taskStatus } from './taskStatus'
+import { useDrawer, useMediaQuery } from './useDrawer'
 
 type ConfigRef = { botId: string; version: string }
 type Bot = { status?: 'active' | 'inactive'; deactivatedAt?: string; id: string; name: string; description: string; configRef: ConfigRef }
@@ -243,12 +244,10 @@ function App() {
     observer.observe(document.body)
     return () => { window.removeEventListener('scroll', onScroll); window.removeEventListener('resize', keep); observer.disconnect() }
   }, [])
-  useEffect(() => {
-    if (!detailsOpen) return
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setDetailsOpen(false) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [detailsOpen])
+  // Below 1000px (shell.css) session details overlay the conversation as a drawer.
+  const detailsRef = useRef<HTMLElement>(null)
+  const detailsOverlay = useMediaQuery('(max-width: 1000px)')
+  useDrawer(detailsRef, { open: detailsOpen && detail !== null && (home || view === 'chats'), modal: detailsOverlay, onClose: () => setDetailsOpen(false) })
   const messageAnchor = new URLSearchParams(location.hash.slice(1)).get('message')
   const hasMessageAnchor = Boolean(messageAnchor && detail?.messages.some(m => String(m.id) === messageAnchor))
   useEffect(() => {
@@ -631,7 +630,8 @@ function App() {
               </form>
               <div ref={historyEndRef} />
             </div>
-            <aside id="chat-details" className="shell-details" aria-label="会话详情" hidden={!detailsOpen}>
+            {detailsOpen && detailsOverlay && <div className="shell-details-scrim" onClick={() => setDetailsOpen(false)} aria-hidden="true" />}
+            <aside ref={detailsRef} id="chat-details" className="shell-details" aria-label="会话详情" role={detailsOverlay ? 'dialog' : undefined} aria-modal={detailsOverlay ? true : undefined} hidden={!detailsOpen}>
               <div className="shell-details-header"><h3>会话详情</h3><button type="button" className="shell-icon-button" aria-label="关闭会话详情" onClick={() => setDetailsOpen(false)}>×</button></div>
               <SkillHistory state={detail.skillState} />
 <p className="muted small">{detail.parameters.mode === 'model' ? (Array.isArray(detail.parameters.tools) && detail.parameters.tools.some((name: string) => name.startsWith('calendar_feishu_')) ? '真实模型持续对话 · 按 Bot 当前工具、资源和规则使用飞书应用日历；默认删除先问，其余直接做。外部内容仅作资料。' : '真实模型持续对话 · 使用 Bot 当前工具、资源和规则；默认删除先问，其余直接做。') : '确定性测试对话 · 非模型输出。旧会话保留固定配置，不自动升级为真实模型。'}</p>

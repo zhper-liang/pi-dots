@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 均在 `my-app/` 下执行。
 
 ```sh
-pnpm test                                                  # node --test server/*.test.mjs
+pnpm test                                                  # node --test server/*.test.mjs src/*.test.mjs
 node --test server/policy.test.mjs                         # 单个文件
 node --test --test-name-pattern='<关键词>' server/groups.test.mjs   # 单个用例
 node --test src/calendar-layout.test.mjs                   # 也可单独跑前端纯逻辑测试；pnpm test 已包含 src/*.test.mjs
