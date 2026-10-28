@@ -1,5 +1,6 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './calendar.css'
+import { todayDueTodos } from './today-summary.mjs'
 import { type Mode, addDays, dayKey, dayStart, dueDay, eventDays, hm, layoutDay, periodDays, shiftAnchor, toOffsetIso } from './calendar-layout.mjs'
 
 type Item = { id: string; sourceId: string; title: string; version: number; due?: string | null; timezone?: string; start?: string; end?: string; description?: string; deletedAt?: string | null; status?: string }
@@ -18,10 +19,10 @@ const toLocalInput = (ms: number) => toOffsetIso(ms).slice(0, 16)
 const fromLocalInput = (v: string) => Date.parse(`${v}:00+08:00`)
 const label = (d: string) => `${Number(d.slice(5, 7))}月${Number(d.slice(8))}日`
 
-export default function CalendarBoard({ token }: { token: string }) {
+export default function CalendarBoard({ token, initialMode = 'week', active = true }: { token: string; initialMode?: Mode; active?: boolean }) {
   const [now, setNow] = useState(() => Date.now())
   const today = dayKey(now)
-  const [mode, setMode] = useState<Mode>('week'), [anchor, setAnchor] = useState(() => dayKey(Date.now()))
+  const [mode, setMode] = useState<Mode>(initialMode), [anchor, setAnchor] = useState(() => dayKey(Date.now()))
   const [authorized, setAuthorized] = useState<boolean | null>(null)
   const [local, setLocal] = useState<Item[]>([]), [todos, setTodos] = useState<Item[]>([]), [external, setExternal] = useState<Item[]>([])
   const [extSources, setExtSources] = useState<string[]>([]), [extWarning, setExtWarning] = useState('')
@@ -75,7 +76,7 @@ export default function CalendarBoard({ token }: { token: string }) {
       setError(e instanceof Error && e.name !== 'NetworkError' ? e.message : '连接中断，暂时无法读取日程。')
     } finally { if (gen === generation.current) setLoading(false) }
   }, [api, days])
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { if (active) void load() }, [load, active])
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(t) }, [])
   useEffect(() => { const m = window.matchMedia('(max-width: 719px)'), f = () => setNarrow(m.matches); m.addEventListener('change', f); return () => m.removeEventListener('change', f) }, [])
   useEffect(() => { if (scroller.current) scroller.current.scrollTop = HOUR * 7.5 }, [mode, narrow, authorized])
@@ -256,6 +257,7 @@ export default function CalendarBoard({ token }: { token: string }) {
     </div>
   }
 
+  const dueToday = todayDueTodos(todos, today)
   const showAgenda = narrow && mode === 'week'
   return <section className="cal" aria-label="日历">
     <header className="cal-toolbar">
@@ -279,6 +281,12 @@ export default function CalendarBoard({ token }: { token: string }) {
     {error && !pop && <div className="cal-banner is-error" role="alert">{error}{unconfirmed && <button type="button" className="cal-link" disabled={busy} onClick={() => void lookup()}>查询原请求结果</button>}</div>}
     {notice && <div className="cal-banner is-ok" role="status">{notice}</div>}
     {mode === 'month' ? month() : showAgenda ? agenda() : timeGrid()}
+    <section className="items-due-today" aria-labelledby="items-due-today-title">
+      <h2 id="items-due-today-title">今天到期的待办</h2>
+      <p className="shell-muted">只显示今天到期且未完成的待办；逾期、无截止日期与历史记录请到“待办”查看。</p>
+      {loading ? <p role="status">正在读取…</p> : !authorized ? <p role="status">本地待办读取失败，请刷新后重试。</p> : dueToday.length === 0 ? <p>今天没有到期的待办。</p>
+        : <ul className="today-list">{dueToday.map(todo => <li key={`${todo.sourceId}:${todo.id}`}><span>{todo.title}</span><time dateTime={todo.due ?? undefined}>{todo.due?.length === 10 ? '今天' : hm(Date.parse(todo.due!))}</time></li>)}</ul>}
+    </section>
     {popover()}
   </section>
 }

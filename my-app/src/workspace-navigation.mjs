@@ -2,13 +2,12 @@
 export const workspaceViews = [
   { id: 'home', label: 'Chief', description: '和 Chief 对话，派活给其他 Bot' },
   { id: 'chats', label: '会话', description: '和 Bot 或群聊对话' },
-  { id: 'items', label: '事项', description: '今天、日历、待办和自动化放在一处' },
+  { id: 'items', label: '事项', description: '日历、待办、自动化与执行记录；默认查看今天' },
   { id: 'inbox', label: '通知', description: '需要你处理的事和事项提醒' },
   { id: 'settings', label: '设置', description: '数据来源、连接状态与模型说明' },
 ]
 // Sub-tabs of 事项. Each stays mounted while hidden so drafts and pending requests survive a switch.
 export const itemTabs = [
-  { id: 'today', label: '今天' },
   { id: 'calendar', label: '日历' },
   { id: 'todos', label: '待办' },
   { id: 'automation', label: '自动化' },

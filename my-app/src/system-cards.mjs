@@ -65,6 +65,7 @@ export function mirrorCard(item) {
 /** Inbox item (GET /api/inbox) → card input. */
 export function inboxCard(item) {
   const d = item.detail ?? {}
+  if (item.kind === 'skipped') return { kind: 'mirror', state: 'skipped' }
   if (item.kind === 'blocker') return { kind: 'blocker', state: 'pending' }
   if (item.kind === 'auto-applied') return { kind: 'auto-applied', state: d.undone === true ? 'undone' : 'applied' }
   if (item.kind === 'finding') return { kind: d.detector === 'summary' ? 'summary' : 'finding', detector: d.detector, state: d.state ?? 'open' }
@@ -78,3 +79,15 @@ export function openApproval(item, cancelled = false) {
   return !cancelled || Boolean(item.operation)
 }
 export function openBlocker(item, cancelled = false) { return item.status === 'pending' && !cancelled }
+
+/** Keep unknown future kinds actionable rather than silently hiding them as information. */
+export function notificationSection(item) {
+  return ['finding', 'auto-applied', 'reminder', 'routine-result'].includes(item.kind) ? 'reminders' : 'attention'
+}
+
+export function notificationReason(item) {
+  if (item.kind === 'approval' || item.kind === 'workspace-proposal') return '这一步需要你确认，尚未执行。'
+  if (item.kind === 'blocker') return String(item.detail?.question ?? '任务缺少信息，需要你补充。')
+  if (item.kind === 'skipped') return '无人值守执行遇到需要询问的动作，已跳过；请到原任务核对，不会自动重试。'
+  return '事项状态有更新，请核对原任务或提醒记录。'
+}

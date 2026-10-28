@@ -174,11 +174,17 @@ test('S3 unattended routine skips a step that asks and records why; six ordinary
   assert.deepEqual(results.map(r => r.state), ['succeeded', 'succeeded', 'succeeded', 'succeeded', 'succeeded', 'succeeded', 'skipped'])
   assert.match(results.at(-1).receipt.notice, /已跳过：这一步需要你来做/)
   assert.equal((await s.inbox()).items.filter(i => i.kind === 'workspace-proposal').length, 0)
+  const skippedNotice = (await s.inbox()).items.find(i => i.kind === 'skipped' && i.taskId === task.taskId)
+  assert.ok(skippedNotice, 'T07 exposes unattended skipped write on the original Task')
+  assert.match(skippedNotice.detail.notice, /这一步需要你来做/)
   assert.equal(task.messages.filter(m => m.systemKind === 'auto-applied').length, 6)
   assert.ok((await todos(s)).some(x => x.id === old.id))
   await s.workspaceAgent.undoAuto({ requestId: 'batch-0', confirmed: true })
   assert.ok(!(await todos(s)).some(x => x.title === '批量0'))
   assert.equal((await s.get(id)).runtime.checkpoint.lastOutcome, 'completed')
+  const { bot } = await s.getBotConfiguration('calendar')
+  await s.updateBotConfiguration('calendar', { requestId: 't07-revoke-skipped-history', expectedVersion: bot.configRef.version, description: bot.description, tools: WORKSPACE_TOOLS, resources: [] })
+  assert.equal((await s.inbox()).items.some(i => i.kind === 'skipped' && i.taskId === task.taskId), false, 'revoked workspace history never leaks via notifications')
 }))
 
 test('S3 external routine writes directly; an ask rule skips without dispatch', () => {

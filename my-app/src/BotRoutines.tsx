@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, useId, type FormEvent } from 'react'
 import { ROUTINE_WHEN, routineInput, ruleLabel, runLabel, statusLabel, type RoutineRule } from './routines.mjs'
 
 // PLAN §8.5: the Bot page's 例行任务 section (the 自动化 page stays as the overview). Uses the
@@ -17,6 +17,7 @@ async function call<T>(token: string, path: string, input: object): Promise<T> {
 const when = (iso: string | null) => iso ? new Date(iso).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
 
 export default function BotRoutines({ token, botId, readOnly, onOpenTask }: { token: string; botId: string; readOnly: boolean; onOpenTask: (taskId: number) => void }) {
+  const formId = useId()
   const [items, setItems] = useState<Routine[] | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(''), [runs, setRuns] = useState<Run[]>([])
   const [form, setForm] = useState({ title: '', prompt: '', when: 'daily', value: '08:00', notification: 'inbox', writes: true })
@@ -56,8 +57,8 @@ export default function BotRoutines({ token, botId, readOnly, onOpenTask }: { to
   const test = (r: Routine) => act(async () => { const data = await send('schedule-test', { id: r.id }); setOpen(r.id); await loadRuns(r.id); if (data.receipt?.taskId) onOpenTask(data.receipt.taskId) })
   const change = (r: Routine, command: 'pause' | 'resume' | 'cancel') => act(async () => { await send('schedule-manage', { command, id: r.id, expectedRevision: r.revision, ...(command === 'resume' ? { confirmed: true } : {}) }) })
 
-  return <section className="today-card bot-routines" aria-labelledby={`bot-routines-${botId}`}>
-    <h2 id={`bot-routines-${botId}`}>例行任务</h2>
+  return <section className="today-card bot-routines" aria-labelledby={`bot-routines-${formId}`}>
+    <h2 id={`bot-routines-${formId}`}>例行任务</h2>
     <p className="shell-muted small">按时间或在某事发生时自动运行，每次运行是一个任务。按 Bot 当前工具、资源和规则执行；需要询问时跳过该步骤，并在结果中写明需要你来做。全局暂停时都不运行，恢复后不补跑。也可以在对话里让 Bot 提议。</p>
     {error && <p role="alert" className="shell-note">{error}</p>}
     {items === null ? <p className="shell-muted">正在读取…</p> : items.length === 0 ? <p className="shell-muted">还没有例行任务。</p>
@@ -78,19 +79,19 @@ export default function BotRoutines({ token, botId, readOnly, onOpenTask }: { to
       </li>)}</ul>}
     {!readOnly && <details className="routine-create"><summary>新建例行任务</summary>
       <form className="bot-form" onSubmit={create}>
-        <label htmlFor={`routine-title-${botId}`}>名称</label>
-        <input id={`routine-title-${botId}`} required maxLength={200} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="例如：每日待办整理" />
-        <label htmlFor={`routine-prompt-${botId}`}>每次要做什么</label>
-        <textarea id={`routine-prompt-${botId}`} required rows={3} maxLength={3000} value={form.prompt} onChange={e => setForm({ ...form, prompt: e.target.value })} placeholder="例如：看看今天到期的待办，按轻重排一下，冲突的提醒我" />
-        <label htmlFor={`routine-when-${botId}`}>什么时候</label>
-        <select id={`routine-when-${botId}`} value={form.when} onChange={e => setForm({ ...form, when: e.target.value, value: e.target.value === 'daily' ? '08:00' : e.target.value === 'interval' ? '60' : '' })}>
+        <label htmlFor={`routine-title-${formId}`}>名称</label>
+        <input id={`routine-title-${formId}`} required maxLength={200} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="例如：每日待办整理" />
+        <label htmlFor={`routine-prompt-${formId}`}>每次要做什么</label>
+        <textarea id={`routine-prompt-${formId}`} required rows={3} maxLength={3000} value={form.prompt} onChange={e => setForm({ ...form, prompt: e.target.value })} placeholder="例如：看看今天到期的待办，按轻重排一下，冲突的提醒我" />
+        <label htmlFor={`routine-when-${formId}`}>什么时候</label>
+        <select id={`routine-when-${formId}`} value={form.when} onChange={e => setForm({ ...form, when: e.target.value, value: e.target.value === 'daily' ? '08:00' : e.target.value === 'interval' ? '60' : '' })}>
           {ROUTINE_WHEN.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select>
         {form.when === 'daily' && <input aria-label="每天几点" type="time" required value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} />}
         {form.when === 'interval' && <input aria-label="间隔分钟" type="number" min={1} step={1} required value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} />}
         {form.when === 'at' && <input aria-label="运行时间" type="datetime-local" required value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} />}
-        <label htmlFor={`routine-notify-${botId}`}>结果</label>
-        <select id={`routine-notify-${botId}`} value={form.notification} onChange={e => setForm({ ...form, notification: e.target.value })}><option value="inbox">放进收件箱</option><option value="none">只留运行记录</option></select>
+        <label htmlFor={`routine-notify-${formId}`}>结果</label>
+        <select id={`routine-notify-${formId}`} value={form.notification} onChange={e => setForm({ ...form, notification: e.target.value })}><option value="inbox">放进收件箱</option><option value="none">只留运行记录</option></select>
         <label className="routine-check"><input type="checkbox" checked={form.writes} onChange={e => setForm({ ...form, writes: e.target.checked })} />允许按规则改动本地事项（不勾就只读）</label>
         <label className="routine-check"><input type="checkbox" checked={confirmed} onChange={e => setConfirmedFor(e.target.checked ? formKey : '')} />我确认：{ruleLabel(routineInput({ ...form, botId, requestId: 'x' }).input?.rule as RoutineRule)}运行，读本地日程和待办{form.writes ? '，低风险改动直接执行并可撤销' : '，只读'}</label>
         <div className="bot-actions"><button className="primary" disabled={busy || !confirmed}>{busy ? '正在保存…' : '创建例行任务'}</button></div>

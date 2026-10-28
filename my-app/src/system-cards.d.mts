@@ -13,3 +13,6 @@ export function mirrorCard(item: { mirrorKind: string; toolName?: string; live?:
 export function inboxCard(item: { kind: string; detail?: Record<string, unknown> }): CardInput
 export function openApproval(item: { receipt?: unknown; operation?: unknown }, cancelled?: boolean): boolean
 export function openBlocker(item: { status: string }, cancelled?: boolean): boolean
+
+export function notificationSection(item: { kind: string }): 'attention' | 'reminders'
+export function notificationReason(item: { kind: string; detail?: Record<string, unknown> }): string

@@ -482,3 +482,14 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
   .app-shell .pd-tool select { padding: 0 6px; }
   .swatch, .shape-option { width: 44px; height: 44px; }
 }
+
+/* T07: one item surface and two notification lanes, stacked in reading order on narrow screens. */
+.notification-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-6); align-items: start; }
+.notification-columns > section, .notification-columns .local-workspace { min-width: 0; }
+.notification-columns article, .notification-columns pre { overflow-wrap: anywhere; }
+.notification-columns pre { white-space: pre-wrap; }
+.notification-columns .inbox-list { padding: 0; }
+.items-due-today { margin-block: var(--space-6); border-top: 1px solid var(--c-border); padding-top: var(--space-4); }
+.items-due-today h2 { font-size: var(--fs-section); }
+.items-due-today time { color: var(--c-muted); white-space: nowrap; }
+@media (max-width: 1000px) { .notification-columns { grid-template-columns: minmax(0, 1fr); } }

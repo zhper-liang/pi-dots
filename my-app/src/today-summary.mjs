@@ -1,5 +1,5 @@
-// PLAN §8.4 home page (P-13): the one-line "今天" summary above the Chief main session. Pure; tested from server/.
-import { hm } from './calendar-layout.mjs'
+// Pure day selectors. Legacy summary helpers retain their tested semantics; T07 UI uses todayDueTodos.
+import { hm, dueDay } from './calendar-layout.mjs'
 
 /** Next event that has not ended yet, by start time. */
 export function nextEvent(events, now) {
@@ -19,4 +19,10 @@ export function todayParts({ authorized = true, events = [], todos = [], confirm
   }
   if (confirmations) parts.push(`${confirmations} 项等你确认`)
   return parts
+}
+
+/** Exact Shanghai due-day only: completed, deleted, overdue and undated items stay in 待办. */
+export function todayDueTodos(todos, day) {
+  return todos.filter(todo => !todo.deletedAt && todo.status !== 'completed' && dueDay(todo.due) === day)
+    .sort((a, b) => String(a.due).localeCompare(String(b.due)))
 }

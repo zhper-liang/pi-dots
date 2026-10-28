@@ -148,3 +148,34 @@ test('T4-01h home summary line (P-13)', () => {
   assert.deepEqual(todayParts({ now, day }), ['今天没有日程'])
   assert.deepEqual(todayParts({ authorized: false, confirmations: 1, now, day }), ['本地日程未开放读取', '1 项等你确认'])
 })
+
+test('T07 every notification kind belongs to exactly one lane; unknown kinds remain actionable', async () => {
+  const { notificationSection, notificationReason } = await import('../src/system-cards.mjs')
+  for (const kind of ['approval', 'workspace-proposal', 'blocker', 'skipped', 'future-kind']) assert.equal(notificationSection({ kind }), 'attention', kind)
+  for (const kind of ['reminder', 'routine-result', 'auto-applied', 'finding']) assert.equal(notificationSection({ kind }), 'reminders', kind)
+  assert.match(notificationReason({ kind: 'skipped' }), /已跳过.*不会自动重试/)
+  assert.deepEqual(cardActions(inboxCard({ kind: 'skipped' })), [], 'a skipped receipt must never become an executable approval')
+})
+
+test('T07 inbox projects only explicit unattended ask-skipped receipts with original identity', async () => {
+  const task = { taskId: 17, bot: { id: 'calendar', name: '日历助理' }, messages: [
+    { id: 30, role: 'tool', createdAt: '2026-10-29T01:00:00Z', toolName: 'workspace.prepare_change', result: { ok: true, data: { state: 'skipped', receipt: { notice: '已跳过：这一步需要你来做。', reason: 'ask_rule' } } } },
+    { id: 31, role: 'tool', toolName: 'routine_propose', result: { ok: true, data: { state: 'skipped', notice: '已跳过：这一步需要你来做。', reason: 'paused' } } },
+    { id: 32, role: 'tool', result: { ok: true, data: { state: 'skipped', notice: 'cancelled' } } },
+    { id: 33, role: 'assistant', result: { ok: true, data: { state: 'skipped', notice: '这一步需要你来做' } } },
+  ] }
+  const { items } = await buildInbox({ listTasks: async () => [task], pendingOperations: async () => ({ items: [] }), bots: [] })
+  assert.deepEqual(items.map(i => [i.kind, i.taskId, i.botId, i.entryId]), [['skipped', 17, 'calendar', 30], ['skipped', 17, 'calendar', 31]])
+  assert.equal(items[0].detail.reason, 'ask_rule')
+})
+
+test('T07 today due list uses Shanghai calendar day, not UTC prefix or overdue summary', async () => {
+  const { todayDueTodos } = await import('../src/today-summary.mjs')
+  const todos = [
+    { id: 'date', due: '2026-10-29' }, { id: 'offset', due: '2026-10-28T16:30:00Z' },
+    { id: 'overdue', due: '2026-10-28' }, { id: 'tomorrow', due: '2026-10-29T17:00:00Z' },
+    { id: 'done', due: '2026-10-29', status: 'completed' }, { id: 'deleted', due: '2026-10-29', deletedAt: 'x' }, { id: 'undated' }, { id: 'bad', due: 'invalid' },
+  ]
+  assert.deepEqual(todayDueTodos(todos, '2026-10-29').map(t => t.id), ['offset', 'date'])
+  assert.equal(todos.length, 8)
+})

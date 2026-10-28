@@ -60,6 +60,16 @@ export async function buildInbox({ listTasks, pendingOperations, bots, autoAppli
     const botId = task.bot?.id, botName = task.bot?.name ?? name(botId)
     for (const a of task.approvals?.items ?? []) if (a.status === 'pending')
       items.push({ kind: 'approval', taskId: task.taskId, botId, botName, approvalId: a.id, summary: summarizeApproval(botName, a.toolName, a.arguments, a.before), createdAt: a.createdAt, detail: { toolName: a.toolName, arguments: a.arguments, before: a.before ?? null, binding: a.binding, simulated: a.simulated, allowAlways: a.allowAlways !== false, ...(a.retryOf ? { retryOf: a.retryOf } : {}) } })
+    // These are projected from visibility-filtered original Task receipts, not a new queue or retry.
+    for (const message of task.messages ?? []) {
+      const result = message.result
+      const skipped = result?.data
+      const notice = skipped?.notice ?? skipped?.receipt?.notice
+      if (message.role !== 'tool' || result?.ok !== true || skipped?.state !== 'skipped' || !String(notice ?? '').includes('这一步需要你来做')) continue
+      items.push({ kind: 'skipped', taskId: task.taskId, botId, botName, entryId: message.id,
+        summary: `${botName}：这一步需要你来做`, createdAt: message.createdAt ?? null,
+        detail: { toolName: message.toolName, reason: skipped.reason ?? skipped.receipt?.reason, notice } })
+    }
     for (const b of task.blockers?.items ?? []) if (b.status === 'pending' && b.assignee === 'user')
       items.push({ kind: 'blocker', taskId: task.taskId, botId, botName, blockerId: b.id, summary: `${botName}需要你补充：${b.question}`, createdAt: b.history?.[0]?.createdAt ?? b.createdAt ?? null, detail: { question: b.question, requiredInformation: b.requiredInformation, version: b.version } })
   }

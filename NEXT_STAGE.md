@@ -11,13 +11,13 @@
 | 计划 | 状态 | 下一步 |
 |---|---|---|
 | [权限简化](plans/active/permission-simplify/README.md) | S1–S5 完成：941/941 全量、lint、build、1440/375 双宽度真实操作通过；ADR-014 已写 | 等用户验收；其中「删除默认先问」已由下一行计划的 T01 改为直接执行（ADR-015） |
-| [Bot 工作区与 Hermes 风格统一](plans/active-hermes-workspace-deepseek.md) | 2026-10-28 用户授权。已先做：工具组开关、`/Skill` 门槛、思考深度、多 @ 按序派发与验收后公开。T01/T03/T04 已从 hermes-shell 合并，与 T02 集成后 978/978、lint、build 通过；T03/T04 原分支临时库 1440/375 手测通过（假模型地址的失败为预期）。T01 工具组 ADR-015，T02 模型连接 ADR-016 | T01–T04 集成回归通过；T06 已实现并自测 984/984、lint/build、临时库 loopback 1440/375 通过，未验真实供应商；T05 已在独立 codex/t05-responsive-a11y（279ee5f）完成，未合并/推送 |
+| [Bot 工作区与 Hermes 风格统一](plans/active-hermes-workspace-deepseek.md) | 2026-10-28 用户授权。已先做：工具组开关、`/Skill` 门槛、思考深度、多 @ 按序派发与验收后公开。T01/T03/T04 已从 hermes-shell 合并，与 T02 集成后 978/978、lint、build 通过；T03/T04 原分支临时库 1440/375 手测通过（假模型地址的失败为预期）。T01 工具组 ADR-015，T02 模型连接 ADR-016 | T01–T04 集成回归通过；T06 已实现并自测 984/984、lint/build、临时库 loopback 1440/375 通过，未验真实供应商；用户指定 T05 hermes-shell/7a0ce97 已于 6ec9a56 合并（唯一 CLAUDE.md 冲突已解决），保留 T02/T06，987/987、lint/build 通过；T07 已实现事项三标签/默认今日日历+到期待办、通知两分区与 skipped 收据；最终 991/991、lint/build 通过，临时库 loopback 1440/375 流程通过；真实供应商、真实键盘/系统减少动画、正式库与原库重启恢复未验；待用户验收 |
 
 ## 本次独立授权：T02 模型连接实时生效
 
 用户已授权并完成 T02 后端：逐调用读取模型地址/key、同库目录 0600 设置文件、认证 `GET/POST /api/settings/model`；旧 Task 模型名及既有 Bot 版本不变，无配置启动后保存可使新 Task 使用真实模型。说明见 [运行手册](my-app/README.md) 与 [ADR-016](docs/decisions/README.md#adr-016-模型连接实时读取与独立凭证文件)。
 
-自测：950/950、lint（7 条既有警告）、build 通过；临时库/一次性 token 的 curl loopback 模型链路含热更新、凭证隔离及重启恢复通过。未访问真实供应商/正式数据库；本票无前端改动，未做双尺寸网页验收。T02 待用户验收；2026-10-29 已授权合并 T01/T03/T04 后推进 T06，T05 独立分支。
+自测：950/950、lint（7 条既有警告）、build 通过；临时库/一次性 token 的 curl loopback 模型链路含热更新、凭证隔离及重启恢复通过。未访问真实供应商/正式数据库；本票无前端改动，未做双尺寸网页验收。T02 待用户验收；2026-10-29 已合并 T01/T03/T04 并完成 T06；本次用户指定合并 T05 hermes-shell/7a0ce97 后实施 T07，不推送。
 
 ## 已完成待验收
 

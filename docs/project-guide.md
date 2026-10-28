@@ -33,7 +33,7 @@ flowchart TB
   subgraph Browser["浏览器：React / TypeScript"]
     App["App.tsx<br/>连接认证、Bot / Task 选择、消息发送、轮询"]
     Shell["UnifiedWorkspace.tsx<br/>导航、响应式侧栏、面板保持挂载"]
-    Home["今天 / Chief 主会话<br/>TodayPage、MainSession、SystemCard"]
+    Home["Chief 主会话<br/>MainSession、SystemCard"]
     Chat["Bot / 群聊 / 任务<br/>BotCreation、BotTemplatePage、TaskTimeline"]
     Items["日历 / 待办<br/>CalendarBoard、LocalWorkspace"]
     AutoUI["自动化 / 执行记录<br/>ScheduleWorkspace、BotRoutines"]
@@ -271,7 +271,7 @@ flowchart TD
 | 功能 | 怎么用 | 简要实现 / 主要代码 |
 |---|---|---|
 | 连接本地服务 | 启动后打开网页，输入本机 API token；断开连接不会删除数据 | `App.tsx` 在当前标签页 sessionStorage 保存 token；`app.mjs` 校验 Bearer |
-| 今天首页 | 查看当日日程、到期待办和待处理事项；直接在首页向 Chief 发消息 | `TodayPage.tsx` 汇总数据；首页复用 Chief 主会话 |
+| 事项默认视图 / 首页 | 在事项查看今日日历与到期待办；通知处理审批，首页向 Chief 发消息 | `CalendarBoard.tsx` 默认日视图，`todayDueTodos` 按上海日期筛选；首页复用 Chief 主会话 |
 | 创建 Bot | 侧栏新建 Bot，先填名字；高级设置调整职责与模型 | `BotCreation.tsx`、`bot-templates.mjs` 按名字确定性匹配职责，不调用模型 |
 | Bot 主会话 | 打开 Bot 持续交流，如“整理一下今天需要做的事” | `main-session.mjs` 确保每个 Bot 一个主会话；长任务可派生执行 |
 | 独立任务 | 在 Bot 下开始会话，或让主会话派生长任务；查看目标与完成标准 | `task-creation.mjs` 创建原生 Harness Task、Conversation 和 TaskCard |
@@ -397,6 +397,6 @@ pidot/
 - 外部连接器只有当前飞书应用日历；没有邮件或外部待办。普通事件之外的邀请、会议室、重复/例外、全天写不支持。
 - 外部 unknown 必须保留并核查，不能盲重试；本地撤销有版本条件，外部写入不可撤销。
 - 对话摘要与上下文压缩已实现，但不等于完整长期记忆产品。
-- 部分旧专题正文仍含“八页导航”“能力池/档位/Task 权限快照”“主会话只读”“所有 prepare 都必须人工确认”等描述。当前界面以 `workspace-navigation.mjs` 为准（2026-10-29 T03）：首页是 Chief 主会话，左栏分会话 / 机器人，底部是事项（今天、日历、待办、自动化四个子标签）、通知、设置；当前权限以 `policy.mjs`、`tool-group-settings.mjs`、`workspace-mcp-business.mjs` 及 ADR-014、ADR-015 为准。历史方案和历史测试数字不能当成当前重新验收结果。
+- 部分旧专题正文仍含“八页导航”“能力池/档位/Task 权限快照”“主会话只读”“所有 prepare 都必须人工确认”等描述。当前界面以 `workspace-navigation.mjs` 为准（2026-10-29 T07）：首页是 Chief 主会话，左栏分会话 / 机器人，底部是事项（日历、待办、自动化三个常驻子标签，默认今日日视图和到期待办）、通知、设置；当前权限以 `policy.mjs`、`tool-group-settings.mjs`、`workspace-mcp-business.mjs` 及 ADR-014、ADR-015 为准。历史方案和历史测试数字不能当成当前重新验收结果。
 
 继续查阅：[功能范围](product/mvp-scope.md)、[Agent 专题](architecture/agent-runtime.md)、[HTTP 契约](interfaces/http-api.md)、[运行手册](engineering/operations.md)。本文依据源码与现有测试用例梳理，没有启动真实模型、修改正式数据库或执行飞书写入，也未重新运行业务测试。

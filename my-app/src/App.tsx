@@ -11,7 +11,6 @@ import BotTemplatePage from './BotTemplatePage'
 import BotDirectory from './BotDirectory'
 import { botDetailHash, readBotTab, tasksForBot, type BotTab } from './bot-directory.mjs'
 import './bot-directory.css'
-import TodaySummary, { type Confirmation } from './TodayPage'
 import TaskTimeline from './TaskTimeline'
 import { openApproval, openBlocker } from './system-cards.mjs'
 import InboxPage from './InboxPage'
@@ -194,7 +193,7 @@ function App() {
   const [loadedDetail, setDetail] = useState<Task | null>(null)
   const [botId, setBotId] = useState(() => hashBot() ?? 'chief')
   const [view, setView] = useState<WorkspaceView>(() => opensChat() ? 'chats' : 'home')
-  const [itemTab, setItemTab] = useState<ItemTab>('today')
+  const [itemTab, setItemTab] = useState<ItemTab>('calendar')
   const [newBot, setNewBot] = useState(hashNewBot)
   const [newSession, setNewSession] = useState(hashNewSession)
   const [directory, setDirectory] = useState(hashDirectory)
@@ -524,7 +523,7 @@ function App() {
   const selectedBot = bots.find((bot) => bot.id === botId)
   const status = detail ? taskStatus(detail, sendingId === detail.taskId) : null
   const archived = tasks.filter(t => t.archived).map(t => t.taskId)
-  const confirmations: Confirmation[] = tasks.filter(t => !archived.includes(t.taskId)).flatMap(t => { const reason = confirmReason(t); return reason ? [{ taskId: t.taskId, title: t.title, botName: t.bot.name, reason }] : [] })
+  const confirmations = tasks.filter(t => !archived.includes(t.taskId)).flatMap(t => { const reason = confirmReason(t); return reason ? [{ taskId: t.taskId, title: t.title, botName: t.bot.name, reason }] : [] })
   const groupTasks = tasks.filter(t => t.kind === 'group')
   // Sidebar data (T03): sessions are every non-main Task including group chats; Bots open their main session.
   const sidebarSessions: SidebarSession[] = tasks.filter(t => t.kind !== 'main').map(t => ({ id: t.taskId, owner: ownerOf(t), title: t.title, botId: t.bot.id, botName: t.bot.name,
@@ -706,7 +705,7 @@ function App() {
       ) : (
         <main className="workspace-root">
           {notice && <div role="status" className="shell-alert shell-notice">{notice}<button onClick={() => setNotice('')} aria-label="关闭提示">×</button></div>}
-          <UnifiedWorkspace key={token} token={token} view={view} onView={(next) => goView(next)} itemTab={itemTab} onItemTab={setItemTab} title={mobileTitle}
+          <UnifiedWorkspace key={token} token={token} bots={bots} onOpenTask={selectTask} view={view} onView={(next) => goView(next)} itemTab={itemTab} onItemTab={setItemTab} title={mobileTitle}
             sidebar={(shell) => <ShellSidebar {...shell} view={view} newSession={newSession} inboxCount={inboxCount ?? confirmations.length}
               sessions={sidebarSessions} bots={sidebarBots} selectedId={selectedId} botPage={botPage}
               onHome={() => goView('home')} onNewSession={openNewSession} onOpenSession={(id, owner) => selectTask(id, owner)}
@@ -714,8 +713,6 @@ function App() {
               onBotSettings={id => selectBot(id, 'settings')} onNewBot={openNewBot} onNewGroup={() => selectBot('groups')} onView={(next) => goView(next)} />}
             footer={<><span>仅本机 · 本地存储</span> <button type="button" className="text-button" onClick={disconnect}>断开连接</button></>}
             home={chiefMain === null ? <div className="shell-placeholder" role="status"><h2>{loading ? '正在读取…' : '找不到 Chief 主会话'}</h2></div> : home ? chatView : null}
-            today={<TodaySummary token={token} active={view === 'items' && itemTab === 'today'} confirmations={confirmations} onOpenTask={id => { const t = tasks.find(x => x.taskId === id); selectTask(id, t ? ownerOf(t) : botId) }}
-              onOpenInbox={() => goView('inbox')} onOpenCalendar={() => goView('items', 'calendar')} onOpenTodos={() => goView('items', 'todos')} />}
             inboxSummary={<InboxPage token={token} active={view === 'inbox'} onCount={setInboxCount} onOpenTask={(id, owner) => { const t = tasks.find(x => x.taskId === id); selectTask(id, t ? ownerOf(t) : owner) }} />}>
           {selectedId === null ? (directory ? <BotDirectory bots={bots} loading={loading} onOpen={selectBot} onCreate={openNewBot} /> : newSession ? <NewSession key={`new-session:${token}`} bots={bots} busy={creating} onStart={(id, text) => void startSession(id, text)} onGroup={() => selectBot('groups')} />
             : newBot ? <BotCreation key={`new-bot:${token}`} token={token} onCancel={openDirectory} onCreated={(bot, mainTaskId) => {

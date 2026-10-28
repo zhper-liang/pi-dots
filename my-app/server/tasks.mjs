@@ -1670,7 +1670,21 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       },
       async inbox() {
         const { buildInbox } = await import('./inbox.mjs'), self = this
-        return buildInbox({ listTasks: () => self.list(undefined, { includeMain: true }), bots: await harness.commit(async tx => JSON.parse(JSON.stringify((await tx.doc(BotDirectory)).items)), context),
+        return buildInbox({ listTasks: async () => {
+          const tasks = await self.list(undefined, { includeMain: true })
+          return Promise.all(tasks.map(async task => {
+            if (!unattended(task.origin ?? (task.scheduledWorkflow ? 'routine' : 'user'))) return task
+            const detail = await self.get(task.taskId)
+            // Never re-expose source-derived receipts after workspace access is revoked.
+            const visible = await harness.commit(async tx => {
+              const record = await tx.task(task.taskId)
+              const archive = record?.state.status === 'terminal' ? await readCancelledArchive(tx, task.taskId) : null
+              const card = archive ? archive.documents[TaskCard.definition.kind] : await tx.doc(TaskCard, task.taskId)
+              return workspaceHistoryAllowed(tx, card, toolSets(card, (await tx.doc(BotDirectory)).items, await tx.doc(ToolAccess)))
+            }, context)
+            return visible ? detail : task
+          }))
+        }, bots: await harness.commit(async tx => JSON.parse(JSON.stringify((await tx.doc(BotDirectory)).items)), context),
           pendingOperations: cursor => workspaceEnabled ? workspaceMcp.pending(workspaceAuthority.user(), cursor === undefined ? {} : { cursor }) : { items: [] },
           autoApplied: () => workspaceEnabled ? workspaceMcp.autoApplied(workspaceAuthority.user()) : [],
           findings: async () => { const l = await findingsApi.list(); return l.items.map(f => ({ ...f, assist: l.assist })) } })

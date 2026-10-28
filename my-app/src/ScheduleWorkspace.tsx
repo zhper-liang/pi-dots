@@ -36,7 +36,7 @@ export default function ScheduleWorkspace({ token, view = 'schedules' }: { token
   }, [token])
   const rule = () => form.type === 'daily' ? { type: 'daily', time: form.value } : form.type === 'interval' ? { type: 'interval', seconds: Number(form.value), anchor: new Date(Date.now() + 60000).toISOString() } : { type: 'at', at: form.value }
   return <section className="schedule-workspace"><h2>{view === 'runs' ? '执行记录与原Task' : '持久定时计划与只读Agent简报'}</h2>
-    <p className="shell-note">每个 Bot 的例行任务（含事件触发、测试运行、按规则改动）在该 Bot 的资料页「例行任务」区管理；这里是全部计划的总览。</p>
+    <p className="shell-note">例行任务可在事项「自动化」或 Bot 详情「任务」标签管理；这里保留全部计划、确定性记录与只读简报。</p>
     <p>后端运行时闭页仍执行；停机不执行。内部记录不调用模型；只读Agent简报复用原Task/预算与持久收件箱，不提供写入或委派。外部只读同步在飞书来源面板独立配置。</p>
     <button disabled={busy} onClick={() => void act(refresh)}>加载计划</button>
     <div hidden={view === 'runs'}><label>动作<select aria-label="计划动作" value={workflow ? 'agent' : 'internal'} onChange={e => { setWorkflow(e.target.value === 'agent'); setConfirmed(false) }}><option value="internal">内部确定性验收记录</option><option value="agent">只读Agent简报</option></select></label>

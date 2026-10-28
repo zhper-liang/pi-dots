@@ -14,7 +14,7 @@ async function act(token: string, body: unknown) {
   return result.data
 }
 
-export function FindingCard({ token, finding, onOpenTask }: { token: string; finding: FindingView; onOpenTask: (taskId: number, botId: string) => void }) {
+export function FindingCard({ token, finding, onOpenTask, compact = false }: { token: string; finding: FindingView; compact?: boolean; onOpenTask: (taskId: number, botId: string) => void }) {
   const [state, setState] = useState(''), [taskId, setTaskId] = useState<number | null>(null), [assistId, setAssistId] = useState<number | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const current = state || finding.state || 'open', handled = taskId ?? finding.handledTaskId ?? null, assisted = assistId ?? finding.assistTaskId ?? null
   async function run(action: 'handle' | 'assist' | 'dismiss' | 'mute') {
@@ -33,10 +33,10 @@ export function FindingCard({ token, finding, onOpenTask }: { token: string; fin
       {actions.includes('assist') && <button type="button" disabled={busy} onClick={() => void run('assist')}>帮我想办法</button>}
       {actions.includes('dismiss') && <button type="button" disabled={busy} onClick={() => void run('dismiss')}>忽略</button>}
       {actions.includes('mute') && <button type="button" disabled={busy} onClick={() => void run('mute')}>这类别再提醒</button>}
-      {handled !== null && <button type="button" className="text-button" onClick={() => onOpenTask(handled, 'chief')}>已派出任务 #{handled}</button>}
-      {assisted !== null && <button type="button" className="text-button" onClick={() => onOpenTask(assisted, 'chief')}>查看分析 · 任务 #{assisted}</button>}
+      {handled !== null && <button type="button" className="text-button" onClick={() => onOpenTask(handled, 'chief')}>{compact ? '查看已派出的任务' : `已派出任务 #${handled}`}</button>}
+      {assisted !== null && <button type="button" className="text-button" onClick={() => onOpenTask(assisted, 'chief')}>{compact ? '查看分析任务' : `查看分析 · 任务 #${assisted}`}</button>}
     </>}>
-    {finding.lines?.length ? <ul className="small system-card-lines">{finding.lines.map((line, i) => <li key={i}>{line}</li>)}</ul> : null}
+    {finding.lines?.length ? compact ? <details className="inbox-detail"><summary>诊断</summary><ul className="small system-card-lines">{finding.lines.map((line, i) => <li key={i}>{line}</li>)}</ul></details> : <ul className="small system-card-lines">{finding.lines.map((line, i) => <li key={i}>{line}</li>)}</ul> : null}
   </SystemCard>
 }
 
