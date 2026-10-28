@@ -6,19 +6,19 @@ import { join } from 'node:path'
 import { openTaskStore } from './fixtures/authorized-task-store.mjs'
 import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { listBots } from './bots.mjs'
-import { addRule, decide, listRules, pickRule, PolicyRules, setAutomationPause, unattended, validateRule } from './policy.mjs'
+import { addRule, decide, listRules, openGroup, pickRule, PolicyRules, setAutomationPause, unattended, validateRule } from './policy.mjs'
 
 const fakeTx = () => { const docs = new Map(); return { async doc(token) { const key = token.definition.kind; if (!docs.has(key)) docs.set(key, token.definition.initial()); return docs.get(key) } } }
 const call = (action, extra = {}) => ({ botId: 'calendar', tool: 'workspace.prepare_change', action, sourceId: 'local', type: 'Todo', ...extra })
 
-test('S3 only deletion asks by default; reads bypass rules and unknown tools are denied', async () => {
+test('T01 groups default on: every write runs directly, deletion included; reads bypass rules and unknown tools are denied', async () => {
   const tx = fakeTx()
   assert.equal((await decide(tx, call('create'))).effect, 'allow')
   assert.equal((await decide(tx, call('update'))).effect, 'allow')
   const deletion = await decide(tx, call('delete'))
-  assert.deepEqual([deletion.effect, deletion.reason, deletion.allowAlways, deletion.expiresInMs], ['ask', 'delete-default', true, 300000])
-  assert.equal((await decide(tx, { botId: 'calendar', tool: 'calendar_feishu_delete_event' })).effect, 'ask')
-  assert.equal((await decide(tx, { botId: 'chief', tool: 'bot_manage', action: 'deactivate' })).effect, 'ask')
+  assert.deepEqual([deletion.effect, deletion.reason, deletion.allowAlways, deletion.expiresInMs], ['allow', 'write-default', false, undefined])
+  assert.equal((await decide(tx, { botId: 'calendar', tool: 'calendar_feishu_delete_event' })).effect, 'allow')
+  assert.equal((await decide(tx, { botId: 'chief', tool: 'bot_manage', action: 'deactivate' })).effect, 'allow')
   for (const tool of ['calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_reschedule_event', 'routine_propose', 'workspace.prepare_schedule'])
     assert.equal((await decide(tx, { botId: 'calendar', tool })).effect, 'allow', tool)
   await assert.rejects(addRule(tx, { botId: 'calendar', match: { tool: 'workspace.get' }, effect: 'deny' }), { code: 'POLICY_RULE_INVALID' })
@@ -69,22 +69,37 @@ async function settled(s, id) { for (let i = 0; i < 800; i++) { const t = await 
 async function configured(s) { const { bot } = await s.getBotConfiguration('calendar'); await s.updateBotConfiguration('calendar', { requestId: 'policy-assign-' + ++seq, expectedVersion: bot.configRef.version, description: bot.description, tools: WORKSPACE_TOOLS, resources: ['workspace:local'] }) }
 async function run(s, script, id, args) { script.push(turn('workspace.prepare_change', args)); await s.send(id, '请处理'); return (await settled(s, id)).messages.filter(m => m.toolName === 'workspace.prepare_change').at(-1).result.data }
 
-test('S3 deleting locally asks; always on the card makes the next delete direct', () => fixture(async (s, script) => {
+test('T01 with the todo group off a local delete asks; always on the card turns the group on', () => fixture(async (s, script) => {
   await configured(s)
   const { taskId } = await s.create({ botId: 'calendar' })
   const create = requestId => ({ sourceId: 'local', requestId, action: 'create', change: { type: 'Todo', data: { title: requestId } } })
   const del = (requestId, made) => ({ sourceId: 'local', requestId, action: 'delete', change: { type: 'Todo', id: made.receipt.target.id, expectedVersion: made.receipt.version } })
   const first = await run(s, script, taskId, create('s3-first'))
   assert.equal(first.state, 'succeeded')
+  await s.switchGroup('calendar', { groupId: 'todos', mode: 'ask', requestId: 'policy-todos-off' })
   const pending = await run(s, script, taskId, del('s3-delete-first', first))
   assert.deepEqual([pending.state, pending.confirmation.allowAlways], ['awaiting_confirmation', true])
   await s.workspaceAgent.confirmLocal({ sourceId: 'local', requestId: pending.requestId, payloadHash: pending.payloadHash, confirmed: true, always: true })
+  assert.equal((await s.getBotConfiguration('calendar')).toolGroups.find(g => g.id === 'todos').mode, 'allow')
   const second = await run(s, script, taskId, create('s3-second'))
   const direct = await run(s, script, taskId, del('s3-delete-second', second))
   assert.equal(direct.state, 'succeeded')
   assert.equal((await s.inbox()).items.some(i => i.kind === 'workspace-proposal' && i.requestId === 's3-delete-second'), false)
-  assert.ok((await s.rules.list()).some(r => r.match.action === 'delete' && r.effect === 'allow'))
+  assert.ok(!(await s.rules.list()).some(r => r.botId === 'calendar' && r.match.tool === 'workspace.prepare_change'))
 }))
+
+test('T01 openGroup clears only that group\'s rules for that Bot', async () => {
+  const tx = fakeTx()
+  await addRule(tx, { botId: 'calendar', match: { tool: 'workspace.prepare_change', action: 'delete' }, effect: 'ask' })
+  await addRule(tx, { botId: 'calendar', match: { tool: 'routine_propose' }, effect: 'ask' })
+  await addRule(tx, { botId: 'calendar', match: { tool: 'calendar_feishu_delete_event' }, effect: 'ask' })
+  await addRule(tx, { botId: 'todo', match: { tool: 'workspace.prepare_change' }, effect: 'ask' })
+  assert.equal((await openGroup(tx, 'calendar', 'workspace.prepare_change')).length, 2)
+  assert.equal((await decide(tx, call('delete'))).effect, 'allow')
+  assert.equal((await decide(tx, { botId: 'calendar', tool: 'routine_propose' })).effect, 'allow')
+  assert.equal((await decide(tx, { botId: 'calendar', tool: 'calendar_feishu_delete_event' })).effect, 'ask')
+  assert.equal((await decide(tx, call('delete', { botId: 'todo' }))).effect, 'ask')
+})
 
 test('S3 Chief configures another Bot immediately', () => fixture(async (s, script) => {
   const target = s.bots().find(b => b.id === 'todo')

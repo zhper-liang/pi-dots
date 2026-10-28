@@ -1,4 +1,3 @@
-import { assertGroupTask, assertGroupMessage } from './groups.mjs'
 import { assertNotCancelled } from './cancellation.mjs'
 import { defineDoc } from '@earendil-works/pi-durable'
 import { TaskInputError, currentTaskState, currentTaskStateSources } from './task-config.mjs'
@@ -41,6 +40,21 @@ export function steeringApi({ harness, context, TaskCard, ChatInput, ChatQueue, 
       const convert = keys.length === 1 && keys[0] === 'messageId' && Number.isSafeInteger(input.messageId) && input.messageId > 0
       const direct = keys.length === 1 && keys[0] === 'message' && typeof input.message === 'string' && input.message.trim() && input.message.length <= 4000
       if (!convert && !direct) throw new TaskInputError(400, 'INVALID_STEER', '仅提供 message（1–4000字符）或待排队消息的 messageId。')
+      if (direct) {
+        const { mentionNames, groupMembers, assertGroupTask } = await import('./groups.mjs')
+        const names = mentionNames(input.message)
+        if (names.length) {
+          const scope = await harness.commit(async (tx) => {
+            const card = await tx.doc(TaskCard, id)
+            const group = card.kind === 'group' ? await assertGroupTask(tx, card) : null
+            return { group: !!group, members: group ? await groupMembers(tx, group) : [] }
+          }, context)
+          const group = scope.group, members = scope.members
+          const known = new Set(members.map((member) => member.name.normalize('NFKC').trim()))
+          const unknown = names.find((name) => !known.has(name.normalize('NFKC').trim()))
+          if (unknown !== undefined || !group) throw new TaskInputError(400, 'GROUP_MENTION_UNKNOWN', group ? `群里没有叫「${unknown}」的 Bot；请从成员列表选择。` : '只有群聊可以用 @ 指定 Bot。')
+        }
+      }
       const result = await harness.commit(async (tx) => {
         const record = await tx.task(id)
         if (!record || record.kind !== taskKind) throw new TaskInputError(404, 'TASK_NOT_FOUND', '会话不存在。')
@@ -55,8 +69,8 @@ export function steeringApi({ harness, context, TaskCard, ChatInput, ChatQueue, 
         const targetInputId = slot.entryId ?? (record.state.checkpoint?.lastOutcome === 'limited' ? record.state.checkpoint.lastInputId : null)
         if (!targetInputId) throw new TaskInputError(409, 'STEER_UNAVAILABLE', '当前没有执行中或受限等待的输入，请使用普通发送。')
         const card = await tx.doc(TaskCard, id)
-        await assertGroupTask(tx, card)
-        if (direct) assertGroupMessage(card, input.message)
+        await (await import('./groups.mjs')).assertGroupTask(tx, card)
+
         const queue = await tx.doc(ChatQueue, id)
         let entry
         if (convert) {

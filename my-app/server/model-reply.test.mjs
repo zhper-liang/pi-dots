@@ -91,6 +91,19 @@ test('Pi sends exact fixed model and explicit disabled thinking, only header con
   assert.equal(Object.hasOwn(result.execution, 'cost'), false)
 })
 
+test('low/high thinking sends provider reasoning_effort and stays off unless requested', async () => {
+  const bodies = []
+  const reply = createModelReply(config, { fetch: async (_url, init) => { bodies.push(JSON.parse(init.body)); return sse() } })
+  for (const level of ['low', 'high']) {
+    await reply('本轮消息', { parameters: { ...parameters, thinkingLevel: level } })
+    assert.equal(bodies.at(-1).reasoning_effort, level)
+    assert.deepEqual(bodies.at(-1).thinking, { type: 'enabled' })
+  }
+  await reply('本轮消息', { parameters })
+  assert.equal(Object.hasOwn(bodies.at(-1), 'reasoning_effort'), false)
+  assert.deepEqual(bodies.at(-1).thinking, { type: 'disabled' })
+})
+
 for (const [status, code] of [[401, 'MODEL_AUTH_FAILED'], [403, 'MODEL_AUTH_FAILED'], [408, 'MODEL_TIMEOUT'],
   [429, 'MODEL_RATE_LIMITED'], [503, 'MODEL_UNAVAILABLE'], [504, 'MODEL_TIMEOUT'], [400, 'MODEL_REJECTED']]) {
   test(`HTTP ${status} is visible, redacted and never retried automatically`, async () => {
@@ -133,7 +146,7 @@ test('network faults, invalid SSE, empty output and incomplete finish do not fab
 test('missing credentials or invalid parameters fail closed instead of using test/model fallback', async () => {
   let calls = 0
   const reply = createModelReply(config, { fetch: async () => { calls++; return sse() } })
-  for (const p of [{ ...parameters, thinkingLevel: 'high' }, { ...parameters, requestTimeoutMs: 0 },
+  for (const p of [{ ...parameters, thinkingLevel: 'max' }, { ...parameters, requestTimeoutMs: 0 },
     { ...parameters, model: { ...parameters.model, id: '../bad?model' } }]) {
     await assert.rejects(reply('input', { parameters: p }), (error) => error.code === 'MODEL_CONFIG_UNAVAILABLE')
   }

@@ -13,11 +13,12 @@ import TaskTimeline from './TaskTimeline'
 import { openApproval, openBlocker } from './system-cards.mjs'
 import InboxPage from './InboxPage'
 import { AutoAppliedCard } from './AutomationControls'
-import { MirrorCard, BotSessions, type MirrorMessage } from './MainSession'
+import { MirrorCard, type MirrorMessage } from './MainSession'
+import ShellSidebar, { type SidebarBot, type SidebarSession } from './ShellSidebar'
+import NewSession from './NewSession'
+import { lastActivity } from './session-list.mjs'
 import { FindingCard } from './Findings'
-import BotAvatar from './BotAvatar'
-import { loadLook } from './botLook'
-import type { WorkspaceView } from './workspace-navigation.mjs'
+import type { ItemTab, WorkspaceView } from './workspace-navigation.mjs'
 import TaskConfigurationMigration from './TaskConfigurationMigration'
 import { taskPath } from './taskPath'
 import WaitingRecoveryNotice, { type WaitingSnapshot } from './WaitingRecoveryNotice'
@@ -36,7 +37,7 @@ import { taskStatus } from './taskStatus'
 
 type ConfigRef = { botId: string; version: string }
 type Bot = { status?: 'active' | 'inactive'; deactivatedAt?: string; id: string; name: string; description: string; configRef: ConfigRef }
-type ChatMessage = SkillMessage & { afterControlStop?: boolean; afterCancellation?: boolean; purpose?: string; intermediate?: boolean; targetInputId?: number; appliedAt?: string; deliveryStatus?: 'steer-pending' | 'steer-applied' | 'queued' | 'processing' | 'blocked' | 'waiting' | 'completed' | 'failed' | 'received' | 'cancelled'; queuePosition?: number; id: number; role: 'user' | 'assistant' | 'error' | 'tool' | 'system'; systemKind?: string; requestId?: string; summary?: string; undone?: boolean; findingId?: string; detector?: string; lines?: string[]; findingState?: string; handledTaskId?: number | null; assist?: boolean; assistTaskId?: number | null; callId?: string; toolName?: string; turnId?: number; inReplyTo?: number; arguments?: Record<string, unknown>; result?: { ok: boolean; data?: { simulated?: boolean }; error?: { code: string; message: string } }; assistant?: { content: { type: string; id?: string; name?: string; arguments?: Record<string, unknown> }[] }; content: string; createdAt: string; mode?: string; errorCode?: string; execution?: { provider: string; api: string; model: string; thinkingLevel: string; thinking: { type: string }; responseModel?: string; timeoutMs: number } }
+type ChatMessage = SkillMessage & { afterControlStop?: boolean; afterCancellation?: boolean; purpose?: string; intermediate?: boolean; targetInputId?: number; appliedAt?: string; botId?: string; botName?: string; childTaskId?: number; deliveryStatus?: 'steer-pending' | 'steer-applied' | 'queued' | 'processing' | 'blocked' | 'waiting' | 'completed' | 'failed' | 'received' | 'cancelled'; queuePosition?: number; id: number; role: 'user' | 'assistant' | 'error' | 'tool' | 'system'; systemKind?: string; requestId?: string; summary?: string; undone?: boolean; findingId?: string; detector?: string; lines?: string[]; findingState?: string; handledTaskId?: number | null; assist?: boolean; assistTaskId?: number | null; callId?: string; toolName?: string; turnId?: number; inReplyTo?: number; arguments?: Record<string, unknown>; result?: { ok: boolean; data?: { simulated?: boolean }; error?: { code: string; message: string } }; assistant?: { content: { type: string; id?: string; name?: string; arguments?: Record<string, unknown> }[] }; content: string; createdAt: string; mode?: string; errorCode?: string; execution?: { provider: string; api: string; model: string; thinkingLevel: string; thinking: { type: string }; responseModel?: string; timeoutMs: number } }
 type TaskState = { goal: string; completionCriteria: string[]; constraints: string[] }
 type MessageControl = { activeInputId: number | null; waitingInputId: number | null; queuedInputIds: number[]; pendingSteers: { entryId: number; targetInputId: number }[]; appliedSteerIds: number[]; cancellationEntryId: number | null }
 type Task = {
@@ -68,6 +69,7 @@ type Task = {
   parameterSources: Record<string, { type: string; configRef: ConfigRef }>
   titleSource: string; runtime: { disposition?: string; status: string; outcome?: { status: string }; checkpoint: { phase: string; lastOutcome?: string; waitingReason?: string } | null }
 }
+const thinkingLevelOf = (parameters: Record<string, unknown>) => parameters.thinkingLevel === 'high' ? 'high' : 'low'
 const managedChild = (task: Task) => task.collaborations?.some(r => r.childTaskId === task.taskId && r.reviewRequired) ?? false
 const taskInactive = (task: Task) => task.botLifecycle === 'inactive'
 const taskCancelled = (task: Task) => Boolean(task.cancellation) || task.runtime.outcome?.status === 'aborted'
@@ -77,10 +79,9 @@ function savedToken() { try { return sessionStorage.getItem(tokenKey) ?? '' } ca
 function hashTask() { const id = new URLSearchParams(location.hash.slice(1)).get('task'); return id && /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)) ? Number(id) : null }
 function hashBot() { return new URLSearchParams(location.hash.slice(1)).get('bot') }
 function hashNewBot() { return new URLSearchParams(location.hash.slice(1)).has('new-bot') }
-const opensChat = () => hashTask() !== null || hashBot() !== null || hashNewBot()
+function hashNewSession() { return new URLSearchParams(location.hash.slice(1)).has('new') }
+const opensChat = () => hashTask() !== null || hashBot() !== null || hashNewBot() || hashNewSession()
 // Archive is a persisted server flag (POST …/archive): it only hides, never cancels or deletes.
-type TaskGroup = 'active' | 'confirm' | 'done' | 'archived'
-const groupLabels: Record<TaskGroup, string> = { active: '进行中', confirm: '等你确认', done: '已完成', archived: '已归档' }
 function confirmReason(task: Task): string | null {
   if (taskCancelled(task) || taskInactive(task)) return null
   if (task.waiting?.kind === 'action-outcome') return '结果待核实'
@@ -89,11 +90,15 @@ function confirmReason(task: Task): string | null {
   if (task.waiting?.kind === 'limits' || task.runtime.checkpoint?.lastOutcome === 'limited') return '额度受限'
   return null
 }
-function taskGroup(task: Task, archived: number[]): TaskGroup {
-  if (archived.includes(task.taskId)) return 'archived'
-  if (confirmReason(task)) return 'confirm'
-  if (taskCancelled(task) || taskInactive(task) || task.runtime.status === 'terminal' || task.runtime.status === 'completed') return 'done'
-  return 'active'
+// One line under a sidebar row: why it waits, or what it is doing now.
+function sessionNote(task: Task): string {
+  if (taskInactive(task)) return 'Bot 已停用'
+  if (taskCancelled(task)) return '已取消'
+  const reason = confirmReason(task)
+  if (reason) return reason
+  if (task.activeInputId !== null) return '执行中'
+  if ((task.messageControl?.queuedInputIds.length ?? 0) > 0) return '有排队消息'
+  return ''
 }
 class ApiError extends Error {
   status: number
@@ -183,12 +188,12 @@ function App() {
   const [selectedId, setSelectedId] = useState<number | null>(hashTask)
   const [loadedDetail, setDetail] = useState<Task | null>(null)
   const [botId, setBotId] = useState(() => hashBot() ?? 'chief')
-  const [view, setView] = useState<WorkspaceView>(() => opensChat() ? 'chats' : 'today')
+  const [view, setView] = useState<WorkspaceView>(() => opensChat() ? 'chats' : 'home')
+  const [itemTab, setItemTab] = useState<ItemTab>('today')
   const [newBot, setNewBot] = useState(hashNewBot)
-  const [query, setQuery] = useState('')
+  const [newSession, setNewSession] = useState(hashNewSession)
   const [notice, setNotice] = useState('')
   const [inboxCount, setInboxCount] = useState<number | null>(null)
-  const [title, setTitle] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(Boolean(token))
   const [detailError, setDetailError] = useState('')
@@ -207,8 +212,8 @@ function App() {
   // "/" menu: the Skill picked for the next message of each Task, and the composer it reads keys from.
   const [pickedSkill, setPickedSkill] = useState<Record<number, { id: string; label: string }>>({})
   const composerRef = useRef<HTMLTextAreaElement>(null)
-  // PLAN §8.4 home (P-13): the "today" view is the day summary above the Chief main session.
-  const home = view === 'today'
+  // Home is the Chief main session (T03); the day summary moved to 事项 → 今天.
+  const home = view === 'home'
   const chiefMain = mainSessions.chief ?? null
   const activeId = home ? chiefMain : selectedId
   const detail = loadedDetail?.taskId === activeId ? loadedDetail : null
@@ -261,32 +266,39 @@ function App() {
     setError(''); setLoading(true); setToken(value); setDraftToken('')
   }
   function selectBot(id: string) {
-    if (id === botId && selectedId === null && !newBot && view === 'chats') return
+    if (id === botId && selectedId === null && !newBot && !newSession && view === 'chats') return
     requestEpoch.current += 1
     window.history.pushState(null, '', `#bot=${encodeURIComponent(id)}`)
-    setNewBot(false); setView('chats'); setPane('chat'); setBotId(id); setSelectedId(null); setDetail(null); setDetailError(''); setError('')
+    setNewBot(false); setNewSession(false); setView('chats'); setPane('chat'); setBotId(id); setSelectedId(null); setDetail(null); setDetailError(''); setError('')
   }
   function selectTask(id: number, owner = botId) {
-    setView('chats'); setNewBot(false); setPane('chat')
+    setView('chats'); setNewBot(false); setNewSession(false); setPane('chat')
     if (id === selectedId && owner === botId) return
     requestEpoch.current += 1
     window.history.pushState(null, '', `#bot=${encodeURIComponent(owner)}&task=${id}`)
     setBotId(owner); setDetail(null); setDetailError(''); setSelectedId(id)
   }
   // Going home clears the Task hash so a reload lands on the home page again.
-  function goView(next: WorkspaceView) {
-    if (next === 'today' && view !== 'today') {
+  function goView(next: WorkspaceView, tab?: ItemTab) {
+    if (next === 'home' && view !== 'home') {
       requestEpoch.current += 1
       if (location.hash) window.history.pushState(null, '', location.pathname + location.search)
-      setSelectedId(null); setDetailError(''); setPane('chat')
+      setSelectedId(null); setNewSession(false); setNewBot(false); setDetailError(''); setPane('chat')
     }
+    if (tab) setItemTab(tab)
     setView(next)
+  }
+  // 新建会话: an empty page that picks a Bot; sending the first message creates the session.
+  function openNewSession() {
+    requestEpoch.current += 1
+    window.history.pushState(null, '', '#new')
+    setNewSession(true); setNewBot(false); setView('chats'); setPane('chat'); setSelectedId(null); setDetail(null); setDetailError('')
   }
   const ownerOf = (task: Task) => task.kind === 'group' ? 'groups' : task.bot.id
   function openNewBot() {
     requestEpoch.current += 1
     window.history.pushState(null, '', '#new-bot')
-    setNewBot(true); setView('chats'); setSelectedId(null); setDetail(null)
+    setNewBot(true); setNewSession(false); setView('chats'); setSelectedId(null); setDetail(null)
   }
   async function toggleArchive(task: Task) {
     try {
@@ -298,7 +310,7 @@ function App() {
   function reload() { setLoading(true); setDetailError(''); setRefresh((value) => value + 1) }
 
   useEffect(() => {
-    const update = () => { requestEpoch.current += 1; setDetail(null); setDetailError(''); setSelectedId(hashTask()); setBotId(hashBot() ?? 'chief'); setNewBot(hashNewBot()); setPane('chat'); if (opensChat()) setView('chats'); else setView(current => current === 'chats' ? 'today' : current); setRefresh(value => value + 1) }
+    const update = () => { requestEpoch.current += 1; setDetail(null); setDetailError(''); setSelectedId(hashTask()); setBotId(hashBot() ?? 'chief'); setNewBot(hashNewBot()); setNewSession(hashNewSession()); setPane('chat'); if (opensChat()) setView('chats'); else setView(current => current === 'chats' ? 'home' : current); setRefresh(value => value + 1) }
     window.addEventListener('hashchange', update)
     return () => window.removeEventListener('hashchange', update)
   }, [])
@@ -340,6 +352,17 @@ function App() {
     return () => { controller.abort(); clearTimeout(timer) }
   }, [token, botId, activeId, home, refresh])
 
+  const [thinkingPending, setThinkingPending] = useState<number | null>(null)
+  // Per-conversation thinking depth: the main session keeps this for its next inputs.
+  async function setThinking(task: Task, level: string) {
+    if (thinkingPending !== null) return
+    setThinkingPending(task.taskId)
+    try {
+      const next = await api<Task>(taskPath(task, '/parameters'), token, { method: 'PATCH', body: JSON.stringify({ thinkingLevel: level }) })
+      setDetail((current) => current?.taskId === next.taskId ? next : current)
+      setTasks((current) => current.map((item) => item.taskId === next.taskId ? next : item))
+    } catch (err) { report(err) } finally { setThinkingPending(null) }
+  }
   async function send(event: FormEvent, steering = false) {
     event.preventDefault()
     if (!detail || sendingRef.current || stateSavingRef.current) return
@@ -409,16 +432,41 @@ function App() {
     const epoch = requestEpoch.current
     try {
       const { task } = await api<{ task: Task }>(`/api/bots/${encodeURIComponent(forBot)}/tasks`, token, {
-        method: 'POST', body: JSON.stringify({ botId: forBot, ...(title.trim() ? { title: title.trim() } : {}) }),
+        method: 'POST', body: JSON.stringify({ botId: forBot }),
       })
       if (epoch !== requestEpoch.current) return
-      setTitle(''); selectTask(task.taskId, forBot); reload()
+      selectTask(task.taskId, forBot); reload()
     } catch (err) {
       if (epoch !== requestEpoch.current) return
       report(err)
       if (!(err instanceof ApiError)) setError('创建结果未确认。请先刷新会话列表核实，避免重复创建。')
       reload()
     } finally { creatingRef.current = false; setCreating(false) }
+  }
+  // 新建会话: create the session titled by the first message, then send it. If sending fails the
+  // text stays as that session's draft, so nothing typed is lost and nothing is resent silently.
+  async function startSession(forBot: string, text: string) {
+    if (creatingRef.current) return
+    creatingRef.current = true; setCreating(true); setError('')
+    const firstLine = text.trim().split('\n')[0].trim()
+    const title = firstLine.length > 40 ? `${firstLine.slice(0, 40)}…` : firstLine
+    let task: Task
+    try {
+      ({ task } = await api<{ task: Task }>(`/api/bots/${encodeURIComponent(forBot)}/tasks`, token, { method: 'POST', body: JSON.stringify({ botId: forBot, ...(title ? { title } : {}) }) }))
+    } catch (err) {
+      report(err)
+      if (!(err instanceof ApiError)) setError('创建结果未确认。请先刷新会话列表核实，避免重复创建。')
+      creatingRef.current = false; setCreating(false); reload(); return
+    }
+    setDrafts((current) => ({ ...current, [task.taskId]: text }))
+    selectTask(task.taskId, forBot)
+    try {
+      await api(taskPath(task, '/messages'), token, { method: 'POST', body: JSON.stringify({ message: text }) })
+      setDrafts((current) => current[task.taskId] === text ? { ...current, [task.taskId]: '' } : current)
+    } catch (err) {
+      report(err)
+      if (!(err instanceof ApiError)) setError('会话已创建，第一条消息的发送结果未确认。请看会话历史再决定是否重发。')
+    } finally { creatingRef.current = false; setCreating(false); reload() }
   }
 
   // PLAN §8.5 / P-15: "接着聊" opens a new derived Task in this Bot's main session; the run stays as it was.
@@ -460,50 +508,22 @@ function App() {
   const status = detail ? taskStatus(detail, sendingId === detail.taskId) : null
   const archived = tasks.filter(t => t.archived).map(t => t.taskId)
   const confirmations: Confirmation[] = tasks.filter(t => !archived.includes(t.taskId)).flatMap(t => { const reason = confirmReason(t); return reason ? [{ taskId: t.taskId, title: t.title, botName: t.bot.name, reason }] : [] })
-  const chiefBot = bots.find(b => b.id === 'chief')
-  const peers = bots.filter(b => b.id !== 'chief')
   const groupTasks = tasks.filter(t => t.kind === 'group')
-  const needle = query.trim().toLowerCase()
-  const listed = tasks.filter(t => t.kind !== 'group' && (!needle || t.title.toLowerCase().includes(needle) || t.bot.name.toLowerCase().includes(needle)))
-  const taskRow = (task: Task) => <button type="button" key={task.taskId} className={`task-link ${selectedId === task.taskId ? 'selected' : ''}`} onClick={() => selectTask(task.taskId, ownerOf(task))} aria-current={selectedId === task.taskId ? 'page' : undefined}>
-    {task.kind !== 'group' && <BotAvatar name={task.bot.name} look={loadLook(task.bot.id)} size={22} />}
-    <span className="task-link-text"><strong>{task.title}</strong><span>{task.bot.name}{taskInactive(task) ? ' · Bot 已停用' : ''}{taskCancelled(task) ? ' · 已取消' : confirmReason(task) ? ` · ${confirmReason(task)}` : task.activeInputId !== null ? ' · 执行中' : (task.messageControl?.queuedInputIds.length ?? 0) > 0 ? ' · 有排队消息' : ''}</span></span>
-  </button>
-  const chiefNode = <button type="button" className="shell-chief-button" aria-label="Chief：开始新任务" disabled={creating || chiefBot?.status === 'inactive'} onClick={() => void create(undefined, 'chief')}>
-    <BotAvatar name="Chief" look={loadLook('chief')} size={28} /><span className="shell-label"><strong>★ {chiefBot?.name ?? 'Chief'}</strong><small>{creating ? '正在创建…' : '主管 · 开始新任务'}</small></span>
-  </button>
-  const sidebarNode = <>
-    <BotSessions bots={bots} mainSessions={mainSessions} selectedId={selectedId} onOpen={(id, owner) => selectTask(id, owner)} />
-    <section className="shell-section" aria-labelledby="side-tasks">
-      <div className="shell-section-head"><h2 id="side-tasks">任务</h2><button type="button" className="shell-icon-button" aria-label="刷新任务列表" title="刷新" onClick={() => { setError(''); reload() }} disabled={loading} data-stay>↻</button></div>
-      <label htmlFor="task-search" className="sr-only">搜索任务</label>
-      <input id="task-search" type="search" className="shell-search" placeholder="搜索任务" value={query} onChange={e => setQuery(e.target.value)} />
-      {loading && tasks.length === 0 && <p className="shell-list-empty">正在读取…</p>}
-      {!loading && listed.length === 0 && <p className="shell-list-empty">{needle ? '没有匹配的任务' : '还没有任务'}</p>}
-      {(['confirm', 'active', 'done', 'archived'] as TaskGroup[]).map(g => {
-        const items = listed.filter(t => taskGroup(t, archived) === g)
-        if (!items.length) return null
-        const list = <nav aria-label={groupLabels[g]} className="shell-task-list">{items.map(taskRow)}</nav>
-        return g === 'done' || g === 'archived' ? <details key={g} className="shell-group"><summary>{groupLabels[g]} · {items.length}</summary>{list}</details>
-          : <div key={g} className="shell-group"><h3>{groupLabels[g]} · {items.length}</h3>{list}</div>
-      })}
-    </section>
-    <section className="shell-section" aria-labelledby="side-groups">
-      <div className="shell-section-head"><h2 id="side-groups">群聊</h2><button type="button" className="shell-icon-button" aria-label="新建群聊" title="新建群聊" onClick={() => selectBot('groups')}>＋</button></div>
-      <nav aria-label="群聊列表" className="shell-task-list">{groupTasks.filter(t => !archived.includes(t.taskId)).map(taskRow)}</nav>
-    </section>
-    <section className="shell-section" aria-labelledby="side-bots">
-      <div className="shell-section-head"><h2 id="side-bots">Bot 模板</h2><button type="button" className="shell-text-add" aria-label="新建 Bot" onClick={openNewBot}>＋新建</button></div>
-      <nav aria-label="Bot 模板" className="shell-task-list">{peers.map(bot => <button type="button" key={bot.id} className={`task-link ${view === 'chats' && !newBot && selectedId === null && botId === bot.id ? 'selected' : ''}`} aria-current={view === 'chats' && !newBot && selectedId === null && botId === bot.id ? 'page' : undefined} onClick={() => selectBot(bot.id)}>
-        <BotAvatar name={bot.name} look={loadLook(bot.id)} size={22} /><span className="task-link-text"><strong>{bot.name}</strong>{bot.status === 'inactive' && <span>已停用</span>}</span>
-      </button>)}</nav>
-    </section>
-  </>
+  // Sidebar data (T03): sessions are every non-main Task including group chats; Bots open their main session.
+  const sidebarSessions: SidebarSession[] = tasks.filter(t => t.kind !== 'main').map(t => ({ id: t.taskId, owner: ownerOf(t), title: t.title, botId: t.bot.id, botName: t.bot.name,
+    at: lastActivity(t), confirm: confirmReason(t) !== null, archived: Boolean(t.archived), group: t.kind === 'group', note: sessionNote(t) }))
+  const sidebarBots: SidebarBot[] = bots.map(b => ({ id: b.id, name: b.name, inactive: b.status === 'inactive', mainTaskId: mainSessions[b.id] ?? null }))
+  const botPage = view === 'chats' && selectedId === null && !newBot && !newSession ? botId : null
+  // The phone top bar names where you are; on desktop the page itself does.
+  const mobileTitle = home ? (bots.find(b => b.id === 'chief')?.name ?? 'Chief')
+    : view === 'chats' ? (newSession ? '新建会话' : newBot ? '新建 Bot' : selectedId !== null ? (detail?.title ?? '会话') : botId === 'groups' ? '群聊' : (selectedBot?.name ?? 'Bot'))
+    : view === 'items' ? '事项' : view === 'inbox' ? '通知' : '设置'
   async function deactivate(target: Bot) {
     try { const result = await api<{ bot: Bot }>(`/api/bots/${target.id}/deactivate`, token, { method: 'POST', body: JSON.stringify({ confirm: true }) }); setBots(current => current.map(b => b.id === target.id ? result.bot : b)); setRefresh(v => v + 1) } catch (e) { report(e) }
   }
 
-  const settledCount = detail ? (detail.approvals?.items ?? []).filter(i => !openApproval(i, taskCancelled(detail))).length
+  const composerLocked = !detail || Boolean(detail.scheduledWorkflow) || managedChild(detail) || taskCancelled(detail) || taskInactive(detail) || sendingId === detail.taskId
+  const settledCount = detail ?(detail.approvals?.items ?? []).filter(i => !openApproval(i, taskCancelled(detail))).length
     + [...(detail.blockers?.items ?? []), ...(detail.groupId ? [] : detail.blockers?.related ?? [])].filter(i => !openBlocker(i, taskCancelled(detail))).length : 0
   const chatView = !detail ? <div className="shell-placeholder" role="status"><h2 id="detail-title">{detailError ? '无法读取会话' : '正在读取会话…'}</h2>{detailError && <p>{detailError}。请刷新后核对记录。</p>}</div> : <div className={`shell-chat ${detailsOpen ? 'details-open' : ''}`}>
             <header className="shell-chat-header">
@@ -515,7 +535,7 @@ function App() {
               <button type="button" className="shell-icon-button" aria-label="会话详情" aria-expanded={detailsOpen} aria-controls="chat-details" onClick={() => setDetailsOpen(v => !v)}>ⓘ</button>
             </header>
             <div className="shell-chat-column">
-              {detail.group && <p className="shell-note" role="status">群管理员：{detail.bot.name} · 成员：{detail.group.members.map(b => `${b.name}${b.status === 'inactive' ? '（已停用）' : ''}`).join('、')}。可选择单个 @ 目标，管理员统一收取及验收。</p>}
+              {detail.group && <p className="shell-note" role="status">群管理员：{detail.bot.name} · 成员：{detail.group.members.map(b => `${b.name}${b.status === 'inactive' ? '（已停用）' : ''}`).join('、')}。在输入框打 @ 选择要回复的 Bot；没 @ 时由管理员处理。被 @ 的 Bot 会各自回复。</p>}
               {/* Approvals, blockers and unknown outcomes stay in the message flow as prominent cards. */}
               <div className="shell-cards">
                 <InboxPage key={`proposals:${detail.taskId}:${token}`} proposalTaskId={detail.taskId} token={token} active={true} onCount={() => {}} onOpenTask={selectTask} />
@@ -541,7 +561,7 @@ function App() {
                     : item.systemKind === 'skill' ? <SkillNote item={item} />
                     : <p className={item.systemKind === 'context-floor' ? 'shell-muted small' : undefined}>{item.content}</p>}
                 </li> : <li id={`message-${item.id}`} key={item.id} className={`message message-${item.role}`}>
-                  <div className="message-heading">{item.role === 'user' && item.skillId && <span className="skill-tag">Skill · {detail.messages.find(m => m.systemKind === 'skill' && m.inReplyTo === item.id)?.skillName ?? item.skillId}</span>}<strong>{item.role === 'user' ? '你' : item.role === 'error' ? '执行失败' : item.role === 'tool' ? `工具回执 · ${item.toolName === 'calendar_read_event' ? '模拟日程详情' : item.toolName === 'calendar_reschedule_event' ? '模拟改期审批登记' : item.toolName === 'calendar_read_schedule' ? '模拟日程列表' : item.toolName}` : item.assistant ? '请求调用工具' : `${detail.bot.name}${item.mode === 'model' ? '' : ' · 测试回复'}`}</strong><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString('zh-CN')}</time>{item.intermediate && <span className="delivery-status">插入前已返回 · 保留真实结果</span>}{item.role === 'user' && item.deliveryStatus && <span className={`delivery-status delivery-${item.deliveryStatus}`} data-testid={`delivery-${item.id}`}>{taskCancelled(detail) && item.deliveryStatus === 'steer-applied' ? '已生效 · 取消前记录' : taskCancelled(detail) && item.deliveryStatus === 'steer-pending' ? '未生效插入 · 已取消，记录保留' : taskCancelled(detail) && item.deliveryStatus === 'queued' ? '未处理 · 已取消，不会执行' : deliveryLabels[item.deliveryStatus]}{item.deliveryStatus === 'queued' ? ` · 第 ${item.queuePosition} 条` : ''}</span>}</div>
+                  <div className="message-heading">{item.role === 'user' && item.skillId && <span className="skill-tag">Skill · {detail.messages.find(m => m.systemKind === 'skill' && m.inReplyTo === item.id)?.skillName ?? item.skillId}</span>}<strong>{item.systemKind === 'group-reply' ? `${item.botName ?? 'Bot'} 的回复` : item.role === 'user' ? '你' : item.role === 'error' ? '执行失败' : item.role === 'tool' ? `工具回执 · ${item.toolName === 'calendar_read_event' ? '模拟日程详情' : item.toolName === 'calendar_reschedule_event' ? '模拟改期审批登记' : item.toolName === 'calendar_read_schedule' ? '模拟日程列表' : item.toolName}` : item.assistant ? '请求调用工具' : `${detail.bot.name}${item.mode === 'model' ? '' : ' · 测试回复'}`}</strong><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString('zh-CN')}</time>{item.intermediate && <span className="delivery-status">插入前已返回 · 保留真实结果</span>}{item.role === 'user' && item.deliveryStatus && <span className={`delivery-status delivery-${item.deliveryStatus}`} data-testid={`delivery-${item.id}`}>{taskCancelled(detail) && item.deliveryStatus === 'steer-applied' ? '已生效 · 取消前记录' : taskCancelled(detail) && item.deliveryStatus === 'steer-pending' ? '未生效插入 · 已取消，记录保留' : taskCancelled(detail) && item.deliveryStatus === 'queued' ? '未处理 · 已取消，不会执行' : deliveryLabels[item.deliveryStatus]}{item.deliveryStatus === 'queued' ? ` · 第 ${item.queuePosition} 条` : ''}</span>}</div>
                   {item.assistant ? <div className="tool-calls">{item.content && <p>{item.content}</p>}{item.assistant.content.filter((block) => block.type === 'toolCall').map((call) => <details key={call.id}><summary>工具调用 · {call.name}</summary><p className="muted small">调用 ID：{call.id} · 工具回合：{item.id} · 用户消息：{item.inReplyTo}</p><pre>{JSON.stringify(call.arguments, null, 2)}</pre></details>)}</div> : item.role === 'tool' ? <div className="tool-receipt"><p>{item.result?.ok ? item.toolName === 'calendar_reschedule_event' ? '改期意图已登记 · 实际执行状态请看对应审批卡片' : item.toolName === 'report_blocker' ? '问题已登记 · 等待当前处理人回答' : '执行成功 · 按实际工具回执记录' : `未成功 · ${item.result?.error?.code}`}</p>{item.result?.ok && item.toolName === 'bot_manage' && (() => {
                     const data = item.result.data as { bot?: { id: string; name: string }; operationId?: string; action?: string; previous?: { version: string }; next?: { version: string } } | undefined
                     return data?.bot ? <div className="management-result"><strong>Chief 管理已落盘 · {data.action}</strong><p>操作 {data.operationId} · {data.previous?.version ?? '新建'} → {data.next?.version}</p><button type="button" onClick={() => selectBot(data.bot!.id)}>进入 {data.bot.name} · 查看历史与管理记录</button></div> : null
@@ -569,14 +589,26 @@ function App() {
                   setRefresh((value) => value + 1)
                 }} /></fieldset>
               <form className="message-form shell-composer" onSubmit={(event) => void send(event)}>
-                {detail.group && <div className="shell-composer-target"><label htmlFor="group-target">@</label><select id="group-target" value={targets[detail.taskId] ?? ''} onChange={e => setTargets(v => ({...v,[detail.taskId]:e.target.value}))}><option value="">管理员直接处理</option>{detail.group.members.map(b => <option key={b.id} value={b.id} disabled={b.status === 'inactive'}>{b.name}{b.id === detail.bot.id ? '（管理员）' : ''}{b.status === 'inactive' ? '（已停用）' : ''}</option>)}</select></div>}
-                <label htmlFor="message" className="sr-only">发送消息</label>
+                {detail.group && <div className="pd-composer-chips" role="group" aria-label="选择要回复的 Bot">
+                  <span className="pd-composer-hint">@ 谁</span>
+                  {detail.group.members.map(b => <label key={b.id} className={`pd-chip${(targets[detail.taskId] ?? '') === b.id ? ' is-picked' : ''}`}><input type="checkbox" checked={(targets[detail.taskId] ?? '') === b.id} disabled={b.status === 'inactive'} onChange={(e) => setTargets(v => ({ ...v, [detail.taskId]: e.target.checked ? b.id : '' }))} />{b.name}{b.id === detail.bot.id ? '（管理员）' : ''}{b.status === 'inactive' ? '（已停用）' : ''}</label>)}
+                  <span className="pd-composer-hint">{targets[detail.taskId] ? '' : '不选由管理员处理；正文里写 @名字 也行'}</span>
+                </div>}
                 {pickedSkill[detail.taskId] && <div className="skill-chip" role="status">这条消息按 Skill「{pickedSkill[detail.taskId].label}」处理<button type="button" className="shell-icon-button" aria-label="不用这个 Skill" onClick={() => setPickedSkill(current => { const next = { ...current }; delete next[detail.taskId]; return next })}>×</button></div>}
-                <CommandMenu task={detail} token={token} draft={drafts[detail.taskId] ?? ''} inputRef={composerRef} onPick={runCommand} />
-                <textarea ref={composerRef} role="combobox" aria-autocomplete="list" aria-haspopup="listbox" id="message" rows={2} maxLength={4000} value={drafts[detail.taskId] ?? ''} onChange={(event) => setDrafts((current) => ({ ...current, [detail.taskId]: event.target.value }))} placeholder={`给 ${detail.bot.name} 发消息…（打 / 看命令）`} disabled={Boolean(detail.scheduledWorkflow) || managedChild(detail) || (taskCancelled(detail) || taskInactive(detail)) || sendingId === detail.taskId} />
-                <div className="message-controls"><span className="muted small">{(drafts[detail.taskId] ?? '').length} / 4000</span>
-                  {(detail.activeInputId !== null || detail.runtime.checkpoint?.lastOutcome === 'limited') && <button type="button" className="steer-button" title="插入不撤销已发生动作，也不代表批准" disabled={Boolean(pickedSkill[detail.taskId]) || Boolean(detail.scheduledWorkflow) || managedChild(detail) || sendingId !== null || stateSavingId !== null || Boolean(detailError) || (taskCancelled(detail) || taskInactive(detail)) || (Boolean(detail.blockers?.activeId) || Boolean(detail.approvals?.activeId)) || !['pending', 'running'].includes(detail.runtime.status) || !(drafts[detail.taskId] ?? '').trim()} onClick={(event) => void send(event, true)}>插入当前执行</button>}
-                  <button className="primary" disabled={Boolean(detail.scheduledWorkflow) || managedChild(detail) || sendingId !== null || stateSavingId !== null || Boolean(detailError) || (taskCancelled(detail) || taskInactive(detail)) || !['pending', 'running'].includes(detail.runtime.status) || !(drafts[detail.taskId] ?? '').trim()}>{managedChild(detail) ? '由绑定主管验收 / 返工' : taskInactive(detail) ? 'Bot 已停用' : taskCancelled(detail) ? 'Task 已取消' : detail.activeInputId !== null || detail.runtime.checkpoint?.lastOutcome === 'limited' ? '加入队列' : '发送'}</button></div>
+                <div className="pd-composer-box">
+                  <CommandMenu task={detail} token={token} draft={drafts[detail.taskId] ?? ''} inputRef={composerRef} onPick={runCommand} />
+                  <label htmlFor="message" className="sr-only">发送消息</label>
+                  <textarea ref={composerRef} role="combobox" aria-autocomplete="list" aria-haspopup="listbox" id="message" rows={2} maxLength={4000} value={drafts[detail.taskId] ?? ''} onChange={(event) => setDrafts((current) => ({ ...current, [detail.taskId]: event.target.value }))} placeholder={`给 ${detail.bot.name} 发消息…（打 / 看命令）`} disabled={composerLocked} />
+                  <div className="pd-composer-bar">
+                    <button type="button" className="pd-tool" title="命令与 Skill" aria-label="打开命令与 Skill 菜单" disabled={composerLocked || Boolean(drafts[detail.taskId])} onClick={() => { setDrafts(current => ({ ...current, [detail.taskId]: '/' })); composerRef.current?.focus() }}>/</button>
+                    <span className="pd-tool pd-tool-static" title="当前模型">{detail.parameters.mode === 'model' ? ((detail.parameters.model as { id?: string } | undefined)?.id ?? '模型') : '测试模式'}</span>
+                    {!detail.group && detail.kind === 'main' && detail.parameters.mode === 'model' && <label className="pd-tool" title="思考深度：从你的下一条消息开始生效；已开始的独立任务保持原设置"><span>思考</span>
+                      <select id="thinking-level" aria-label="思考深度" value={thinkingLevelOf(detail.parameters)} disabled={sendingId === detail.taskId || taskInactive(detail) || taskCancelled(detail) || thinkingPending === detail.taskId} onChange={(e) => void setThinking(detail, e.target.value)}><option value="low">低</option><option value="high">高</option></select></label>}
+                    <span className="pd-composer-hint pd-composer-count">{(drafts[detail.taskId] ?? '').length} / 4000</span>
+                    {(detail.activeInputId !== null || detail.runtime.checkpoint?.lastOutcome === 'limited') && <button type="button" className="steer-button pd-button" title="插入不撤销已发生动作，也不代表批准" disabled={Boolean(pickedSkill[detail.taskId]) || Boolean(detail.scheduledWorkflow) || managedChild(detail) || sendingId !== null || stateSavingId !== null || Boolean(detailError) || (taskCancelled(detail) || taskInactive(detail)) || (Boolean(detail.blockers?.activeId) || Boolean(detail.approvals?.activeId)) || !['pending', 'running'].includes(detail.runtime.status) || !(drafts[detail.taskId] ?? '').trim()} onClick={(event) => void send(event, true)}>插入当前执行</button>}
+                    <button className="primary" disabled={Boolean(detail.scheduledWorkflow) || managedChild(detail) || sendingId !== null || stateSavingId !== null || Boolean(detailError) || (taskCancelled(detail) || taskInactive(detail)) || !['pending', 'running'].includes(detail.runtime.status) || !(drafts[detail.taskId] ?? '').trim()}>{sendingId === detail.taskId ? '正在发送…' : managedChild(detail) ? '由绑定主管验收 / 返工' : taskInactive(detail) ? 'Bot 已停用' : taskCancelled(detail) ? 'Task 已取消' : detail.activeInputId !== null || detail.runtime.checkpoint?.lastOutcome === 'limited' ? '加入队列' : '发送'}</button>
+                  </div>
+                </div>
                 {managedChild(detail) && <p className="muted small steer-help">受管子任务仅由绑定主管发起返工；信息回答、审批及取消仍从各自事项处理。</p>}
               </form>
               <div ref={historyEndRef} />
@@ -656,13 +688,19 @@ function App() {
       ) : (
         <main className="workspace-root">
           {notice && <div role="status" className="shell-alert shell-notice">{notice}<button onClick={() => setNotice('')} aria-label="关闭提示">×</button></div>}
-          <UnifiedWorkspace key={token} token={token} view={view} onView={goView} chief={chiefNode} sidebar={sidebarNode} inboxCount={inboxCount ?? confirmations.length}
+          <UnifiedWorkspace key={token} token={token} view={view} onView={(next) => goView(next)} itemTab={itemTab} onItemTab={setItemTab} title={mobileTitle}
+            sidebar={(shell) => <ShellSidebar {...shell} view={view} newSession={newSession} inboxCount={inboxCount ?? confirmations.length}
+              sessions={sidebarSessions} bots={sidebarBots} selectedId={selectedId} botPage={botPage}
+              onHome={() => goView('home')} onNewSession={openNewSession} onOpenSession={(id, owner) => selectTask(id, owner)}
+              onOpenBot={(bot) => bot.id === 'chief' ? goView('home') : bot.mainTaskId !== null ? selectTask(bot.mainTaskId, bot.id) : selectBot(bot.id)}
+              onBotSettings={selectBot} onNewBot={openNewBot} onNewGroup={() => selectBot('groups')} onView={(next) => goView(next)} />}
             footer={<><span>仅本机 · 本地存储</span> <button type="button" className="text-button" onClick={disconnect}>断开连接</button></>}
-            today={<div className="home"><TodaySummary token={token} active={home} confirmations={confirmations} onOpenTask={id => { const t = tasks.find(x => x.taskId === id); selectTask(id, t ? ownerOf(t) : botId) }}
-              onOpenInbox={() => goView('inbox')} onOpenCalendar={() => goView('calendar')} onOpenTodos={() => goView('todos')} />
-              {chiefMain === null ? <div className="shell-placeholder" role="status"><h2>{loading ? '正在读取…' : '找不到 Chief 主会话'}</h2></div> : home ? chatView : null}</div>}
+            home={chiefMain === null ? <div className="shell-placeholder" role="status"><h2>{loading ? '正在读取…' : '找不到 Chief 主会话'}</h2></div> : home ? chatView : null}
+            today={<TodaySummary token={token} active={view === 'items' && itemTab === 'today'} confirmations={confirmations} onOpenTask={id => { const t = tasks.find(x => x.taskId === id); selectTask(id, t ? ownerOf(t) : botId) }}
+              onOpenInbox={() => goView('inbox')} onOpenCalendar={() => goView('items', 'calendar')} onOpenTodos={() => goView('items', 'todos')} />}
             inboxSummary={<InboxPage token={token} active={view === 'inbox'} onCount={setInboxCount} onOpenTask={(id, owner) => { const t = tasks.find(x => x.taskId === id); selectTask(id, t ? ownerOf(t) : owner) }} />}>
-          {selectedId === null ? (newBot ? <BotCreation key={`new-bot:${token}`} token={token} onCancel={() => goView('today')} onCreated={(bot, mainTaskId) => {
+          {selectedId === null ? (newSession ? <NewSession key={`new-session:${token}`} bots={bots} busy={creating} onStart={(id, text) => void startSession(id, text)} onGroup={() => selectBot('groups')} />
+            : newBot ? <BotCreation key={`new-bot:${token}`} token={token} onCancel={() => goView('home')} onCreated={(bot, mainTaskId) => {
               setBots((current) => current.some((item) => item.id === bot.id) ? current : [...current, bot])
               // PLAN §8.6 (T6-04): go straight into the new Bot's main session.
               if (mainTaskId !== null) { setMainSessions(current => ({ ...current, [bot.id]: mainTaskId })); selectTask(mainTaskId, bot.id) } else selectBot(bot.id)

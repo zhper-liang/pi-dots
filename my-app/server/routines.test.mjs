@@ -47,7 +47,7 @@ async function runOnce(s, setTime, tick, rule = { type: 'at', at: new Date(start
   return { p, id: row.taskId, task: await settled(s, row.taskId) }
 }
 
-test('S3 routine proposals run directly; an ask rule restores the approval card', () => fixture(async ({ s, state }) => {
+test('S3 routine proposals run directly; an ask rule restores the approval card and always turns the group on', () => fixture(async ({ s, state }) => {
   const mainId = (await s.mainSessions()).calendar
   state.main.push(turn(['routine_propose', proposal()]), text('已设置'))
   await s.send(mainId, '每天早上八点帮我整理待办')
@@ -66,7 +66,7 @@ test('S3 routine proposals run directly; an ask rule restores the approval card'
   await s.decideApproval(mainId, card.id, { decision: 'approved', always: true })
   await settled(s, mainId)
   assert.equal((await s.workspaceSchedules.list({})).items.length, 2)
-  assert.ok((await s.rules.list()).some(r => r.match.tool === 'routine_propose' && r.effect === 'allow'))
+  assert.ok(!(await s.rules.list()).some(r => r.botId === 'calendar' && r.match.tool === 'routine_propose'))
 }))
 
 test('T5-02 test run is read-only, never delivered, marked as a test, and allowed while paused', () => fixture(async ({ s, state, tick }) => {
@@ -162,7 +162,9 @@ test('T5-03b D-14: a schedule-change routine is not re-triggered by its own chan
 }))
 
 // Expiry checks use the store's wall clock; Date is mocked before the store opens so it can be advanced.
-test('S3 unattended routine skips deletion and records why; six ordinary writes still run', () => fixture(async ({ s, state, setTime, tick }) => {
+test('S3 unattended routine skips a step that asks and records why; six ordinary writes still run', () => fixture(async ({ s, state, setTime, tick }) => {
+  // Deletion no longer asks by default; an ask rule stands in for a write that needs the user.
+  await s.rules.add({ botId: 'calendar', match: { tool: 'workspace.prepare_change', action: 'delete' }, effect: 'ask' })
   await addTodo(s, 'old', { title: '旧待办' })
   const old = (await todos(s))[0]
   const creates = Array.from({ length: 6 }, (_, i) => ['workspace.prepare_change', { sourceId: 'local', requestId: 'batch-' + i, action: 'create', change: { type: 'Todo', data: { title: '批量' + i } } }])

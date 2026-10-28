@@ -13,6 +13,7 @@
 | 计划 | 更新 | 状态 |
 |---|---|---|
 | [权限简化](active/permission-simplify/README.md) | 2026-10-24 | S1–S5 已实现并自测通过，等待用户验收 |
+| [Bot 工作区与 Hermes 风格统一](active-hermes-workspace-deepseek.md) | 2026-10-28 | 用户已授权；工具组开关、`/Skill`、思考深度、多 @ 已先做一部分，其余按计划 §5 的 12 张票推进 |
 
 ## 已完成
 

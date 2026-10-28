@@ -9,13 +9,11 @@ type Props = {
   onOpenTask: (taskId: number) => void; onOpenInbox: () => void; onOpenCalendar: () => void; onOpenTodos: () => void
 }
 
-// PLAN §8.4 home page (P-13): a foldable "今天" summary above the Chief main session.
-// Read-only; the conversation below is where work is asked for.
+// 事项 → 今天 (T03): today's events, due todos and what waits for you. Read-only; work is asked for in a session.
 export default function TodaySummary({ token, active, confirmations, onOpenTask, onOpenInbox, onOpenCalendar, onOpenTodos }: Props) {
   // The load time drives the next-event line; reading the clock during render would be impure.
   const [data, setData] = useState<(DayData & { at: number }) | null>(null)
   const [error, setError] = useState('')
-  const [open, setOpen] = useState(() => !window.matchMedia?.('(max-width: 719px)').matches)
   const day = todayKey()
   useEffect(() => {
     if (!active) return
@@ -28,10 +26,10 @@ export default function TodaySummary({ token, active, confirmations, onOpenTask,
   const time = (iso?: string) => iso ? hm(Date.parse(iso)) : ''
   const parts = data ? todayParts({ authorized: data.authorized, events: data.events, todos: data.todos, confirmations: confirmations.length, now: data.at, day }) : []
 
-  return <details className="today-strip" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
-    <summary><strong>今天</strong><span className="shell-muted">{date}</span><span className="today-strip-line">{error ? '读取失败' : data ? parts.join(' · ') : '正在读取…'}</span></summary>
+  return <div className="today-page">
+    <p className="today-page-line"><strong>{date}</strong><span>{error ? '读取失败' : data ? parts.join(' · ') : '正在读取…'}</span></p>
     {error && <p role="alert" className="shell-alert-card">{error}</p>}
-    {data && <div className="today-strip-body">
+    {data && <div className="today-page-grid">
       <section aria-labelledby="today-events">
         <div className="today-card-head"><h2 id="today-events">日程</h2><button type="button" className="text-button" onClick={onOpenCalendar}>日历</button></div>
         {!data.authorized ? <p className="shell-muted small">本地日程暂未开放读取。</p> : data.events.length === 0 ? <p className="shell-muted small">没有安排。</p>
@@ -44,10 +42,10 @@ export default function TodaySummary({ token, active, confirmations, onOpenTask,
           : <ul className="today-list">{data.todos.slice(0, 4).map(t => <li key={t.id}><span className={`today-time ${String(t.due).slice(0, 10) < day ? 'today-overdue' : ''}`}>{String(t.due).slice(0, 10) < day ? '已逾期' : '今天'}</span><span>{t.title}</span></li>)}</ul>}
       </section>
       <section aria-labelledby="today-confirm">
-        <div className="today-card-head"><h2 id="today-confirm">等你确认</h2><button type="button" className="text-button" onClick={onOpenInbox}>收件箱</button></div>
+        <div className="today-card-head"><h2 id="today-confirm">等你确认</h2><button type="button" className="text-button" onClick={onOpenInbox}>通知</button></div>
         {confirmations.length === 0 ? <p className="shell-muted small">没有。</p>
           : <ul className="today-list">{confirmations.slice(0, 4).map(c => <li key={c.taskId}><button type="button" className="today-link" onClick={() => onOpenTask(c.taskId)}><span className="today-tag attention">{c.reason}</span><span>{c.title}</span></button></li>)}</ul>}
       </section>
     </div>}
-  </details>
+  </div>
 }

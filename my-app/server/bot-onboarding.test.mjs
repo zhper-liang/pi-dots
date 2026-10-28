@@ -9,7 +9,7 @@ import { createApiServer } from './app.mjs'
 import { listBots } from './bots.mjs'
 import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { COLLABORATION_TOOLS } from './collaboration-tools.mjs'
-import { NEW_BOT_WORKSPACE_TOOLS } from './bot-configuration.mjs'
+import { allGroupTools } from './bot-configuration.mjs'
 import { inferBotRole } from './bot-templates.mjs'
 import { decide } from './policy.mjs'
 
@@ -78,19 +78,15 @@ test('T6-02 inference is predictable: same name, same result; specific duties wi
   await assert.rejects(s.createBot({ name: '待办管家', description: '别的职责', requestId: 'onboard-replay' }), { code: 'BOT_REQUEST_CONFLICT' })
 }))
 
-test('T6-03 a new Bot gets local workspace tools directly assigned (D-15)', () => fixture(async ({ s }) => {
-  const bare = (await s.createBot({ name: '本地助理', requestId: 'onboard-no-pool' })).bot
-  const bot = bare
-  assert.deepEqual(bot.defaults.tools.filter(t => t.startsWith('workspace.')), NEW_BOT_WORKSPACE_TOOLS)
-  assert.ok(!bot.defaults.tools.includes('workspace.prepare_schedule')); assert.deepEqual(bot.defaults.toolResources, ['workspace:local'])
-  assert.deepEqual(bare.defaults.tools.filter(t => t.startsWith('workspace.')), NEW_BOT_WORKSPACE_TOOLS)
-  assert.deepEqual(bare.defaults.toolResources, ['workspace:local'])
+test('T6-03 a new Bot gets every tool group and the local source; its local writes run directly (T01)', () => fixture(async ({ s }) => {
+  const bot = (await s.createBot({ name: '本地助理', requestId: 'onboard-no-pool' })).bot
+  for (const name of allGroupTools()) assert.ok(bot.defaults.tools.includes(name), name)
+  assert.ok(!bot.defaults.tools.includes('bot_manage')); assert.deepEqual(bot.defaults.toolResources, ['workspace:local'])
   const verdict = action => s.harness.commit(tx => decide(tx, localCall(bot.id, action)), context)
-  assert.equal((await verdict('create')).effect, 'allow'); assert.equal((await verdict('update')).effect, 'allow')
-  assert.equal((await verdict('delete')).effect, 'ask')
+  for (const action of ['create', 'update', 'delete']) assert.equal((await verdict(action)).effect, 'allow', action)
   // The Bot's Tasks can actually use them.
   const task = await s.create({ botId: bot.id })
-  for (const name of NEW_BOT_WORKSPACE_TOOLS) assert.ok(task.toolSets.authorized.includes(name), name)
+  for (const name of WORKSPACE_TOOLS) assert.ok(task.toolSets.authorized.includes(name), name)
 }))
 
 test('T6-04 creation returns the Bot\'s main session; it opens empty (no suggested first task) and replays to the same one', () => fixture(async ({ s }) => {

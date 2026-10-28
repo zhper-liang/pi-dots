@@ -25,8 +25,8 @@ export function taskParameters(overrides, defaults) {
       }
       parameters.model = { ...parameters.model, id: value.id }
     } else if (key === 'thinkingLevel') {
-      // The approved bb-api adapter currently supports explicit off only, never guess provider effort values.
-      if (value !== 'off') fail('INVALID_PARAMETERS', '当前模型接入仅支持 thinkingLevel=off。')
+      // Task snapshots keep their frozen level; 'off' stays valid for Tasks created before low/high existed.
+      if (!['off', 'low', 'high'].includes(value)) fail('INVALID_PARAMETERS', 'thinkingLevel 只接受 off、low 或 high。')
       parameters.thinkingLevel = value
     } else if (key === 'maxOutputTokens') {
       if (!Number.isSafeInteger(value) || value < 1 || value > 32768) fail('INVALID_PARAMETERS', 'maxOutputTokens 须为 1–32768 的整数。')

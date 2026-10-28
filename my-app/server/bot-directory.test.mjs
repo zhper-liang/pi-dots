@@ -17,6 +17,7 @@ import { CALENDAR_TOOL } from './tools.mjs'
 import { BLOCKER_TOOL } from './blockers.mjs'
 import { CALENDAR_WRITE_TOOL } from './approvals.mjs'
 import { addRule } from './policy.mjs'
+import { allGroupTools } from './bot-configuration.mjs'
 
 const config = { baseUrl: 'https://fixture.invalid/v1', model: 'multi-bot-fixture', apiKey: 'fixture-secret-never-persist' }
 const token = 'multi-bot-test-token'
@@ -116,7 +117,7 @@ test('creation only permits bounded ordinary settings and server-owned capabilit
   assert.equal(store.bots().length, 3)
   const general = (await store.createBot({ ...creation(), parameters: { maxOutputTokens: 128, callLimits: { modelCalls: 4 } } })).bot
   const calendar = (await store.createBot(creation('模拟日程专家', 'request-0002', 'mock-calendar'))).bot
-  assert.deepEqual(general.defaults.tools, [BLOCKER_TOOL, 'workspace.list', 'workspace.get', 'workspace.prepare_change', 'workspace.operation_status']); assert.deepEqual(general.defaults.toolResources, ['workspace:local'])
+  assert.deepEqual([...general.defaults.tools].sort(), [...new Set([BLOCKER_TOOL, ...allGroupTools()])].sort()); assert.deepEqual(general.defaults.toolResources, ['workspace:local'])
   assert.ok(calendar.defaults.tools.includes(CALENDAR_TOOL)); assert.deepEqual(calendar.defaults.toolResources, ['mock:personal', 'workspace:local'])
   assert.equal(general.defaults.maxOutputTokens, 128)
   assert.equal(JSON.stringify(await store.harness.snapshot(BotDirectory, context)).includes(config.apiKey), false)
@@ -129,7 +130,8 @@ test('general specialists cannot inherit Chief management tools; reordered setti
   const first = await store.createBot(input)
   const retry = await store.createBot({ ...input, parameters: { callLimits: { toolCalls: 2, modelCalls: 3 }, maxOutputTokens: 128, thinkingLevel: 'off' } })
   assert.equal(retry.created, false); assert.equal(retry.bot.id, first.bot.id)
-  assert.deepEqual(first.bot.defaults.tools, [BLOCKER_TOOL, 'workspace.list', 'workspace.get', 'workspace.prepare_change', 'workspace.operation_status']); assert.deepEqual(first.bot.defaults.toolResources, ['workspace:local'])
+  assert.deepEqual([...first.bot.defaults.tools].sort(), [...new Set([BLOCKER_TOOL, ...allGroupTools()])].sort())
+  assert.ok(!first.bot.defaults.tools.includes('manage_bots') && !first.bot.defaults.tools.includes('bot_manage')); assert.deepEqual(first.bot.defaults.toolResources, ['workspace:local'])
 })
 
 test('authenticated Bot HTTP creation, idempotent retry, filtering and every scoped Task control reject wrong Bot', async (t) => {

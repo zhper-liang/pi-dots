@@ -1,6 +1,7 @@
 import { defineDoc } from '@earendil-works/pi-durable'
 import { randomUUID } from 'node:crypto'
 import { TaskInputError } from './task-config.mjs'
+import { groupOfTool, groupTools } from './tool-groups.mjs'
 
 // The only policy decision is whether an assigned write tool runs, asks, or is denied.
 // Tool assignment and source authorization are checked before this function is called.
@@ -18,7 +19,7 @@ const READ_AND_INTERNAL = new Set(['calendar_read_schedule', 'calendar_read_even
   'tool_result_read', 'task_history_read', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'workspace.list', 'workspace.get', 'workspace.operation_status',
   'collaborators_list', 'bot_inspect', 'shared_read', 'task_status', AUTOMATION_PAUSE_TOOL,
   'report_blocker', 'blocker_resolve', 'blocker_escalate', 'task_assign', 'task_review', 'shared_publish', 'shared_link', 'task_create'])
-const WRITE_TOOLS = new Set(['calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_feishu_delete_event', 'calendar_reschedule_event',
+export const WRITE_TOOLS = new Set(['calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_feishu_delete_event', 'calendar_reschedule_event',
   'workspace.prepare_schedule', 'routine_propose', 'workspace.prepare_change', 'bot_manage'])
 export const REGISTERED_TOOLS = Object.freeze([...READ_AND_INTERNAL, ...WRITE_TOOLS])
 export const unattended = origin => ['routine', 'detector', 'event'].includes(origin)
@@ -44,9 +45,9 @@ export async function decide(tx, call) {
   if (!WRITE_TOOLS.has(call.tool) || call.tool === 'bot_manage' && !['create', 'configure', 'deactivate'].includes(action) ||
     call.tool === 'workspace.prepare_change' && !['create', 'update', 'delete'].includes(action)) return verdict('deny', 'unregistered')
   const rule = pickRule((await tx.doc(PolicyRules)).items, { ...call, action })
-  const deletion = call.tool === 'calendar_feishu_delete_event' || call.tool === 'workspace.prepare_change' && action === 'delete' || call.tool === 'bot_manage' && action === 'deactivate'
-  let effect = rule?.effect ?? (deletion ? 'ask' : 'allow')
-  let reason = rule ? rule.origin + '-rule' : deletion ? 'delete-default' : 'write-default'
+  // Tool groups default to on: an unmatched write, deletion included, runs directly.
+  let effect = rule?.effect ?? 'allow'
+  let reason = rule ? rule.origin + '-rule' : 'write-default'
   const paused = (await tx.doc(AutomationPause)).paused
   if (effect === 'allow' && paused) { effect = 'ask'; reason = 'automation-paused' }
   return verdict(effect, reason, effect === 'ask' && !paused)
@@ -71,10 +72,21 @@ export async function removeRules(tx, predicate) {
   const doc = await tx.doc(PolicyRules)
   doc.items = doc.items.filter(r => r.origin !== 'preset' && !predicate(r))
 }
+// Rules a group switch owns: every non-preset rule of this Bot on the group's write tools, at any specificity.
+export const groupRule = (rule, botId, tools) => rule.botId === botId && rule.origin !== 'preset' && rule.match && !Object.hasOwn(rule.match, 'risk') && tools.includes(rule.match.tool)
+export const groupWriteTools = (tool) => groupTools(groupOfTool(tool)).filter(name => WRITE_TOOLS.has(name))
+// "以后直接做" turns the tool's whole group on: drop the Bot's rules there so every write runs directly.
+export async function openGroup(tx, botId, tool) {
+  const tools = groupWriteTools(tool)
+  if (!tools.length) return []
+  const doc = await tx.doc(PolicyRules)
+  const removed = doc.items.filter(r => groupRule(r, botId, tools))
+  doc.items = doc.items.filter(r => r.origin !== 'preset' && !groupRule(r, botId, tools))
+  return JSON.parse(JSON.stringify(removed))
+}
 export async function listRules(tx, botId) {
   return JSON.parse(JSON.stringify((await tx.doc(PolicyRules)).items.filter(r => r.origin !== 'preset' && !Object.hasOwn(r.match ?? {}, 'risk') && (botId === undefined || r.botId === botId))))
 }
-export const localMatch = (tool, action) => ({ tool, action, sourceId: 'local' })
 
 export async function automationStatus(tx) { return JSON.parse(JSON.stringify(await tx.doc(AutomationPause))) }
 export async function setAutomationPause(tx, { paused, by }) {

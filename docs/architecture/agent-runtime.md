@@ -12,7 +12,7 @@ Bot 保存身份、职责、版本化配置及工具分配；Conversation 承载
 2. 固定模型名、提示词等运行配置版本及调用额度；工具与资源按 Bot 当前分配解析，Skill 按当前可用依赖加载。
 3. 持久化 Task、conversation 与任务卡，装配上下文后执行。
 
-权限采用 [ADR-014](../decisions/README.md#adr-014-实时权限与直接做先问)：已授权工具 = 已安装 ∩ Bot 当前工具分配 − 已撤销工具；资源取 Bot 当前分配。没有能力池、Bot Grant、档位、权限 epoch 或 Task 许可快照。预置 Bot 使用默认分配，新建 Bot 默认勾选本地工作区工具与资源；增加、取消或重新勾选从所有已有 Task 的下一次调用起生效。飞书断开或换绑时，旧来源资源从所有 Bot 的分配中移除。
+权限采用 [ADR-014](../decisions/README.md#adr-014-实时权限与直接做先问)：已授权工具 = 已安装 ∩ Bot 当前工具分配 − 已撤销工具；资源取 Bot 当前分配。没有能力池、Bot Grant、档位、权限 epoch 或 Task 许可快照。工具组默认见 [ADR-015](../decisions/README.md#adr-015-工具组默认开开即直接做)：每个 Bot 默认拥有全部工具组（Bot 管理组只给 Chief），新建 Bot 另带 workspace:local；撤权只在接口层，界面不再逐个工具勾选；分配和撤权从所有已有 Task 的下一次调用起生效。飞书断开或换绑时，旧来源资源从所有 Bot 的分配中移除。
 
 模型连接地址和 key 不属于 Task 固定运行配置：每次调用从服务端读取，按进程环境、app/root dotenv、同库目录 `model-settings.json` 的优先级选择。JSON 明文凭证用 0600 原子替换，不进 Harness/SQLite；认证设置接口只投影 hasKey。旧 Task 的 provider/baseUrl 兼容忽略，模型名不变；改连接不改变 Bot 版本或触发迁移。已持久化 Bot 目录保持权威，不因新 seed 哈希改变而重写版本；无配置首次启用时仅新 Task 使用真实模型，已有测试 Task 不变。
 
@@ -39,8 +39,8 @@ Skill 是工作方法，不授予工具权限。活动 Skill 的选择、激活/
 ## 工作区与动作裁决
 - 工作区来源和连接须 active，动作须属于来源能力且具有用户许可；local 由所有者隐式完整许可，外部来源保留用户 Grant/readScope。Bot 读需要当前分配 workspace.list/get，写需要 workspace.prepare_change，并分配对应 workspace:<sourceId> 资源；busy-only 仍只投影时段。飞书只开放忙闲时可只勾 calendar_feishu_freebusy，不勾读详情工具。
 - stdio MCP 保留独立凭证及 sources/actions/readScope、到期和撤销校验，实际权限不超过 Bot 当前分配和用户许可。凭证在设置页发放、列出和撤销；不再有 AgentWorkspace 面板。
-- policy.decide() 对读和内部协作工具直接 allow；写工具按 tool、action、sourceId、type 取最具体规则，同样具体时 deny > ask > allow。无匹配默认直接执行；只有 workspace.prepare_change/delete、calendar_feishu_delete_event 和 bot_manage/deactivate 默认先问。未登记工具拒绝。旧 origin=preset 与 risk 规则不参与裁决，不再有 R0–R4/H、批量计数或每小时自动写入上限。
-- 全局暂停把写入 allow 降为 ask，停止例行任务和事件触发，恢复后不补跑；模型/工具/token 调用预算仍独立保留。在场时按原操作和精确参数确认，本地提案保留 5 分钟；可点“以后直接做”写规则，暂停中和结果未知后的重做审批不提供该按钮。
+- policy.decide() 对读和内部协作工具直接 allow；写工具按 tool、action、sourceId、type 取最具体规则，同样具体时 deny > ask > allow。无匹配一律直接执行，删除也一样。每个工具组一个开关：开 = 无规则，关 = 组内每个写工具一条 ask；切换时清掉该 Bot 在组内写工具上的全部规则，所以开关显示等于裁决结果。模型只看到 Bot 有对应资源的工具，已委派的子任务不再看到 task_assign。未登记工具拒绝。旧 origin=preset 与 risk 规则不参与裁决，不再有 R0–R4/H、批量计数或每小时自动写入上限。
+- 全局暂停把写入 allow 降为 ask，停止例行任务和事件触发，恢复后不补跑；模型/工具/token 调用预算仍独立保留。在场时按原操作和精确参数确认，本地提案保留 5 分钟；可点“以后直接做”把该工具所在组设为开，暂停中和结果未知后的重做审批不提供该按钮。
 - origin 为 routine、event、detector 时遇到 ask，不出审批卡、不等待 30 分钟过期，跳过并在运行记录与结果中说明“已跳过：这一步需要你来做。”
 - 例行任务派发时实时复核 Bot active、当前读工具、来源资源及用户/连接许可；失效就取消并记录原因。仅更新 Bot 配置版本不使例行任务失效。用户提醒和内部计划的 authorizationSnapshot 不受此次简化影响。
 
@@ -50,7 +50,7 @@ Skill 是工作方法，不授予工具权限。活动 Skill 的选择、激活/
 记录模型/工具调用与 token 用量，达到额度进入“受限”等待，用户明确提额后恢复原 Task。不会通过新 Task 自动重置预算。当前摘要与上下文管理不等于完整长期记忆产品。
 
 ## 协作、群聊与 Chief
-- Chief 创建和配置 Bot 默认直接执行，可配置自己的工具与资源；停用 Bot 默认先问，不能停用 Chief 自身，已停用 Bot 不自动重新启用。管理仍校验身份、目标、版本、精确参数及幂等回执。
+- Chief 创建、配置和停用 Bot 默认直接执行（Bot 管理组关闭或全局暂停时先问），可配置自己的工具与资源；不能停用 Chief 自身，已停用 Bot 不自动重新启用。管理仍校验身份、目标、版本、精确参数及幂等回执。
 - 委派记录父子关系、主管、执行者、目标与结果来源；目标 Bot 独立检查能力和授权。
 - 群管理员接收普通消息，单目标 @ 从明确消息点 fork 必要上下文；结果回报保留原身份与来源，不能把定向材料广播给无权成员。
 - 阻塞逐级上报；规则要求先问的动作必须由认证用户精确批准，主管不能代批。

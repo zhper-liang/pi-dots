@@ -470,9 +470,9 @@ test('authenticated API exposes declarations/receipt and only allows bounded pre
     method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   assert.equal((await req('/api/tools', undefined, '')).status, 401)
-  assert.equal((await req('/api/tools')).status, 200)
-  assert.deepEqual((await (await req('/api/tools')).json()).tools[0].resultSchema, calendarTool.resultSchema)
-  assert.deepEqual((await (await req('/api/tools')).json()).tools[1].resultSchema, calendarEventTool.resultSchema)
+  assert.equal((await req('/api/tools', undefined, undefined, 'GET')).status, 200)
+  assert.deepEqual((await (await req('/api/tools', undefined, undefined, 'GET')).json()).tools[0].resultSchema, calendarTool.resultSchema)
+  assert.deepEqual((await (await req('/api/tools', undefined, undefined, 'GET')).json()).tools[1].resultSchema, calendarEventTool.resultSchema)
   assert.equal((await req('/api/bots/calendar/tool-access', { revoked: [CALENDAR_TOOL] }, '')).status, 401)
   assert.equal((await req('/api/bots/calendar/tool-access', { revoked: ['shell'] })).status, 400)
   assert.equal((await req('/api/bots/calendar/tool-access', { revoked: [], authorized: ['shell'] })).status, 400)

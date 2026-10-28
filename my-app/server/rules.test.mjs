@@ -29,7 +29,7 @@ test('S3 rule API allows exact write rules and rejects retired risk matches', ()
   assert.ok(!(await s.rules.list()).some(r => r.id === rule.id))
 }))
 
-test('S3 Chief deactivate asks; always on its card allows the next deactivation', () => fixture(async (s, script) => {
+test('S3 Chief deactivate asks while Bot management is off; always on its card turns the group on', () => fixture(async (s, script) => {
   const { taskId } = await s.create({ botId: 'chief' })
   const todo = s.bots().find(b => b.id === 'todo')
   script.push(turn('bot_manage', { action: 'deactivate', botId: todo.id, expectedVersion: todo.configRef.version, confirm: true }))
@@ -45,7 +45,7 @@ test('S3 Chief deactivate asks; always on its card allows the next deactivation'
   const second = await settled(s, taskId)
   assert.equal(s.bots().find(b => b.id === calendar.id).status, 'inactive')
   assert.equal(second.approvals.items.length, 1)
-  assert.ok((await s.rules.list()).some(r => r.match.tool === 'bot_manage' && r.match.action === 'deactivate' && r.effect === 'allow'))
+  assert.ok(!(await s.rules.list()).some(r => r.botId === 'chief' && r.match.tool === 'bot_manage'))
 }))
 
 test('S3 an allow rule becomes ask during pause and cannot be made always then', () => fixture(async (s, script) => {

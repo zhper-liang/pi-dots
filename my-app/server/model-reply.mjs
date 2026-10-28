@@ -75,7 +75,7 @@ export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fet
     if (config?.apiKey) knownKeys.add(config.apiKey)
     const selected = parameters?.model
     const model = selected && { id: selected.id, provider: 'openai-compatible', api: 'openai-completions', baseUrl: config?.baseUrl }
-    if (!config || parameters?.mode !== 'model' || parameters.thinkingLevel !== 'off' ||
+    if (!config || parameters?.mode !== 'model' || !['off', 'low', 'high'].includes(parameters.thinkingLevel) ||
       typeof model?.id !== 'string' || !/^[\w./:-]{1,200}$/.test(model.id) ||
       !Number.isInteger(parameters.requestTimeoutMs) || parameters.requestTimeoutMs < 1 || parameters.requestTimeoutMs > 600000) {
       throw new ModelReplyError('MODEL_CONFIG_UNAVAILABLE')
@@ -95,17 +95,20 @@ export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fet
     try {
       // No guessed token prices, context limits or output cap are sent to the provider.
       // Pi requires catalog bookkeeping fields; NaN rates denote unknown cost, never persisted.
-      const descriptor = { ...model, name: model.id, reasoning: false, input: ['text'],
+      // low/high map to the provider's standard reasoning_effort field only when the Task asked for it.
+      const reasoning = parameters.thinkingLevel === 'low' || parameters.thinkingLevel === 'high'
+      const descriptor = { ...model, name: model.id, reasoning, input: ['text'],
         cost: { input: NaN, output: NaN, cacheRead: NaN, cacheWrite: NaN },
         contextWindow: 0, maxTokens: 0,
-        compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false, supportsUsageInStreaming: true } }
+        compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: reasoning, supportsUsageInStreaming: true } }
       const response = await Promise.race([stream(descriptor, normalizeContext(context ?? { messages: [
         { role: 'user', content: message, timestamp: Date.now() },
       ] }), {
         apiKey: config.apiKey, signal: controller.signal, timeoutMs: parameters.requestTimeoutMs, maxTokens: maxOutputTokens, maxRetries: 0,
+        ...(reasoning ? { reasoningEffort: parameters.thinkingLevel } : {}),
         fetch: async (url, init) => { const result = await fetchImpl(url, { ...init, redirect: 'error' }); status = result.status; return result },
         onPayload: (payload) => {
-          payload.thinking = { type: 'disabled' }
+          payload.thinking = reasoning ? { type: 'enabled' } : { type: 'disabled' }
           for (const tool of payload.tools ?? []) if (tool.function) tool.function.name = toModelTool(tool.function.name)
           for (const message of payload.messages ?? []) {
             for (const call of message.tool_calls ?? []) if (call.function) call.function.name = toModelTool(call.function.name)
@@ -119,7 +122,8 @@ export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fet
           }
           // Keep only the allowlisted actual request fields, never headers or messages.
           sent = { provider: model.provider, api: model.api, baseUrl: model.baseUrl, model: payload.model,
-            thinkingLevel: parameters.thinkingLevel, thinking: { ...payload.thinking }, stream: payload.stream,
+            thinkingLevel: parameters.thinkingLevel, thinking: { ...payload.thinking },
+            ...(reasoning ? { reasoningEffort: payload.reasoning_effort } : {}), stream: payload.stream,
             timeoutMs: parameters.requestTimeoutMs, maxOutputTokens, maxRetries: 0 }
         },
         onProviderStreamEvent: (event) => {

@@ -16,6 +16,9 @@ const copy=x=>JSON.parse(JSON.stringify(x))
 const fail=(code,message)=>{throw new TaskInputError(409,code,message)}
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex')
 const assignmentReceipt = r => copy(Object.fromEntries(['version','id','rootWorkId','parentTaskId','parentInputId','supervisorBotId','executorBotId','childTaskId','childInputId','createdAt','groupId','sourceMessageId'].filter(k=>r[k]!==undefined).map(k=>[k,r[k]])))
+// Directed targets advance through the existing reply/awaitChildren phases. Each commit creates at
+// most one Task row; the relation is the durable cursor used after a restart or a review round.
+
 export function collaborationService({TaskCard,ChatInput,createTask,bots}) {
   // D-18: listing collaborators is read-only (PLAN §3.2 R0) and needs only its own grant, so a main
   // session (which never carries task_assign, D-05) can see who it may hand work to.
@@ -34,7 +37,7 @@ export function collaborationService({TaskCard,ChatInput,createTask,bots}) {
     if(state.items.some(i=>i.childTaskId===card.taskId)) fail('COLLABORATION_DEPTH_DENIED','子任务不能继续委派。')
     const input=await tx.entry(entryId)
     if(input?.kind!=='pidot.user' || input.conversationId!==card.conversationId || (await tx.doc(ChatInput,card.taskId)).entryId!==entryId) fail('COLLABORATION_INPUT_DENIED','只允许原活动输入委派。')
-    if (card.kind === 'group' && input.data.targetBotId && !directed) fail('GROUP_TARGET_FIXED','本输入目标由认证用户固定，管理员不能额外派发。')
+    if (card.kind === 'group' && Array.isArray(input.data.targetBotIds) && input.data.targetBotIds.length && !directed) fail('GROUP_TARGET_FIXED','本输入目标由认证用户固定，管理员不能额外派发。')
     const directory=await tx.doc(BotDirectory)
     const group = await assertGroupTask(tx, card)
     const targets=directory.items.filter(b=>b.id!==card.bot.id && b.status!=='inactive' && (!group || group.memberBotIds.includes(b.id)))
@@ -47,7 +50,7 @@ export function collaborationService({TaskCard,ChatInput,createTask,bots}) {
     if(!targets.some(b=>b.id===a.botId)) fail('COLLABORATION_TARGET_DENIED','目标须为存在且活跃的不同Bot。')
     let sharedRows=[]
     if(a.sharedRecords?.length) {const {sharedInformationService}=await import('./shared-information.mjs');sharedRows=await sharedInformationService({TaskCard,ChatInput,bots}).prepareLinks(tx,card,entryId,a.sharedRecords)}
-    if (directed && (input.data.targetBotId !== a.botId || a.goal !== input.data.content)) fail('GROUP_TARGET_FIXED','不能改选认证输入的目标或目标指令。')
+    if (directed && (!(input.data.targetBotIds ?? []).includes(a.botId) || a.goal !== input.data.content)) fail('GROUP_TARGET_FIXED','不能改选认证输入的目标或目标指令。')
     const childTaskId=await createTask(tx,{botId:a.botId,title:a.goal.slice(0,100),taskState:{goal:a.goal,completionCriteria:a.completionCriteria}}, (await tx.task(card.taskId)).conversationId, group ? { conversationId: card.conversationId, at: entryId } : undefined)
     const child=await tx.doc(TaskCard,childTaskId)
     if (!workspaceShareAllowed(card, child, await tx.doc(ToolAccess)) || !await workspaceHistoryAllowed(tx, child, toolSets(child,bots,await tx.doc(ToolAccess)))) fail('COLLABORATION_NOT_AUTHORIZED','工作区派生简报需要目标独立完整来源许可。')
@@ -154,21 +157,31 @@ export function collaborationService({TaskCard,ChatInput,createTask,bots}) {
     const root=r?.rootWorkId??`${taskId}:${input}`
     if((state.stops??[]).some(s=>s.rootWorkId===root)) fail('COLLABORATION_STOPPED','本项根工作已停止；不能派发、返工、回答或续跑。')
   }
+  // One group input may address several members. Each target keeps its own proven task_assign path (one
+  // commit per target: reads, then its writes); failures stop the remaining targets rather than half-write.
   async function dispatchDirected(tx,card,entryId) {
     if (card.kind !== 'group') return
-    const input = await tx.entry(entryId), target = input?.data.targetBotId
-    if (!target || target === card.bot.id) return
+    const input = await tx.entry(entryId), targets = input?.data.targetBotIds
+    if (!Array.isArray(targets) || !targets.length) return
     const group = await assertGroupTask(tx,card)
-    if (!group.memberBotIds.includes(target)) fail('GROUP_TARGET_DENIED','目标不属于本群。')
-    const existing=(await tx.doc(Collaboration)).items.some(r=>r.parentTaskId===card.taskId&&r.parentInputId===entryId)
-    if(existing) return false
+    for (const target of targets) if (!group.memberBotIds.includes(target)) fail('GROUP_TARGET_DENIED','目标不属于本群。')
+    const others = targets.filter(target => target !== card.bot.id)
+    if (!others.length) return
+    const links = await tx.doc(Collaboration)
+    const relations = links.items.filter(r=>r.parentTaskId===card.taskId&&r.parentInputId===entryId)
+    const assigned = new Set(relations.map(r=>r.executorBotId))
+    const pending = others.filter(target=>!assigned.has(target))
+    if (!pending.length) return false
     const usage=await tx.doc(CallUsage,card.taskId),limits=callLimits(card.parameters)
     const limited=usage.modelCalls>=limits.modelCalls?'modelCalls':usage.toolCalls>=limits.toolCalls?'toolCalls':limits.totalTokens!==undefined&&(usage.unknownTokenCalls>0||usage.totalTokens>=limits.totalTokens)?'totalTokens':null
     if(limited)return {limited}
-    await execute(tx,card,{name:'task_assign',arguments:{operationId:'directed-input',botId:target,goal:input.data.content,completionCriteria:['回答原群消息中的请求，并说明结果依据']}},entryId,{directed:true})
-    usage.toolCalls++
-    return true
+    // One target goes through task_assign in this transaction. The next target is dispatched after
+    // awaitChildren returns to reply, so no commit needs two Task rows or a write followed by a read.
+    await execute(tx,card,{name:'task_assign',arguments:{operationId:`directed-input:${pending[0]}`,botId:pending[0],goal:input.data.content,completionCriteria:['回答原群消息中的请求，并说明结果依据']}},entryId,{directed:true})
+    usage.toolCalls += 1
+    return { remaining: pending.slice(1) }
   }
+
   return {execute,guard,collect,review,assertWorkOpen,dispatchDirected}
 }
 

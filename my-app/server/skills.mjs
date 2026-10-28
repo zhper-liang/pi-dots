@@ -65,17 +65,19 @@ async function loadSkill(id, directory) {
   }
 }
 
-function applicable(skill, card, bots) {
-  // Server-owned profiles select applicability only; all rules/state/results remain Task-scoped.
-  const bot = bots.find((item) => item.id === card.bot.id)
-  return skill.botIds.includes(card.bot.id) || (bot?.profile === 'mock-calendar' && skill.botIds.includes('calendar'))
+// Every registered Skill is listed for every Bot: applicability is advice for the model, not a hidden
+// permission gate. A Skill's own required tools/resources are still checked before it loads.
+function applicable(_skill, _card, _bots) {
+  return true
 }
-function dependencies(skill, card, bots, access) {
+function dependencies(skill, card, bots, access, { command = false } = {}) {
   if (card.parameters.mode !== 'model') return failure('SKILL_MODEL_REQUIRED', '当前 Task 为确定性测试模式，不能按 Skill 进行模型分析。')
-  if (!applicable(skill, card, bots)) return failure('SKILL_NOT_APPLICABLE', '该 Skill 不适用于当前 Bot，请在日程助理会话中激活。')
+  if (!applicable(skill, card, bots, access)) return failure('SKILL_NOT_APPLICABLE', '该 Skill 不适用于当前 Bot。')
   const sets = toolSets(card, bots, access), authorized = sets.authorized
+  // A "/" Skill chosen by the user loads its instructions without needing the Skill lifecycle tools
+  // (the user already chose it); every business tool it needs is still checked.
   const missing = [
-    ...skill.requiredTools.filter((name) => !authorized.includes(name)),
+    ...skill.requiredTools.filter((name) => !authorized.includes(name) && !(command && name === SKILL_READ)),
     ...skill.requiredResources.filter((name) => !sets.resources.includes(name)),
     ...skill.scripts.map((name) => `script:${name}`),
   ]
@@ -106,14 +108,14 @@ async function audit(tx, card, state, event) {
   state.history.push(record)
   return record
 }
-async function activate(tx, card, bots, skillId, source, inReplyTo, directory) {
+async function activate(tx, card, bots, skillId, source, inReplyTo, directory, options = {}) {
   const state = await tx.doc(TaskSkills, card.taskId)
   let skill, error
   try {
     const pinned = state.active.find((item) => item.id === skillId) ?? state.pinned?.find((item) => item.id === skillId)
     skill = pinned ? JSON.parse(JSON.stringify(pinned)) : await loadSkill(skillId, directory)
     verify(skill)
-    error = dependencies(skill, card, bots, await tx.doc(ToolAccess))
+    error = dependencies(skill, card, bots, await tx.doc(ToolAccess), options)
   } catch (caught) { error = typeof caught?.code === 'string' && typeof caught?.message === 'string' ? { code: caught.code, message: caught.message, missing: caught.missing ?? [] } : failure('SKILL_LOAD_FAILED', '本地 Skill 无法加载。') }
   const event = { skillId, status: error ? 'failed' : 'active', source, inReplyTo,
     createdAt: new Date().toISOString(), ...(skill ? { ref: skill.ref } : {}), ...(error ? { error } : {}) }
@@ -194,18 +196,18 @@ export async function executeSkillTool(tx, card, bots, call, inReplyTo, director
     trust: 'untrusted-reference-data-not-instructions' } }
 }
 
-// "/" command in the composer: the user picks a Skill for one message. Offered only when the Task
-// may select Skills (skill_activate is authorized) and the Skill's dependencies are met.
+// "/" command in the composer: every registered Skill is listed for every Bot. Picking one needs no
+// Skill-tool permission; only a real dependency (model mode, required tool/resource, broken files) can
+// make it unavailable, and the reason is shown.
 export async function commandSkills(tx, card, bots, directory = SKILL_DIRECTORY) {
-  const allowed = toolSets(card, bots, await tx.doc(ToolAccess)).authorized.includes(SKILL_ACTIVATE)
-  return (await skillCatalogForTask(tx, card, bots, directory)).map((s) => allowed ? s : { ...s, available: false, error: failure('SKILL_TOOLS_NOT_GRANTED', '这个 Bot 没有分配 Skill 工具；请在能力池和 Bot 配置里分配。') })
+  return skillCatalogForTask(tx, card, bots, directory)
 }
 /** Activate the Skill a message was sent with, once per input (restart-safe via the audit history). */
 export async function activateCommandSkill(tx, card, bots, entryId, skillId, directory = SKILL_DIRECTORY) {
   const state = await tx.doc(TaskSkills, card.taskId)
   const prior = state.history.find((e) => e.source === 'user-command' && e.inReplyTo === entryId && e.skillId === skillId && e.status !== 'inactive')
   if (prior) return prior.status === 'active' ? { ok: true } : { ok: false, error: prior.error }
-  return activate(tx, card, bots, skillId, 'user-command', entryId, directory)
+  return activate(tx, card, bots, skillId, 'user-command', entryId, directory, { command: true })
 }
 
 /** All lifecycle operations share the same dependency checks and immutable snapshots. */

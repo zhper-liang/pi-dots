@@ -5,7 +5,7 @@ import { WorkspaceClients, sourceResource, workspaceUsedResources, workspaceUsed
 import { BotDirectory } from './bot-directory.mjs'
 import { ToolAccess } from './tools.mjs'
 import { createMcpSession, createMcpClient } from './workspace-mcp-protocol.mjs'
-import { decide, unattended, addRule, removeRules, listRules, localMatch } from './policy.mjs'
+import { decide, unattended, openGroup } from './policy.mjs'
 import { summarizeAutoApplied, summarizeOperation } from './inbox.mjs'
 import { markDirty } from './detector-state.mjs'
 const ATTENDED_EXPIRY_MS = 300000
@@ -146,21 +146,6 @@ export function createWorkspaceMcpBusiness({ repository: repo, authority, servic
   return {
     resolveClient, tools, call, session,
     async invoke(taskId, name, args, options) { const c = createMcpClient(session(await authority.agent(taskId))); try { await c.initialize(); return name === null ? await c.listTools() : await c.callTool(name, args, options) } finally { c.close() } },
-    // 以后同类直接同意 → an origin='user' allow rule in the rule table (ADR-012). Live-read on every
-    // decide (removal is immediate); no epoch bump because it never adds capability.
-    async manageAllowRule(actor, input) {
-      user(actor); strict(input, ['botId', 'tool', 'action', 'enabled', 'confirmed'])
-      if (input.confirmed !== true || typeof input.enabled !== 'boolean' || input.tool !== 'workspace.prepare_change' || !['create', 'update', 'delete'].includes(input.action) || !validId(input.botId)) fail(400, 'WORKSPACE_GRANT', '仅支持本地 workspace.prepare_change 的精确动作规则。')
-      return repo.transaction(async tx => {
-        const bot = (await tx.doc(BotDirectory)).items.find(b => b.id === input.botId)
-        const access = await tx.doc(ToolAccess), assigned = access.assignments?.[input.botId]
-        if (input.enabled && (!bot || (bot.status ?? 'active') !== 'active' || !assigned?.tools.includes(input.tool) || !assigned.resources.includes('workspace:local') || access.revoked?.[input.botId]?.includes(input.tool))) fail(409, 'WORKSPACE_GRANT', 'Bot 当前未分配本地工作区写工具与资源。')
-        const match = localMatch(input.tool, input.action)
-        await removeRules(tx, r => r.botId === input.botId && r.origin === 'user' && JSON.stringify(r.match) === JSON.stringify(match))
-        if (input.enabled) await addRule(tx, { botId: input.botId, match, effect: 'allow', origin: 'user' })
-        return { botId: input.botId, rules: await listRules(tx, input.botId) }
-      })
-    },
     // Undo an automatic local write (I-13). User-initiated only; commitLocal keyed by undo:<op>.
     async undoAuto(actor, input) {
       user(actor); strict(input, ['requestId', 'confirmed'])
@@ -239,8 +224,8 @@ export function createWorkspaceMcpBusiness({ repository: repo, authority, servic
         const command = { requestId: op.requestId, action: op.action, ...copy(op.normalizedArgs) }
         if (op.action === 'delete') { delete command.data; command.confirmedDelete = true }
         const receipt = await service.applyLocalConfirmed(tx, actor, command, op.id)
-        // "以后直接做" applies to this exact tool, action, source and type.
-        if (input.always) await addRule(tx, { botId: op.actor.subjectId, match: { tool: 'workspace.prepare_change', action: op.action, sourceId: op.normalizedArgs.sourceId, type: op.normalizedArgs.type }, effect: 'allow', origin: 'user' })
+        // "以后直接做" turns the workspace write group on for this Bot.
+        if (input.always) await openGroup(tx, op.actor.subjectId, 'workspace.prepare_change')
         return repo.put(tx, 'Operation', { ...op, state: 'succeeded', receipt })
       })
     },

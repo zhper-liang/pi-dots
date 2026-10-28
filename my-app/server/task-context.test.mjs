@@ -221,7 +221,7 @@ test('invalid or authority-expanding parameter overrides fail atomically, not si
   const { store } = await fixture(t)
   for (const parameters of [null, [], {}, { model: { id: 'unconfigured-model' } }, { tools: ['calendar.write'] }, { mode: 'model' }, { configRef: {} },
     { model: 'other' }, { model: { id: 'other', baseUrl: 'https://evil.example' } }, { model: { id: 'other', apiKey: 'secret' } },
-    { model: { id: '../bad?model' } }, { thinkingLevel: 'high' }, { requestTimeoutMs: 0 }, { requestTimeoutMs: 600001 },
+    { model: { id: '../bad?model' } }, { thinkingLevel: 'medium' }, { requestTimeoutMs: 0 }, { requestTimeoutMs: 600001 },
     { requestTimeoutMs: 1.5 }, { callLimits: {} }, { callLimits: [] }, { callLimits: { modelCalls: -1 } },
     { callLimits: { modelCalls: 1.5 } }, { callLimits: { totalTokens: Number.MAX_SAFE_INTEGER + 1 } },
     { callLimits: { tools: ['grant'] } }]) {

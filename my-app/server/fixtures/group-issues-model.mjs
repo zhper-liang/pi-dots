@@ -36,6 +36,8 @@ export async function issueModel(_m,o) {
 
 export async function configureIssues(s) {
  for(const id of ['todo','calendar']){const {bot}=await s.getBotConfiguration(id);await s.updateBotConfiguration(id,{requestId:'issues04-config-'+id,expectedVersion:bot.configRef.version,description:bot.description,tools:id==='todo'?parentTools:childTools,resources:id==='todo'?[]:['mock:personal']})}
+ // "Bot 协作" group open = every collaboration write is agreed up front (the permission simplification).
+ await s.switchGroup('todo', { groupId: 'collaboration', mode: 'allow', requestId: 'issues04-collaboration-group' })
  const {addRule,PolicyRules}=await import('../policy.mjs'),{BACKGROUND_CONTEXT}=await import('@earendil-works/chord/context')
  await s.harness.commit(async tx=>{const match={tool:'calendar_reschedule_event'};if(!(await tx.doc(PolicyRules)).items.some(r=>r.botId==='calendar'&&r.effect==='ask'&&r.match.tool===match.tool))await addRule(tx,{botId:'calendar',match,effect:'ask'})},BACKGROUND_CONTEXT)
 }
