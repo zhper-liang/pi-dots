@@ -1,6 +1,4 @@
 import { useState } from 'react'
-import BotAvatar from './BotAvatar'
-import { loadLook } from './botLook'
 import { AutoAppliedCard } from './AutomationControls'
 import SystemCard from './SystemCard'
 import { ALWAYS_WARNING, cardActions, mirrorCard } from './system-cards.mjs'
@@ -37,16 +35,4 @@ export function MirrorCard({ token, item, onOpenTask }: { token: string; item: M
     {/* D-20: a "帮我想办法" result is shown right on its finished card; the task holds the full text. */}
     {item.mirrorKind === 'finished' && item.result ? <p className="system-card-result">{item.result}</p> : null}
   </SystemCard>
-}
-
-export function BotSessions({ bots, mainSessions, selectedId, onOpen }: { bots: { id: string; name: string; status?: string }[]; mainSessions: Record<string, number>; selectedId: number | null; onOpen: (taskId: number, botId: string) => void }) {
-  const rows = bots.filter(b => mainSessions[b.id] !== undefined)
-  if (!rows.length) return null
-  return <section className="shell-section" aria-labelledby="side-mains">
-    <div className="shell-section-head"><h2 id="side-mains">Bot</h2></div>
-    <nav aria-label="Bot 主会话" className="shell-task-list">{rows.map(bot => <button type="button" key={bot.id} className={`task-link ${selectedId === mainSessions[bot.id] ? 'selected' : ''}`} aria-current={selectedId === mainSessions[bot.id] ? 'page' : undefined} onClick={() => onOpen(mainSessions[bot.id], bot.id)}>
-      <BotAvatar name={bot.name} look={loadLook(bot.id)} size={22} />
-      <span className="task-link-text"><strong>{bot.name}</strong><span>{bot.status === 'inactive' ? '已停用 · 只读' : '主会话'}</span></span>
-    </button>)}</nav>
-  </section>
 }

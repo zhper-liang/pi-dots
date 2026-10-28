@@ -1,16 +1,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { workspaceViews, nextWorkspaceView } from '../src/workspace-navigation.mjs'
+import { workspaceViews, itemTabs, nextItemTab, nextTab } from '../src/workspace-navigation.mjs'
 import { createWorkspaceRequestGuard } from '../src/workspace-request-guard.mjs'
 
-test('10 workspace navigation has distinct business surfaces and wraps keyboard focus without effects', () => {
-  assert.deepEqual(workspaceViews.map(v => v.id), ['today', 'calendar', 'todos', 'inbox', 'automation', 'settings', 'chats'])
-  assert.equal(nextWorkspaceView('today', 'ArrowLeft'), 'chats')
-  assert.equal(nextWorkspaceView('chats', 'ArrowRight'), 'today')
-  assert.equal(nextWorkspaceView('automation', 'Home'), 'today')
-  assert.equal(nextWorkspaceView('today', 'End'), 'chats')
-  assert.equal(nextWorkspaceView('calendar', 'Enter'), 'calendar')
-  assert.equal(new Set(workspaceViews.map(v => v.label)).size, 7)
+test('10 shell has distinct destinations; 事项 sub-tabs wrap keyboard focus without effects (T03)', () => {
+  assert.deepEqual(workspaceViews.map(v => v.id), ['home', 'chats', 'items', 'inbox', 'settings'])
+  assert.equal(new Set(workspaceViews.map(v => v.label)).size, workspaceViews.length)
+  assert.deepEqual(itemTabs.map(t => t.id), ['today', 'calendar', 'todos', 'automation'])
+  assert.equal(nextItemTab('today', 'ArrowLeft'), 'automation')
+  assert.equal(nextItemTab('automation', 'ArrowRight'), 'today')
+  assert.equal(nextItemTab('todos', 'Home'), 'today')
+  assert.equal(nextItemTab('today', 'End'), 'automation')
+  assert.equal(nextItemTab('calendar', 'Enter'), 'calendar')
+  assert.equal(nextTab(['a', 'b'], 'missing', 'ArrowRight'), 'b')
 })
 test('10 late external response is rejected after permission epoch or read-scope change', () => {
   const guard = createWorkspaceRequestGuard()
