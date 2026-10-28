@@ -397,6 +397,6 @@ pidot/
 - 外部连接器只有当前飞书应用日历；没有邮件或外部待办。普通事件之外的邀请、会议室、重复/例外、全天写不支持。
 - 外部 unknown 必须保留并核查，不能盲重试；本地撤销有版本条件，外部写入不可撤销。
 - 对话摘要与上下文压缩已实现，但不等于完整长期记忆产品。
-- 部分旧专题正文仍含“八页导航”“能力池/档位/Task 权限快照”“主会话只读”“所有 prepare 都必须人工确认”等描述。当前界面以 `workspace-navigation.mjs` 的七个视图为准：今天、日历、待办、收件箱、自动化、设置、任务；当前权限以 `policy.mjs`、`tool-group-settings.mjs`、`workspace-mcp-business.mjs` 及 ADR-014、ADR-015 为准。历史方案和历史测试数字不能当成当前重新验收结果。
+- 部分旧专题正文仍含“八页导航”“能力池/档位/Task 权限快照”“主会话只读”“所有 prepare 都必须人工确认”等描述。当前界面以 `workspace-navigation.mjs` 为准（2026-10-29 T03）：首页是 Chief 主会话，左栏分会话 / 机器人，底部是事项（今天、日历、待办、自动化四个子标签）、通知、设置；当前权限以 `policy.mjs`、`tool-group-settings.mjs`、`workspace-mcp-business.mjs` 及 ADR-014、ADR-015 为准。历史方案和历史测试数字不能当成当前重新验收结果。
 
 继续查阅：[功能范围](product/mvp-scope.md)、[Agent 专题](architecture/agent-runtime.md)、[HTTP 契约](interfaces/http-api.md)、[运行手册](engineering/operations.md)。本文依据源码与现有测试用例梳理，没有启动真实模型、修改正式数据库或执行飞书写入，也未重新运行业务测试。
