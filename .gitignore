@@ -6,6 +6,8 @@ dist/
 # 运行数据与凭证（仓库只保留 .env.example）
 .env
 .env.local
+model-settings.json
+.model-settings-*.tmp
 data/
 *.sqlite
 *.sqlite-wal

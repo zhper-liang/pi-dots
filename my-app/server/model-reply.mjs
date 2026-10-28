@@ -16,7 +16,7 @@ export const MODEL_ERRORS = Object.freeze({
   MODEL_TIMEOUT: '模型请求超时，请稍后发送新消息重试。',
   MODEL_RATE_LIMITED: '模型服务限流，请稍后重试。',
   MODEL_UNAVAILABLE: '模型服务暂不可用，请稍后重试。',
-  MODEL_REJECTED: '模型服务拒绝请求，请检查服务端模型和参数配置。',
+  MODEL_REJECTED: '模型服务拒绝请求，请检查此 Task 的固定模型名是否在当前服务商可用及参数配置；不会自动换模型。',
   MODEL_OUTPUT_LIMIT: '模型达到单次输出 Token 上限，本次生成未完成；已保存可获得的实际用量，不会自动重试。',
   MODEL_INVALID_REPLY: '模型未返回完整文本回复，本次执行失败。',
   MODEL_CONFIG_UNAVAILABLE: '此 Task 的固定模型配置当前不可用；不会切换模型或返回测试回复。',
@@ -27,41 +27,56 @@ export class ModelReplyError extends Error {
   constructor(code) { super(MODEL_ERRORS[code] ?? MODEL_ERRORS.MODEL_FAILED); this.code = Object.hasOwn(MODEL_ERRORS, code) ? code : 'MODEL_FAILED' }
 }
 
-/** Read credentials only on the server. Explicit environment wins over root .env. */
-export async function readModelConfig({ env = process.env, file = new URL('../../.env', import.meta.url) } = {}) {
-  if (env.PIDOT_REPLY_MODE === 'test') return undefined
-  if (env.PIDOT_REPLY_MODE !== undefined && env.PIDOT_REPLY_MODE !== 'model') throw new Error('PIDOT_REPLY_MODE 仅支持 model 或 test。')
-  let saved = {}
-  try { saved = parseEnv(await readFile(file, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
-  const get = (...names) => names.map((name) => env[name]).find((value) => value !== undefined)
-    ?? names.map((name) => saved[name]).find((value) => value !== undefined)
-  const baseUrl = get('OPENAI_BASE_URL', 'base_url')
-  const apiKey = get('OPENAI_API_KEY')
-  const model = get('MODEL')
-  if ([baseUrl, apiKey, model].every((value) => value === undefined) && env.PIDOT_REPLY_MODE !== 'model') return undefined
+/** Validate server-owned connection data without including values in errors. */
+export function validateModelConfig({ baseUrl, apiKey, model } = {}) {
   let url
   try { url = new URL(baseUrl) } catch { throw new Error('PIDOT_模型接口地址无效。') }
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash ||
     (url.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) ||
-    typeof apiKey !== 'string' || !apiKey.trim() || /[\r\n]/.test(apiKey) ||
-    typeof model !== 'string' || !/^[\w./:-]{1,200}$/.test(model)) {
+    typeof apiKey !== 'string' || !apiKey.trim() || /[\r\n]/.test(apiKey) || apiKey.length > 8192 ||
+    typeof model !== 'string' || !/^[\w./:-]{1,200}$/.test(model) ||
+    url.href.includes(apiKey) || model.includes(apiKey)) {
     throw new Error('PIDOT_真实模型需配置安全的 base_url、MODEL 和服务端 OPENAI_API_KEY。')
   }
   return { baseUrl: url.href.replace(/\/$/, ''), apiKey, model }
 }
 
+/** Process > app dotenv > root dotenv; partial/invalid configuration fails closed. */
+export async function readModelEnvironment({ env = process.env, file, files = file === undefined
+  ? [new URL('../.env', import.meta.url), new URL('../../.env', import.meta.url)] : [file] } = {}) {
+  if (env.PIDOT_REPLY_MODE === 'test') return { mode: 'test' }
+  const sources = [env]
+  for (const path of files) {
+    try { sources.push(parseEnv(await readFile(path, 'utf8'))) } catch (error) { if (error.code !== 'ENOENT') throw error }
+  }
+  const get = (...names) => sources.flatMap(source => names.map(name => source[name])).find(value => value !== undefined)
+  const mode = get('PIDOT_REPLY_MODE')
+  if (mode === 'test') return { mode }
+  if (mode !== undefined && mode !== 'model') throw new Error('PIDOT_REPLY_MODE 仅支持 model 或 test。')
+  const baseUrl = get('OPENAI_BASE_URL', 'base_url'), apiKey = get('OPENAI_API_KEY'), model = get('MODEL')
+  if ([baseUrl, apiKey, model].every(value => value === undefined) && mode !== 'model') return { mode }
+  return { mode: 'model', config: validateModelConfig({ baseUrl, apiKey, model }) }
+}
+
+export async function readModelConfig(options) { return (await readModelEnvironment(options)).config }
+
 export function modelParameters(config) {
-  return { mode: 'model', model: { provider: 'bb-api', api: 'openai-completions', id: config.model, baseUrl: config.baseUrl },
+  return { mode: 'model', model: { provider: 'openai-compatible', api: 'openai-completions', id: config.model, baseUrl: config.baseUrl },
     thinkingLevel: 'off', maxOutputTokens: 4096, requestTimeoutMs: 60000, tools: [], callLimits: { ...DEFAULT_CALL_LIMITS } }
 }
 
-/** The Task snapshot selects the model. Live config supplies only the matching credential. */
-export function createModelReply(config, { fetch: fetchImpl = globalThis.fetch } = {}) {
+/** The snapshot pins only model.id; resolve the live connection for every invocation. */
+export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fetch } = {}) {
+  const knownKeys = new Set()
+  const redactText = value => [...knownKeys].reduce((text, key) => text.split(key).join('[已隐藏凭证]'), value)
   return async (message, { parameters, signal, context } = {}) => {
-    const model = parameters?.model
-    if (!config || parameters?.mode !== 'model' || model?.provider !== 'bb-api' || model.api !== 'openai-completions' ||
-      model.baseUrl !== config.baseUrl || parameters.thinkingLevel !== 'off' ||
-      typeof model.id !== 'string' || !/^[\w./:-]{1,200}$/.test(model.id) ||
+    let config
+    try { config = typeof readConfig === 'function' ? await readConfig() : readConfig } catch { throw new ModelReplyError('MODEL_CONFIG_UNAVAILABLE') }
+    if (config?.apiKey) knownKeys.add(config.apiKey)
+    const selected = parameters?.model
+    const model = selected && { id: selected.id, provider: 'openai-compatible', api: 'openai-completions', baseUrl: config?.baseUrl }
+    if (!config || parameters?.mode !== 'model' || parameters.thinkingLevel !== 'off' ||
+      typeof model?.id !== 'string' || !/^[\w./:-]{1,200}$/.test(model.id) ||
       !Number.isInteger(parameters.requestTimeoutMs) || parameters.requestTimeoutMs < 1 || parameters.requestTimeoutMs > 600000) {
       throw new ModelReplyError('MODEL_CONFIG_UNAVAILABLE')
     }
@@ -109,7 +124,7 @@ export function createModelReply(config, { fetch: fetchImpl = globalThis.fetch }
         },
         onProviderStreamEvent: (event) => {
           if (Number.isSafeInteger(event.usage?.total_tokens) && event.usage.total_tokens >= 0) usageKnown = true
-          if (typeof event.model === 'string' && /^[\w./:-]{1,200}$/.test(event.model) && !event.model.includes(config.apiKey)) responseModel = event.model
+          if (typeof event.model === 'string' && /^[\w./:-]{1,200}$/.test(event.model) && redactText(event.model) === event.model) responseModel = event.model
         },
       }).result(), deadline])
       if (timedOut) throw new ModelReplyError('MODEL_TIMEOUT')
@@ -131,7 +146,7 @@ export function createModelReply(config, { fetch: fetchImpl = globalThis.fetch }
       if ((!toolTurn && (response.stopReason !== 'stop' || calls.length || !text.trim())) || !sent) {
         throw new ModelReplyError('MODEL_INVALID_REPLY')
       }
-      const redact = (value) => typeof value === 'string' ? value.split(config.apiKey).join('[已隐藏凭证]')
+      const redact = (value) => typeof value === 'string' ? redactText(value)
         : Array.isArray(value) ? value.map(redact) : value && typeof value === 'object'
           ? Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), redact(item)])) : value
       const content = response.content.filter((block) => ['text', 'toolCall'].includes(block.type)).map((block) =>
@@ -139,7 +154,7 @@ export function createModelReply(config, { fetch: fetchImpl = globalThis.fetch }
           name: fromModelTool(redact(block.name)), arguments: redact(block.arguments), ...(block.argumentsError ? { argumentsError: 'INVALID_JSON_OBJECT' } : {}) })
       return { mode: 'model', ...(toolTurn ? { toolCalls: content.filter((block) => block.type === 'toolCall'),
         assistant: { role: 'assistant', content, api: model.api, provider: model.provider, model: model.id,
-          stopReason: 'toolUse', usage, timestamp: Date.now() } } : {}), reply: { role: 'assistant', content: text.split(config.apiKey).join('[已隐藏凭证]') },
+          stopReason: 'toolUse', usage, timestamp: Date.now() } } : {}), reply: { role: 'assistant', content: redactText(text) },
         execution: { ...sent, ...(responseModel ? { responseModel } : {}), finishReason: response.stopReason, usage } }
     } catch (error) {
       if (timedOut) throw new ModelReplyError('MODEL_TIMEOUT')

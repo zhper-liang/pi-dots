@@ -4,7 +4,7 @@ import { createApiServer } from './app.mjs'
 import { readConfig, readExecutionDefaults } from './config.mjs'
 import { openTaskStore } from './tasks.mjs'
 import { listBots } from './bots.mjs'
-import { readModelConfig, createModelReply } from './model-reply.mjs'
+import { createModelSettings } from './model-settings.mjs'
 
 let tasks
 try {
@@ -13,8 +13,9 @@ try {
   const file = process.env.PIDOT_DB_PATH
     ? resolve(process.env.PIDOT_DB_PATH)
     : fileURLToPath(new URL('../data/pidot.sqlite', import.meta.url))
-  const modelConfig = await readModelConfig()
-  tasks = await openTaskStore({ file, workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelReply: createModelReply(modelConfig), detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
+  const modelSettings = createModelSettings({ file })
+  const modelConfig = await modelSettings.read()
+  tasks = await openTaskStore({ file, workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
   const server = createApiServer({
     token: config.token, tasks, onError: console.error,
     staticDir: fileURLToPath(new URL('../dist/', import.meta.url)),

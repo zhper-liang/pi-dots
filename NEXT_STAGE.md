@@ -1,6 +1,6 @@
 # 当前状态与授权边界
 
-更新：2026-10-25（Asia/Tokyo）。接手前读这一页，再读 [plans](plans/README.md)。
+更新：2026-10-29（Asia/Shanghai）。接手前读这一页，再读 [plans](plans/README.md)。
 
 ## 一句话状态
 
@@ -11,6 +11,12 @@
 | 计划 | 状态 | 下一步 |
 |---|---|---|
 | [权限简化](plans/active/permission-simplify/README.md) | S1–S5 完成：941/941 全量、lint、build、1440/375 双宽度真实操作通过；ADR-014 已写 | 等用户验收 |
+
+## 本次独立授权：T02 模型连接实时生效
+
+用户已授权并完成 T02 后端：逐调用读取模型地址/key、同库目录 0600 设置文件、认证 `GET/POST /api/settings/model`；旧 Task 模型名及既有 Bot 版本不变，无配置启动后保存可使新 Task 使用真实模型。说明见 [运行手册](my-app/README.md) 与 [ADR-015](docs/decisions/README.md#adr-015-模型连接实时读取与独立凭证文件)。
+
+自测：950/950、lint（7 条既有警告）、build 通过；临时库/一次性 token 的 curl loopback 模型链路含热更新、凭证隔离及重启恢复通过。未访问真实供应商/正式数据库；本票无前端改动，未做双尺寸网页验收。后续票未在本次推进，T02 待用户验收。
 
 ## 已完成待验收
 

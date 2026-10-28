@@ -26,15 +26,19 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 | `PIDOT_API_TOKEN` | 必填，32–256 位无空白 ASCII 字符。服务端配置；网页手动输入后仅保存在当前标签页 sessionStorage，断开即清除；不能加 `VITE_` 前缀。 |
 | `PIDOT_API_PORT` | 可选，默认 `3001`，范围 `1–65535`。 |
 | `PIDOT_DB_PATH` | 可选 SQLite 文件路径；默认 `my-app/data/pidot.sqlite`，不随启动 cwd 改变。相对自定义路径按 cwd 解析。 |
-| `PIDOT_REPLY_MODE` | 可选 `model` / `test`。有完整模型配置时为新 Task 启用真实模型；完全无配置时为测试。`model` 强制要求配置完整；`test` 不读取根模型文件，适用于离线测试。旧 Task 始终使用自己的模式。 |
-| `OPENAI_BASE_URL` / `base_url` | 服务端模型地址，前者优先。当前确认 `https://www.bb-api.com/v1`。不接受带用户名、密码、查询串或片段的地址；远程必须 HTTPS，本地测试可用 loopback HTTP。 |
-| `MODEL` | 服务端新 Task 默认模型，当前确认 `deepseek-v4.1-flash`；改变默认值不会修改旧 Task。 |
+| `PIDOT_REPLY_MODE` | 可选 `model` / `test`。有完整模型配置时为新 Task 启用真实模型；完全无配置时为测试。`model` 强制要求配置完整；`test` 禁用真实模型并拒绝模型设置保存，适用于离线测试。旧 Task 始终使用自己的模式。 |
+| `OPENAI_BASE_URL` / `base_url` | 服务端模型地址，前者优先。每次模型调用重新读取，修改地址无需迁移旧 Task。不接受带用户名、密码、查询串或片段的地址；远程必须 HTTPS，本地测试可用 loopback HTTP。 |
+| `MODEL` | 初次初始化/启用模型时的默认模型；既有 Bot 和 Task 的模型名保持固定，后续通过 Bot 配置显式选择。 |
 | `OPENAI_API_KEY` | 仅服务端调用使用，不进入网页、Document、conversation 或请求 messages。不可用作本地访问 token。 |
 | `PIDOT_DEFAULT_MODEL_CALLS` / `PIDOT_DEFAULT_TOOL_CALLS` | 每 Task 默认调用上限，默认 `20` / `10`；仅作用于新 Task。 |
 | `PIDOT_DEFAULT_TOTAL_TOKENS` | 可选 Token 阈值，非负安全整数；仅作用于新 Task。 |
 | `PIDOT_MAX_OUTPUT_TOKENS` | 单次输出上限，默认 `4096`，范围 `1–32768`；创建时可经 `parameters.maxOutputTokens` 覆盖。 |
 
-本地 API 配置由启动命令读取 `my-app/.env`，已有进程环境变量优先。模型配置由服务端读取项目根 `../.env`；显式进程变量或 `my-app/.env` 同名/别名变量优先于根文件。根文件沿用 `base_url`、`OPENAI_API_KEY`、`MODEL`，权限 `0600`。不要给模型凭证加 `VITE_` 前缀。完全无模型配置才允许默认测试；部分或无效配置启动失败，不伪装成测试成功。
+本地 API 配置由启动命令读取 `my-app/.env`，已有进程环境变量优先。模型连接在每次调用时重新读取，优先级为 **进程环境 > `my-app/.env` > 项目根 `../.env` > 数据库同目录的 `model-settings.json`**（同层 `OPENAI_BASE_URL` 优先于 `base_url`）。环境配置支持逐字段合并，但不与 JSON 凭证混用：部分或无效环境配置失败关闭，不回退测试模式。启动命令已加载到进程的变量优先级最高；要热改 dotenv，不能同时让同名启动环境变量覆盖它。`PIDOT_REPLY_MODE=test` 显式隔离真实模型与设置保存。不要给模型凭证加 `VITE_` 前缀。
+
+模型设置后端接口为 `GET /api/settings/model` / `POST /api/settings/model`，均需本地 API token。GET 仅返回 `{baseUrl, model, hasKey, source}`，source 为 `env` / `file` / `none`，永不回传 key。POST 接受 `{requestId, baseUrl, model, apiKey?}`；key 省略或空白时保留已有值，首次保存必须提供 key；同一进程内 requestId 幂等且不同内容冲突，重启后相同保存仍可安全重放。完整环境配置存在时返回 409 `MODEL_SETTINGS_ENV_LOCKED`，不能从界面覆盖。
+
+`model-settings.json` 原子替换并保持 `0600`，仅服务端存明文 key，不进 SQLite/Document/聊天/日志/版本控制；目录应仅当前用户可访问，备份时按凭证处理。Task 只固定模型名，旧快照里的 provider/地址兼容忽略；改连接或 key 不改变任何 Bot 版本、不要求 Task 迁移，新服务商没有旧模型时返回 `MODEL_REJECTED`，不会自动换模型。无模型启动后保存配置，新 Task 无需重启即可使用真实模型；已有测试 Task 保持测试模式。此票提供后端，设置页表单另票实现。
 
 ## 启动与停止
 

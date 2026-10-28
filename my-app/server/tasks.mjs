@@ -1,3 +1,4 @@
+import { createModelSettings } from './model-settings.mjs'
 import { createAgentWorkflows } from './workspace-agent-workflows.mjs'
 import { createWorkspaceReminders } from './workspace-reminders.mjs'
 import { createWorkspaceScheduler } from './workspace-schedule.mjs'
@@ -54,7 +55,7 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { createRegistry, defineDoc, defineTask, Harness } from '@earendil-works/pi-durable'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createTestReply } from './test-reply.mjs'
-import { createModelReply, ModelReplyError, MODEL_ERRORS } from './model-reply.mjs'
+import { createModelReply, modelParameters, ModelReplyError, MODEL_ERRORS } from './model-reply.mjs'
 import { listBots } from './bots.mjs'
 import { migrationApi } from './task-migration.mjs'
 import { configurationApi, initializeConfiguration, createConfiguredBot } from './bot-configuration.mjs'
@@ -842,10 +843,14 @@ async function appendToolReceipt(tx, request, result, afterCancellation = false)
 }
 
 /** Test hooks stay in-process; never exposed as HTTP parameters. */
-export async function openTaskStore({ file, bots = listBots(), beforeCommit, reply = createTestReply, modelReply = createModelReply(),
+export async function openTaskStore({ file, bots = listBots(), beforeCommit, reply = createTestReply, modelReply, modelSettings, readModelSettings = modelSettings?.read,
   toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, feishuClient = createFeishuClient() } = {}) {
   if (!file) throw new Error('Task storage file is required')
   bots = structuredClone(bots)
+  // Embedded/test stores remain isolated from user env files unless explicitly wired.
+  modelSettings ??= createModelSettings({ file, env: {}, envFiles: [] })
+  readModelSettings ??= modelSettings.read
+  modelReply ??= createModelReply(readModelSettings)
   const configuredModels = [...new Map(bots.filter((b) => b.defaults.mode === 'model').map((b) => [JSON.stringify(b.defaults.model), b.defaults.model])).values()]
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const storage = await openNodeSqliteStorage(file)
@@ -1007,6 +1012,29 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       return JSON.parse(JSON.stringify(directory.items))
     }, context)
     bots.splice(0, bots.length, ...persisted)
+    // Keep persisted versions authoritative: changing the seed hash must not migrate old Tasks.
+    // Only test -> model is a semantic defaults change, and never rewrites existing Task cards.
+    async function refreshModelSettings(tx) {
+      if (!readModelSettings) return
+      const config = await readModelSettings()
+      if (!config) return
+      const directory = await tx.doc(BotDirectory)
+      initializeConfiguration(directory, await tx.doc(ToolAccess))
+      const model = modelParameters(config).model
+      for (const bot of directory.items) {
+        if (bot.defaults.mode !== 'test') continue
+        const history = directory.configurations[bot.id]
+        const defaults = { ...modelParameters(config), ...bot.defaults, mode: 'model', model: structuredClone(model) }
+        defaults.requestTimeoutMs ??= 60000
+        defaults.maxOutputTokens ??= 4096
+        bot.defaults = defaults
+        bot.configRef = { botId: bot.id, version: `config-${history.length + 1}-${payloadHash(['model-enabled', bot.configRef.version, model.id]).slice(0, 12)}` }
+        history.push({ ...JSON.parse(JSON.stringify(bot)), source: 'model-settings-enabled', savedAt: new Date().toISOString() })
+      }
+      const models = [model, ...directory.items.filter(bot => bot.defaults.mode === 'model').map(bot => bot.defaults.model)]
+      configuredModels.splice(0, configuredModels.length, ...new Map(models.map(item => [item.id, JSON.parse(JSON.stringify(item))])).values())
+    }
+    await harness.commit(refreshModelSettings, context)
     // ADR-012: one-time move of tiers/allowRules into the rule table (idempotent).
     const catalog = bots
     async function syncManagedCatalog() {
@@ -1020,6 +1048,8 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         }
       }, context)
     }
+
+    await syncManagedCatalog()
 
     // The shared simulated calendar commits independently from Task receipts,
     // reproducing an external effect boundary without a real calendar service.
@@ -1307,9 +1337,9 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       }, context)
     }
 
-    createTask = (tx, input, creationConversationId, forkSource) => createChatTask(tx, input, { ChatTask, TaskCard, ChatInput, ChatQueue, configuredModels, beforeCommit, creationConversationId, forkSource })
+    createTask = async (tx, input, creationConversationId, forkSource) => { await refreshModelSettings(tx); return createChatTask(tx, input, { ChatTask, TaskCard, ChatInput, ChatQueue, configuredModels, beforeCommit, creationConversationId, forkSource }) }
     // PLAN §8.1: main sessions are infrastructure, not user-created Tasks (no beforeCommit hook).
-    mainDeps = { TaskCard, rootConversationId: root.id, createTask: (tx, input, creationConversationId) => createChatTask(tx, input, { ChatTask, TaskCard, ChatInput, ChatQueue, configuredModels, creationConversationId }) }
+    mainDeps = { TaskCard, rootConversationId: root.id, createTask: async (tx, input, creationConversationId) => { await refreshModelSettings(tx); return createChatTask(tx, input, { ChatTask, TaskCard, ChatInput, ChatQueue, configuredModels, creationConversationId }) } }
     mainService = mainSessionService({ TaskCard, ChatInput, createTask: (...args) => createTask(...args) })
     // PLAN §8.2: the detector reads structured records as the owner; never chat text or a model (I-07).
     async function gatherDetection(at) {
@@ -1356,7 +1386,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     }
     // PLAN §8.7 / D-19: Chief can read local to-dos and calendar when it has list/get on workspace:local
     // using the current Bot assignment.
-    const configuration = configurationApi({ harness, context, catalog, models: configuredModels })
+    const configuration = configurationApi({ harness, context, catalog, models: configuredModels, refreshModels: refreshModelSettings })
     async function chiefReadStatus(tx) {
       const access = await tx.doc(ToolAccess), assigned = access.assignments?.chief ?? { tools: [], resources: [] }
       const enabled = ASSIST_READ_TOOLS.every(n => assigned.tools.includes(n) && !access.revoked.chief?.includes(n)) && assigned.resources.includes('workspace:local')
@@ -1560,6 +1590,13 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     if (detectorWorker && detectorOptions.autoStart) detectorWorker.start()
 
     return {
+      getModelSettings: () => modelSettings.get(),
+      async saveModelSettings(input) {
+        const result = await modelSettings.save(input)
+        await harness.commit(refreshModelSettings, context)
+        await syncManagedCatalog()
+        return result
+      },
       workspaceScheduler,
       workspaceReminders: Object.fromEntries(['manage', 'list', 'read'].map(name => [name, input => workspaceReminders[name](workspaceAuthority.user(), input)])),
       workspaceSchedules: Object.fromEntries(['manage', 'list', 'testRun'].map(name => [name, input => workspaceScheduler[name](workspaceAuthority.user(), input)])),
@@ -1677,6 +1714,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       async createBot(input) {
         const parsed = parseBotCreation(input)
         const result = await harness.commit(async (tx) => {
+          await refreshModelSettings(tx)
           const created = await createConfiguredBot(tx, parsed, configuredModels)
           // PLAN §8.6 (T6-04): the page opens this main session right after creation; replays return the same one.
           const mainTaskId = created.created ? await ensureMainSession(tx, created.bot.id, mainDeps) : await mainSessionFor(tx, created.bot.id)

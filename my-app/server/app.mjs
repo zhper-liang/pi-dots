@@ -112,6 +112,11 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         })
         return
       }
+      if (tasks && req.url === '/api/settings/model') {
+        if (req.method === 'GET') { req.resume(); sendJson(res, 200, { data: await tasks.getModelSettings() }); return }
+        if (req.method === 'POST') { sendJson(res, 200, { data: await tasks.saveModelSettings(await readJson(req)) }); return }
+        req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET 与 POST。' } }, { Allow: 'GET, POST' }); return
+      }
       if (tasks && req.url === '/api/inbox') {
         if (req.method !== 'GET') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET。' } }, { Allow: 'GET' }); return }
         req.resume(); sendJson(res, 200, { data: await tasks.inbox() }); return

@@ -25,7 +25,7 @@ export async function createChatTask(tx, input, { ChatTask, TaskCard, ChatInput,
   const directory = await tx.doc(BotDirectory), access = await tx.doc(ToolAccess)
   const { bot, title, parameters, state } = parseInput(input, JSON.parse(JSON.stringify(directory.items)))
   await assertBotActive(tx, bot.id)
-  if (input.parameters?.model && parameters.mode === 'model' && !configuredModels.some((m) => JSON.stringify(m) === JSON.stringify(parameters.model))) throw new TaskInputError(400, 'MODEL_NOT_CONFIGURED', '仅可选择服务端已配置模型。')
+  if (input.parameters?.model && parameters.mode === 'model' && !configuredModels.some((m) => m.id === parameters.model.id)) throw new TaskInputError(400, 'MODEL_NOT_CONFIGURED', '仅可选择服务端已配置模型。')
   parameters.tools = [...access.assignments[bot.id].tools]
   parameters.toolResources = [...access.assignments[bot.id].resources]
   const taskId = await tx.createTask(ChatTask, { botId: bot.id }, { ownership: { kind: 'conversation' }, ...(creationConversationId === undefined ? {} : { conversationId: creationConversationId, forkSource }) })

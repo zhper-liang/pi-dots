@@ -130,11 +130,10 @@ test('network faults, invalid SSE, empty output and incomplete finish do not fab
   }
 })
 
-test('missing credentials, unknown thinking or a changed endpoint fails closed instead of using test/model fallback', async () => {
+test('missing credentials or invalid parameters fail closed instead of using test/model fallback', async () => {
   let calls = 0
   const reply = createModelReply(config, { fetch: async () => { calls++; return sse() } })
   for (const p of [{ ...parameters, thinkingLevel: 'high' }, { ...parameters, requestTimeoutMs: 0 },
-    { ...parameters, model: { ...parameters.model, baseUrl: 'https://other.example/v1' } },
     { ...parameters, model: { ...parameters.model, id: '../bad?model' } }]) {
     await assert.rejects(reply('input', { parameters: p }), (error) => error.code === 'MODEL_CONFIG_UNAVAILABLE')
   }
@@ -147,7 +146,7 @@ test('model preset version fingerprints non-secret settings, not credentials', (
   assert.equal(JSON.stringify(before).includes(secret), false)
   assert.equal(listBots({ ...config, apiKey: 'rotated' })[0].configRef.version, before.configRef.version)
   assert.notEqual(listBots({ ...config, model: 'other' })[0].configRef.version, before.configRef.version)
-  assert.notEqual(listBots({ ...config, baseUrl: 'https://other.example/v1' })[0].configRef.version, before.configRef.version)
+  assert.equal(listBots({ ...config, baseUrl: 'https://other.example/v1' })[0].configRef.version, before.configRef.version)
 })
 
 test('native model Task stores replies and actual parameters, reopens with fixed model and excludes secrets from all records', async (t) => {

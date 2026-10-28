@@ -45,3 +45,19 @@ Bot 页勾选结果就是所有 Task 的实时能力，默认只有删除先问�
 引入多用户、远程访问或改变来源信任边界前须另记决策；不能把本机单 owner 的默认值直接推广到多租户。
 
 实现依据：[运行架构](../architecture/agent-runtime.md)、[工作区架构](../architecture/unified-workspace-v2.md)、[接口](../interfaces/README.md)。原始讨论与历史基线见 [已完成计划](../../plans/README.md)，本表不把未交付候选方向记录为已采纳能力。
+
+
+## ADR-015 模型连接实时读取与独立凭证文件
+
+采纳日期：2026-10-29（Asia/Shanghai）。实施范围：T02 后端连接与设置存储，不包含设置页表单。
+
+### 决策
+- Task 只用固定 `model.id` 选模型；每次调用重新读取当前 base URL 和 key，忽略旧快照的 `provider: bb-api` 和 baseUrl。新描述符使用 `openai-compatible`，不把某家服务商名当授权条件。
+- 环境优先级为进程、`my-app/.env`、根 `.env`，再用与数据库同目录的 `model-settings.json`；部分/无效环境配置失败关闭。显式 test 模式不调用模型、不允许启用真实模型。
+- JSON 以权限 0600 的临时文件写入并原子替换，明文 key 仅在服务端文件和请求中使用；不进入 SQLite、Harness Document、响应、日志和聊天。API 只返回 hasKey，key 空白保留已有值，环境配置生效时拒绝界面覆盖。
+- 新 Bot seed 版本哈希不含连接地址/凭证；已有 Bot 目录及版本不重算，因此旧 Task 不会因 seed 哈希切换出现无关迁移提示。无模型启动后首次保存允许新 Task 使用真实模型；已有 Task 不改模式和模型名。
+
+### 原因与代价
+更换服务商地址或轮换 key 是连接运维，不是修改任务身份；不应要求每个历史任务迁移。旧模型在新连接不存在时明确 `MODEL_REJECTED`，不自动替换、不重试业务副作用。保留本机单 owner 边界；明文文件需受主机权限及备份纪律保护，不等同于系统密钥链。保存幂等摘要仅在进程内保留，不把原请求或 key 复制到持久审计；重启后相同保存仍是安全覆盖。
+
+实现：[模型连接](../../my-app/server/model-reply.mjs)、[设置文件](../../my-app/server/model-settings.mjs)、[API](../interfaces/http-api.md)。若引入多服务商路由、远程多租户或系统密钥链，须另记 ADR。

@@ -50,7 +50,7 @@ export function migrationApi({ harness, context, TaskCard, ChatInput, ChatQueue,
       } else sources[key] = { type: 'configuration-migration', configRef: copy(bot.configRef) }
     }
     // A model override never carries guessed capacity or a new provider into the target.
-    if (parameters.mode !== card.parameters.mode || parameters.mode === 'model' && !models.some((m) => hash(m) === hash(parameters.model))) fail(409, 'MIGRATION_MODEL_UNAVAILABLE', '目标模式或模型未获服务端配置；不能静默切换或丢弃用户覆盖。')
+    if (parameters.mode !== card.parameters.mode || parameters.mode === 'model' && !models.some((m) => m.id === parameters.model.id)) fail(409, 'MIGRATION_MODEL_UNAVAILABLE', '目标模式或模型未获服务端配置；不能静默切换或丢弃用户覆盖。')
     Object.assign(next, { bot: { id: bot.id, name: bot.name, description: bot.description }, configRef: copy(bot.configRef), parameters,
       parameterSources: sources })
     next.workspaceUsedResources = workspaceUsedResources(card)

@@ -54,7 +54,7 @@ export async function changeConfiguration(tx, botId, input, { models }) {
       const availableTools = names(), availableResources = [...supportedResources, ...((await tx.doc(FeishuCalendar)).binding ? [(await tx.doc(FeishuCalendar)).binding.resource, `workspace:feishu:${hash([(await tx.doc(FeishuCalendar)).binding.connectionId, (await tx.doc(FeishuCalendar)).binding.calendarId])}`] : [])]
       if (typeof input.description !== 'string' || !input.description.trim() || input.description.length > 2000 || !subset(input.tools, availableTools) || !subset(input.resources, availableResources)) fail(400, 'CAPABILITY_NOT_GRANTED', '职责无效或工具/资源不可用。')
       const defaults = taskParameters(input.parameters, copy(bot.defaults))
-      if (defaults.mode === 'model' && !models.some((m) => m.id === defaults.model.id && m.provider === defaults.model.provider && m.baseUrl === defaults.model.baseUrl && m.api === defaults.model.api)) fail(400, 'MODEL_NOT_CONFIGURED', '仅可选择服务端已配置的模型。')
+      if (defaults.mode === 'model' && !models.some((m) => m.id === defaults.model.id)) fail(400, 'MODEL_NOT_CONFIGURED', '仅可选择服务端已配置的模型。')
       defaults.tools = [...input.tools]; defaults.toolResources = [...input.resources]
       const history = d.configurations[botId]
       const next = { ...copy(bot), description: input.description.trim(), defaults,
@@ -73,7 +73,7 @@ export async function changeConfiguration(tx, botId, input, { models }) {
     return { error: { status: e.status, code: e.code, message: e.message } }
   }
 }
-export function configurationApi({ harness, context, catalog, models }) {
+export function configurationApi({ harness, context, catalog, models, refreshModels = async () => {} }) {
   const syncedRevisions = new Map()
   const sync = ({ bot, versions }) => {
     if ((syncedRevisions.get(bot.id) ?? 0) >= versions.length) return
@@ -82,6 +82,7 @@ export function configurationApi({ harness, context, catalog, models }) {
   }
   async function read(botId) {
     return harness.commit(async (tx) => {
+      await refreshModels(tx)
       const d = await tx.doc(BotDirectory), a = await tx.doc(ToolAccess)
       initializeConfiguration(d, a)
       const bot = d.items.find((b) => b.id === botId)
@@ -93,6 +94,7 @@ export function configurationApi({ harness, context, catalog, models }) {
   }
   async function change(botId, input) {
     const result = await harness.commit(async (tx) => {
+      await refreshModels(tx)
       return changeConfiguration(tx, botId, input, { models })
     }, context)
     if (result.error) fail(result.error.status, result.error.code, result.error.message)
@@ -108,7 +110,7 @@ export async function createConfiguredBot(tx, parsed, configuredModels) {
   const directory = copy(liveDirectory)
   const access = await tx.doc(ToolAccess)
   const created = createDirectoryBot(directory, parsed)
-  if (created.created && created.bot.defaults.mode === 'model' && !configuredModels.some((m) => JSON.stringify(m) === JSON.stringify(created.bot.defaults.model))) throw new TaskInputError(400, 'MODEL_NOT_CONFIGURED', '仅可选择已配置模型。')
+  if (created.created && created.bot.defaults.mode === 'model' && !configuredModels.some((m) => m.id === created.bot.defaults.model.id)) throw new TaskInputError(400, 'MODEL_NOT_CONFIGURED', '仅可选择已配置模型。')
   if (created.created) {
     // S1/D-15: a new Bot starts with local workspace tools (no pool filtering).
     const local = NEW_BOT_WORKSPACE_TOOLS.filter((n) => !created.bot.defaults.tools.includes(n))

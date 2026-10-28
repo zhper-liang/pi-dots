@@ -20,7 +20,8 @@ const presets = [
 export function listBots(modelConfig, executionDefaults = readExecutionDefaults({})) {
   const defaults = modelConfig ? modelParameters(modelConfig) : { mode: 'test', model: null, thinkingLevel: 'off', tools: [], callLimits: { ...DEFAULT_CALL_LIMITS } }
   Object.assign(defaults, structuredClone(executionDefaults))
-  const version = `${BOT_CONFIG_VERSION}.${createHash('sha256').update(JSON.stringify(defaults)).digest('hex').slice(0, 16)}`
+  const fingerprint = { ...defaults, ...(defaults.model ? { model: { id: defaults.model.id, api: defaults.model.api } } : {}) }
+  const version = `${BOT_CONFIG_VERSION}.${createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex').slice(0, 16)}`
   return presets.map(([id, name, description]) => ({
     id, name, description,
     configRef: { botId: id, version },

@@ -89,6 +89,7 @@ Todo data 允许title、status、due、timezone；创建必须有标题，status
 | 路径 | 方法 | 用途 |
 |---|---|---|
 | `/api/bots` | GET / POST | 列出/创建 Bot；GET 另返回 `mainSessions: {botId: taskId}`（每个 Bot 一个主会话，PLAN §8.1）。主会话是 `kind:'main'` 的 Task，用 `/api/tasks/:taskId` 读写；不出现在 `/api/tasks` 列表。POST 只需 `{name, requestId}`（PLAN §8.6）：`description` 可选（1–2000 字，不填时按名字套固定模板生成，同名同结果，不调模型；空串仍 400），`profile` 默认 `general`；返回 `{bot, created, mainTaskId, inferred:{role, description, template}}`，`mainTaskId` 是新 Bot 的主会话，同一 requestId 重放返回同一个。新 Bot 默认分配本地 `workspace.list/get/prepare_change/operation_status` 与 `workspace:local`（不含 `prepare_schedule`）；默认新建/修改直接做、删除先问，不存在档位或能力池 |
+| `/api/settings/model` | GET / POST | 认证用户模型连接设置；GET 返回 `{baseUrl, model, hasKey, source:'env'\|'file'\|'none'}`（在 `data` 内），永不返回 key；POST `{requestId, baseUrl, model, apiKey?}`，空白/省略 key 保留已有值，初次必填。环境配置生效时 409 `MODEL_SETTINGS_ENV_LOCKED`；非法设置 400 `INVALID_MODEL_SETTINGS`；同进程 requestId 内容冲突 409 `MODEL_SETTINGS_REQUEST_CONFLICT`。连接实时读取、Task 模型名固定，旧地址/provider 字段不参与匹配 |
 | `/api/bots/:botId/configuration` | GET / POST | 查询/更新版本化配置；已安装的非管理工具可勾选，资源包含 supportedResources 与当前飞书绑定资源；工具/资源改动对已有 Task 实时生效 |
 | `/api/bots/:botId/deactivate` | POST | 停用 Bot，保留历史 |
 | `/api/tasks` | GET / POST | 列出/创建持久 Task |
