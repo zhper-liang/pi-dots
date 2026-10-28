@@ -8,6 +8,9 @@ import CollaborationPanel, { type Relation } from './CollaborationPanel'
 import GroupTaskBoard from './GroupTaskBoard'
 import BotCreation from './BotCreation'
 import BotTemplatePage from './BotTemplatePage'
+import BotDirectory from './BotDirectory'
+import { botDetailHash, readBotTab, tasksForBot, type BotTab } from './bot-directory.mjs'
+import './bot-directory.css'
 import TodaySummary, { type Confirmation } from './TodayPage'
 import TaskTimeline from './TaskTimeline'
 import { openApproval, openBlocker } from './system-cards.mjs'
@@ -79,8 +82,9 @@ function savedToken() { try { return sessionStorage.getItem(tokenKey) ?? '' } ca
 function hashTask() { const id = new URLSearchParams(location.hash.slice(1)).get('task'); return id && /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)) ? Number(id) : null }
 function hashBot() { return new URLSearchParams(location.hash.slice(1)).get('bot') }
 function hashNewBot() { return new URLSearchParams(location.hash.slice(1)).has('new-bot') }
+function hashDirectory() { return new URLSearchParams(location.hash.slice(1)).has('bots') }
 function hashNewSession() { return new URLSearchParams(location.hash.slice(1)).has('new') }
-const opensChat = () => hashTask() !== null || hashBot() !== null || hashNewBot() || hashNewSession()
+const opensChat = () => hashTask() !== null || hashBot() !== null || hashNewBot() || hashNewSession() || hashDirectory()
 // Archive is a persisted server flag (POST …/archive): it only hides, never cancels or deletes.
 function confirmReason(task: Task): string | null {
   if (taskCancelled(task) || taskInactive(task)) return null
@@ -192,6 +196,8 @@ function App() {
   const [itemTab, setItemTab] = useState<ItemTab>('today')
   const [newBot, setNewBot] = useState(hashNewBot)
   const [newSession, setNewSession] = useState(hashNewSession)
+  const [directory, setDirectory] = useState(hashDirectory)
+  const [botTab, setBotTab] = useState<BotTab>(() => readBotTab(location.hash))
   const [notice, setNotice] = useState('')
   const [inboxCount, setInboxCount] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -215,7 +221,8 @@ function App() {
   // Home is the Chief main session (T03); the day summary moved to 事项 → 今天.
   const home = view === 'home'
   const chiefMain = mainSessions.chief ?? null
-  const activeId = home ? chiefMain : selectedId
+  const botDetail = view === 'chats' && selectedId === null && !newSession && !newBot && !directory && botId !== 'groups'
+  const activeId = home ? chiefMain : botDetail ? (mainSessions[botId] ?? null) : selectedId
   const detail = loadedDetail?.taskId === activeId ? loadedDetail : null
   const latestMessageId = detail?.messages.at(-1)?.id
   useEffect(() => {
@@ -265,13 +272,14 @@ function App() {
     try { sessionStorage.setItem(tokenKey, value) } catch { /* in-memory access still works */ }
     setError(''); setLoading(true); setToken(value); setDraftToken('')
   }
-  function selectBot(id: string) {
-    if (id === botId && selectedId === null && !newBot && !newSession && view === 'chats') return
+  function selectBot(id: string, tab: BotTab = 'chat') {
+    if (id === botId && botDetail) { changeBotTab(tab); return }
     requestEpoch.current += 1
-    window.history.pushState(null, '', `#bot=${encodeURIComponent(id)}`)
-    setNewBot(false); setNewSession(false); setView('chats'); setPane('chat'); setBotId(id); setSelectedId(null); setDetail(null); setDetailError(''); setError('')
+    window.history.pushState(null, '', botDetailHash(id, tab))
+    setDirectory(false); setBotTab(tab); setNewBot(false); setNewSession(false); setView('chats'); setPane('chat'); setBotId(id); setSelectedId(null); setDetail(null); setDetailError(''); setError('')
   }
   function selectTask(id: number, owner = botId) {
+    setDirectory(false)
     setView('chats'); setNewBot(false); setNewSession(false); setPane('chat')
     if (id === selectedId && owner === botId) return
     requestEpoch.current += 1
@@ -283,7 +291,7 @@ function App() {
     if (next === 'home' && view !== 'home') {
       requestEpoch.current += 1
       if (location.hash) window.history.pushState(null, '', location.pathname + location.search)
-      setSelectedId(null); setNewSession(false); setNewBot(false); setDetailError(''); setPane('chat')
+      setDirectory(false); setSelectedId(null); setNewSession(false); setNewBot(false); setDetailError(''); setPane('chat')
     }
     if (tab) setItemTab(tab)
     setView(next)
@@ -292,13 +300,23 @@ function App() {
   function openNewSession() {
     requestEpoch.current += 1
     window.history.pushState(null, '', '#new')
-    setNewSession(true); setNewBot(false); setView('chats'); setPane('chat'); setSelectedId(null); setDetail(null); setDetailError('')
+    setDirectory(false); setNewSession(true); setNewBot(false); setView('chats'); setPane('chat'); setSelectedId(null); setDetail(null); setDetailError('')
   }
   const ownerOf = (task: Task) => task.kind === 'group' ? 'groups' : task.bot.id
   function openNewBot() {
     requestEpoch.current += 1
     window.history.pushState(null, '', '#new-bot')
-    setNewBot(true); setNewSession(false); setView('chats'); setSelectedId(null); setDetail(null)
+    setDirectory(false); setNewBot(true); setNewSession(false); setView('chats'); setSelectedId(null); setDetail(null)
+  }
+  function openDirectory() {
+    requestEpoch.current += 1
+    window.history.pushState(null, '', '#bots')
+    setDirectory(true); setNewBot(false); setNewSession(false); setView('chats'); setSelectedId(null); setDetail(null); setDetailError('')
+  }
+  function changeBotTab(tab: BotTab) {
+    setBotTab(tab)
+    // Tabs belong to one detail page; Back from an opened Task returns to the same tab.
+    window.history.replaceState(null, '', botDetailHash(botId, tab))
   }
   async function toggleArchive(task: Task) {
     try {
@@ -310,7 +328,7 @@ function App() {
   function reload() { setLoading(true); setDetailError(''); setRefresh((value) => value + 1) }
 
   useEffect(() => {
-    const update = () => { requestEpoch.current += 1; setDetail(null); setDetailError(''); setSelectedId(hashTask()); setBotId(hashBot() ?? 'chief'); setNewBot(hashNewBot()); setNewSession(hashNewSession()); setPane('chat'); if (opensChat()) setView('chats'); else setView(current => current === 'chats' ? 'home' : current); setRefresh(value => value + 1) }
+    const update = () => { requestEpoch.current += 1; setDetail(null); setDetailError(''); setSelectedId(hashTask()); setBotId(hashBot() ?? 'chief'); setNewBot(hashNewBot()); setNewSession(hashNewSession()); setDirectory(hashDirectory()); setBotTab(readBotTab(location.hash)); setPane('chat'); if (opensChat()) setView('chats'); else setView(current => current === 'chats' ? 'home' : current); setRefresh(value => value + 1) }
     window.addEventListener('hashchange', update)
     return () => window.removeEventListener('hashchange', update)
   }, [])
@@ -350,7 +368,7 @@ function App() {
     }
     void load()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [token, botId, activeId, home, refresh])
+  }, [token, botId, activeId, home, botDetail, refresh])
 
   const [thinkingPending, setThinkingPending] = useState<number | null>(null)
   // Per-conversation thinking depth: the main session keeps this for its next inputs.
@@ -503,7 +521,7 @@ function App() {
     } finally { stateSavingRef.current = false; setStateSavingId(null) }
   }
 
-  const botTasks = tasks.filter((task) => botId === 'groups' ? task.kind === 'group' : task.kind !== 'group' && task.bot.id === botId)
+  const botTasks = tasksForBot(tasks, botId)
   const selectedBot = bots.find((bot) => bot.id === botId)
   const status = detail ? taskStatus(detail, sendingId === detail.taskId) : null
   const archived = tasks.filter(t => t.archived).map(t => t.taskId)
@@ -513,10 +531,10 @@ function App() {
   const sidebarSessions: SidebarSession[] = tasks.filter(t => t.kind !== 'main').map(t => ({ id: t.taskId, owner: ownerOf(t), title: t.title, botId: t.bot.id, botName: t.bot.name,
     at: lastActivity(t), confirm: confirmReason(t) !== null, archived: Boolean(t.archived), group: t.kind === 'group', note: sessionNote(t) }))
   const sidebarBots: SidebarBot[] = bots.map(b => ({ id: b.id, name: b.name, inactive: b.status === 'inactive', mainTaskId: mainSessions[b.id] ?? null }))
-  const botPage = view === 'chats' && selectedId === null && !newBot && !newSession ? botId : null
+  const botPage = view === 'chats' && selectedId === null && !newBot && !newSession && !directory ? botId : null
   // The phone top bar names where you are; on desktop the page itself does.
   const mobileTitle = home ? (bots.find(b => b.id === 'chief')?.name ?? 'Chief')
-    : view === 'chats' ? (newSession ? '新建会话' : newBot ? '新建 Bot' : selectedId !== null ? (detail?.title ?? '会话') : botId === 'groups' ? '群聊' : (selectedBot?.name ?? 'Bot'))
+    : view === 'chats' ? (directory ? '机器人' : newSession ? '新建会话' : newBot ? '新建 Bot' : selectedId !== null ? (detail?.title ?? '会话') : botId === 'groups' ? '群聊' : (selectedBot?.name ?? 'Bot'))
     : view === 'items' ? '事项' : view === 'inbox' ? '通知' : '设置'
   async function deactivate(target: Bot) {
     try { const result = await api<{ bot: Bot }>(`/api/bots/${target.id}/deactivate`, token, { method: 'POST', body: JSON.stringify({ confirm: true }) }); setBots(current => current.map(b => b.id === target.id ? result.bot : b)); setRefresh(v => v + 1) } catch (e) { report(e) }
@@ -531,7 +549,7 @@ function App() {
               <span className={`status-badge tone-${status!.tone}`} role="status">{status!.label}</span>
               <div className="shell-filter shell-pane-toggle" role="group" aria-label="会话视图"><button type="button" aria-pressed={pane === 'chat'} onClick={() => setPane('chat')}>对话</button><button type="button" aria-pressed={pane === 'timeline'} onClick={() => setPane('timeline')}>时间线</button></div>
               {detail.kind !== 'main' && <button type="button" className="text-button shell-archive" title="归档只是隐藏，不会取消或删除任务" onClick={() => void toggleArchive(detail)}>{detail.archived ? '取消归档' : '归档'}</button>}
-              {!detail.group && <button type="button" className="text-button" onClick={() => selectBot(detail.bot.id)}>Bot 设置</button>}
+              {!detail.group && <button type="button" className="text-button" onClick={() => selectBot(detail.bot.id, 'settings')}>Bot 设置</button>}
               <button type="button" className="shell-icon-button" aria-label="会话详情" aria-expanded={detailsOpen} aria-controls="chat-details" onClick={() => setDetailsOpen(v => !v)}>ⓘ</button>
             </header>
             <div className="shell-chat-column">
@@ -692,30 +710,31 @@ function App() {
             sidebar={(shell) => <ShellSidebar {...shell} view={view} newSession={newSession} inboxCount={inboxCount ?? confirmations.length}
               sessions={sidebarSessions} bots={sidebarBots} selectedId={selectedId} botPage={botPage}
               onHome={() => goView('home')} onNewSession={openNewSession} onOpenSession={(id, owner) => selectTask(id, owner)}
-              onOpenBot={(bot) => bot.id === 'chief' ? goView('home') : bot.mainTaskId !== null ? selectTask(bot.mainTaskId, bot.id) : selectBot(bot.id)}
-              onBotSettings={selectBot} onNewBot={openNewBot} onNewGroup={() => selectBot('groups')} onView={(next) => goView(next)} />}
+              onOpenBot={(bot) => selectBot(bot.id)} onOpenDirectory={openDirectory}
+              onBotSettings={id => selectBot(id, 'settings')} onNewBot={openNewBot} onNewGroup={() => selectBot('groups')} onView={(next) => goView(next)} />}
             footer={<><span>仅本机 · 本地存储</span> <button type="button" className="text-button" onClick={disconnect}>断开连接</button></>}
             home={chiefMain === null ? <div className="shell-placeholder" role="status"><h2>{loading ? '正在读取…' : '找不到 Chief 主会话'}</h2></div> : home ? chatView : null}
             today={<TodaySummary token={token} active={view === 'items' && itemTab === 'today'} confirmations={confirmations} onOpenTask={id => { const t = tasks.find(x => x.taskId === id); selectTask(id, t ? ownerOf(t) : botId) }}
               onOpenInbox={() => goView('inbox')} onOpenCalendar={() => goView('items', 'calendar')} onOpenTodos={() => goView('items', 'todos')} />}
             inboxSummary={<InboxPage token={token} active={view === 'inbox'} onCount={setInboxCount} onOpenTask={(id, owner) => { const t = tasks.find(x => x.taskId === id); selectTask(id, t ? ownerOf(t) : owner) }} />}>
-          {selectedId === null ? (newSession ? <NewSession key={`new-session:${token}`} bots={bots} busy={creating} onStart={(id, text) => void startSession(id, text)} onGroup={() => selectBot('groups')} />
-            : newBot ? <BotCreation key={`new-bot:${token}`} token={token} onCancel={() => goView('home')} onCreated={(bot, mainTaskId) => {
+          {selectedId === null ? (directory ? <BotDirectory bots={bots} loading={loading} onOpen={selectBot} onCreate={openNewBot} /> : newSession ? <NewSession key={`new-session:${token}`} bots={bots} busy={creating} onStart={(id, text) => void startSession(id, text)} onGroup={() => selectBot('groups')} />
+            : newBot ? <BotCreation key={`new-bot:${token}`} token={token} onCancel={openDirectory} onCreated={(bot, mainTaskId) => {
               setBots((current) => current.some((item) => item.id === bot.id) ? current : [...current, bot])
-              // PLAN §8.6 (T6-04): go straight into the new Bot's main session.
-              if (mainTaskId !== null) { setMainSessions(current => ({ ...current, [bot.id]: mainTaskId })); selectTask(mainTaskId, bot.id) } else selectBot(bot.id)
+              // T06: detail defaults to the existing main conversation, never creates another Task.
+              if (mainTaskId !== null) setMainSessions(current => ({ ...current, [bot.id]: mainTaskId }))
+              selectBot(bot.id)
               reload() }} />
             : botId === 'groups' ? <section className="bot-page" aria-labelledby="groups-title"><h1 id="groups-title">群聊</h1>
               <p className="shell-muted">把几个 Bot 拉到一起，由管理员分派和验收。</p>
               <GroupCreation key={`group:${token}`} bots={bots} token={token} onCreated={(id) => { requestEpoch.current += 1; setBotId('groups'); setSelectedId(id); setDetail(null); window.history.pushState(null, '', `#bot=groups&task=${id}`); reload() }} />
               <ul className="today-list">{groupTasks.map(t => <li key={t.taskId}><button type="button" className="today-link" onClick={() => selectTask(t.taskId, 'groups')}><span>{t.title}</span><span className="shell-muted small">{t.group?.members.map(m => m.name).join('、')}</span></button></li>)}</ul>
             </section>
-            : selectedBot ? <><BotTemplatePage key={`bot:${selectedBot.id}:${token}`} bot={selectedBot} token={token} creating={creating}
+            : selectedBot && !home ? <><BotTemplatePage key={`bot:${selectedBot.id}:${token}`} bot={selectedBot} token={token} creating={creating} tab={botTab} onTab={changeBotTab} onDirectory={openDirectory} mainTaskId={mainSessions[selectedBot.id] ?? null} chat={botDetail ? chatView : null}
                 tasks={botTasks.map(t => ({ taskId: t.taskId, title: t.title, createdAt: t.createdAt, statusLabel: `${archived.includes(t.taskId) ? '已归档 · ' : ''}${taskStatus(t).label.split(' · ')[0]}` }))}
                 onNewTask={() => void create(undefined, selectedBot.id)} onOpenTask={id => selectTask(id, selectedBot.id)}
                 onSaved={(bot) => { setBots((current) => current.map((item) => item.id === bot.id ? { ...item, ...bot } : item)); setRefresh((value) => value + 1) }}
                 onDeactivate={() => void deactivate(selectedBot)} />
-              <details className="shell-more bot-page"><summary>飞书日历（任务工具）</summary><FeishuCalendarPanel token={token} taskId={selectedId} /></details></>
+              <details hidden={botTab !== 'settings'} className="shell-more bot-page"><summary>飞书日历（任务工具）</summary><FeishuCalendarPanel token={token} taskId={mainSessions[selectedBot.id] ?? null} /></details></>
             : <div className="shell-placeholder" role="status"><h2>{loading ? '正在读取…' : '找不到这个 Bot'}</h2></div>)
  : home ? null : chatView}
           </UnifiedWorkspace>

@@ -11,7 +11,7 @@
 | 计划 | 状态 | 下一步 |
 |---|---|---|
 | [权限简化](plans/active/permission-simplify/README.md) | S1–S5 完成：941/941 全量、lint、build、1440/375 双宽度真实操作通过；ADR-014 已写 | 等用户验收；其中「删除默认先问」已由下一行计划的 T01 改为直接执行（ADR-015） |
-| [Bot 工作区与 Hermes 风格统一](plans/active-hermes-workspace-deepseek.md) | 2026-10-28 用户授权。已先做：工具组开关、`/Skill` 门槛、思考深度、多 @ 按序派发与验收后公开。T01/T03/T04 已从 hermes-shell 合并，与 T02 集成后 978/978、lint、build 通过；T03/T04 原分支临时库 1440/375 手测通过（假模型地址的失败为预期）。T01 工具组 ADR-015，T02 模型连接 ADR-016 | T01–T04 已合并待回归；本次授权 T06，T05 在独立分支并行 |
+| [Bot 工作区与 Hermes 风格统一](plans/active-hermes-workspace-deepseek.md) | 2026-10-28 用户授权。已先做：工具组开关、`/Skill` 门槛、思考深度、多 @ 按序派发与验收后公开。T01/T03/T04 已从 hermes-shell 合并，与 T02 集成后 978/978、lint、build 通过；T03/T04 原分支临时库 1440/375 手测通过（假模型地址的失败为预期）。T01 工具组 ADR-015，T02 模型连接 ADR-016 | T01–T04 集成回归通过；T06 已实现并自测 984/984、lint/build、临时库 loopback 1440/375 通过，未验真实供应商；T05 已在独立 codex/t05-responsive-a11y（279ee5f）完成，未合并/推送 |
 
 ## 本次独立授权：T02 模型连接实时生效
 

@@ -28,3 +28,5 @@
 - 对 dispatching/unknown 查询原 requestId，不生成新请求重试副作用。
 
 实现：[协议](../../my-app/server/workspace-mcp-protocol.mjs)、[host](../../my-app/server/workspace-mcp-host.mjs)、[业务](../../my-app/server/workspace-mcp-business.mjs)、[stdio桥](../../my-app/server/workspace-mcp-stdio.mjs)。启动方式与凭证配置见 [工程README](../../my-app/README.md)。
+
+Bot 详情的 MCP 标签复用同一 client-issue/list/revoke 接口，界面固定为当前 Bot 并按 botId 筛选凭证；全局设置入口保留，不增加新协议或权限主体。停用 Bot 不可发放新凭证，已发放凭证可在原入口撤销。

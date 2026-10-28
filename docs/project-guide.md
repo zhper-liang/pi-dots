@@ -297,7 +297,7 @@ flowchart TD
 
 | 功能 | 怎么用 | 简要实现 / 主要代码 |
 |---|---|---|
-| Bot 工具与资源 | 每个 Bot 默认拥有全部工具组；侧栏“Bot 模板”打开 Bot 编辑，只需勾选 `workspace:local` 等资源 | `BotConfiguration.tsx`、`bot-configuration.mjs`；更改从所有已有 Task 的下一次调用起生效 |
+| Bot 工具与资源 | 每个 Bot 默认拥有全部工具组；侧栏「机器人」打开卡片目录，详情「规则」切换工具组、「设置」分配 `workspace:local` 等资源 | `BotConfiguration.tsx`、`bot-configuration.mjs`；更改从所有已有 Task 的下一次调用起生效 |
 | 直接做 / 先问 | 在 Bot 规则中每个工具组一个开关：开 = 组内写入全部直接做（含删除），关 = 全部先问 | `BotRules.tsx`、`tool-group-settings.mjs`、`policy.mjs`；工具和来源许可检查仍先执行 |
 | 审批与补充 | 从输入框上方、主会话镜像卡或收件箱处理；批准前查看精确内容 | `approvals.mjs`、`blockers.mjs`、`SystemCard.tsx`；同一操作身份持久化 |
 | 全局暂停 | 在设置暂停全部自动化；也可让有权限的 Bot 暂停 | `policy.mjs` 把写入 allow 降为 ask，停止例行任务与事件触发；恢复只由用户操作，不补跑 |
@@ -324,14 +324,14 @@ flowchart TD
 | 功能 | 怎么用 | 简要实现 / 主要代码 |
 |---|---|---|
 | 持久定时计划 | “自动化 → 定时任务”配置一次性、每日或固定间隔与时区 | `workspace-schedule-rules.mjs` 计算时点；`workspace-schedule.mjs` 持久去重与派发 |
-| Bot 例行任务 | Bot 页设置提示、频率和是否允许改动（当前表单固定本地来源）；也可在对话里提出；可测试、暂停、恢复或取消 | `BotRoutines.tsx`、`routine_propose`、`workspace-agent-workflows.mjs`；`writes=true` 才开放工作区改动，仍服从当前能力与规则 |
+| Bot 例行任务 | Bot 详情「任务」标签设置提示、频率和是否允许改动（当前表单固定本地来源）；也可在对话里提出；可测试、暂停、恢复或取消 | `BotRoutines.tsx`、`routine_propose`、`workspace-agent-workflows.mjs`；`writes=true` 才开放工作区改动，仍服从当前能力与规则 |
 | 事件触发 | 在 Bot 例行任务中选择待办到期、日程变更或本 Bot 任务结束 | 同一工作流驱动保存事件游标、合并触发，避免由自己的改动无限自触发 |
 | 只读 Agent 简报 | 在自动化页创建固定 Bot、来源、提示和额度的简报 | `workspace-agent-workflows.mjs` 为每次触发关联原 Task；失败不新建替代 Task 盲重试 |
 | 执行记录 / 接着聊 | “自动化 → 执行记录”查看状态、用量和原 Task；Bot 例行结果可接着聊 | `ScheduleWorkspace.tsx`、`main-session.mjs`；后续讨论另开派生任务，不篡改原次执行 |
 | 事项提醒与通知 | 在收件箱的提醒区设置目标和提醒时间；在收件箱查看、标记已读 | `workspace-reminders.mjs` 触发前核对目标版本；保存 Delivery、Notification |
 | 主动发现问题 | 查看 Chief 主会话或收件箱的冲突、逾期等卡片；可处理、忽略或关闭某类提醒 | `detectors.mjs` 纯代码读取结构化数据，按对象版本去重；每日最多推 10 张卡，22:00–08:00 只入收件箱 |
 | 帮我想办法 | 在“设置 → 主动提醒”启用后，对发现的问题点击分析 | `findingAssist` 只读派生 Task，最多 5 次模型和 10 次工具；检测器本身仍不调模型 |
-| 外部本机 MCP 接入 | “设置 → 本机工具连接”发放凭证，再按工程文档启动 stdio 桥；不用后撤销 | `workspace-mcp-stdio.mjs` 转发到私有 relay；凭证受 Bot、来源、动作、读取范围、有效期约束 |
+| 外部本机 MCP 接入 | “设置 → 本机工具连接”或 Bot 详情「MCP」发放凭证，再按工程文档启动 stdio 桥；不用后撤销 | `workspace-mcp-stdio.mjs` 转发到私有 relay；凭证受 Bot、来源、动作、读取范围、有效期约束 |
 
 计划支持 `at`、`daily` 和 60 秒至一年整数秒的 `interval`，不是完整 cron/RRULE；上限为 200 个计划、1000 扫描预算。测试运行和旧只读简报保持只读。通知目前只有应用内收件箱，`recorded/read` 不等于系统推送或用户实际收到。
 
@@ -342,7 +342,7 @@ MCP 实际工作区工具为 `workspace.list`、`workspace.get`、`workspace.pre
 1. 按 [工程 README](../my-app/README.md) 配置本地 API token 并启动，先确认当前是真实模型还是测试模式。
 2. 在“待办”和“日历”手动建少量本地事项，理解 Todo、Event 及显式关联。
 3. 回到首页向 Chief 提问；打开 Bot 主会话和时间线，观察输入、模型、工具与结果。
-4. 新建一个 Bot，在“Bot 模板”检查资源与工具组开关；先用本地来源验证开（直接做）与关（先问）。
+4. 新建一个 Bot，在详情「设置」检查资源、「规则」检查工具组开关；先用本地来源验证开（直接做）与关（先问）。
 5. 创建例行任务，先测试运行，再启用真实计划；在执行记录中找到原 Task。
 6. 需要真实外部日历时再接飞书；需要外部工具客户端时再发放独立 stdio 凭证。
 

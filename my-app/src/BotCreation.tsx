@@ -65,7 +65,7 @@ export default function BotCreation({ token, onCreated, onCancel }: BotCreationP
     <form onSubmit={e => void create(e)} className="bot-form">
       <div className="bot-preview"><BotAvatar name={name || 'B'} look={{ color, shape }} size={96} /><div><strong>{name || '未命名 Bot'}</strong><p className="shell-muted">{role || '角色按名字自动生成'}</p></div></div>
       <label htmlFor="bot-name">名字</label><input id="bot-name" required maxLength={60} value={name} onChange={e => setName(e.target.value)} disabled={busy} placeholder="例如：日程助理" />
-      <p className="shell-muted small">默认带本地工作区工具。删除先问你，其余直接做；建好后可在 Bot 页调整工具、资源和规则。</p>
+      <p className="shell-muted small">默认拥有全部可分配工具组，组内写入（含删除）直接做；可在详情「规则」中切换为先问，资源在「设置」中调整。</p>
       <details className="bot-advanced"><summary>高级</summary>
         <label htmlFor="bot-description">负责什么</label><textarea id="bot-description" rows={4} maxLength={2000} value={description} onChange={e => setDescription(e.target.value)} disabled={busy} placeholder="不填就按名字自动生成" />
         <label htmlFor="bot-role">角色</label><input id="bot-role" maxLength={40} value={role} onChange={e => setRole(e.target.value)} disabled={busy} placeholder="不填就按名字自动生成" />
@@ -80,7 +80,7 @@ export default function BotCreation({ token, onCreated, onCancel }: BotCreationP
       {error && <p role="alert" className="shell-alert-card">{error}</p>}
       <div className="bot-actions">{onCancel && <button type="button" onClick={onCancel} disabled={busy}>取消</button>}<button className="primary" disabled={busy || !name.trim()}>{busy ? '正在创建…' : '创建 Bot'}</button></div>
     </form>
-    <section aria-labelledby="bot-templates" className="bot-templates"><h2 id="bot-templates">从模板开始</h2><p className="shell-muted small">点一下填好名字和职责，建好后可在 Bot 页调整工具和规则。</p>
+    <section aria-labelledby="bot-templates" className="bot-templates"><h2 id="bot-templates">从模板开始</h2><p className="shell-muted small">可以直接填名字，也可以选择模板预填；建好后在详情调整工具和规则。</p>
       <div className="bot-template-grid">{templates.map(t => <button type="button" key={t.name} className="bot-template" disabled={busy} onClick={() => applyTemplate(t)}><BotAvatar name={t.name} look={t} size={36} /><span><strong>{t.name}</strong><small>{t.description}</small></span></button>)}</div>
     </section>
   </div>

@@ -13,7 +13,7 @@ type Props = {
   view: WorkspaceView; newSession: boolean; inboxCount: number
   sessions: SidebarSession[]; bots: SidebarBot[]; selectedId: number | null; botPage: string | null
   onHome: () => void; onNewSession: () => void; onOpenSession: (id: number, owner: string) => void
-  onOpenBot: (bot: SidebarBot) => void; onBotSettings: (id: string) => void; onNewBot: () => void; onNewGroup: () => void
+  onOpenBot: (bot: SidebarBot) => void; onOpenDirectory: () => void; onBotSettings: (id: string) => void; onNewBot: () => void; onNewGroup: () => void
   onView: (view: WorkspaceView) => void
 }
 
@@ -53,7 +53,7 @@ export default function ShellSidebar(props: Props) {
 
     <div className="pd-side-body">
       <div className="pd-tabs" role="tablist" aria-label="侧栏内容">
-        {(['sessions', 'bots'] as const).map((id) => <button key={id} type="button" role="tab" id={`side-tab-${id}`} aria-selected={tab === id} aria-controls={`side-panel-${id}`} onClick={() => setTab(id)}>{id === 'sessions' ? '会话' : '机器人'}</button>)}
+        {(['sessions', 'bots'] as const).map((id) => <button key={id} type="button" role="tab" id={`side-tab-${id}`} aria-selected={tab === id} aria-controls={`side-panel-${id}`} onClick={() => { setTab(id); if (id === 'bots') { props.onOpenDirectory(); onClose() } }}>{id === 'sessions' ? '会话' : '机器人'}</button>)}
       </div>
       <label className="pd-search"><SearchIcon /><span className="sr-only">搜索会话和 Bot</span>
         <input type="search" placeholder={tab === 'sessions' ? '搜索会话…' : '搜索 Bot…'} value={query} onChange={(e) => setQuery(e.target.value)} /></label>
@@ -81,7 +81,7 @@ export default function ShellSidebar(props: Props) {
         <ul>{shownBots.map((bot) => <li key={bot.id} className="pd-row-wrap">
           <button type="button" className="pd-session" aria-current={(bot.id === 'chief' ? view === 'home' : view === 'chats' && bot.mainTaskId !== null && selectedId === bot.mainTaskId) ? 'page' : undefined} onClick={act(() => props.onOpenBot(bot))}>
             <BotAvatar name={bot.name} look={loadLook(bot.id)} size={20} />
-            <span className="pd-session-text"><span className="pd-session-title">{bot.name}</span><span className="pd-session-meta">{bot.inactive ? '已停用 · 只读' : bot.mainTaskId !== null ? '主会话' : '打开设置'}</span></span>
+            <span className="pd-session-text"><span className="pd-session-title">{bot.name}</span><span className="pd-session-meta">{bot.inactive ? '已停用 · 只读' : bot.mainTaskId !== null ? '对话与详情' : '打开详情'}</span></span>
           </button>
           <button type="button" className={`pd-pin pd-bot-settings${botPage === bot.id ? ' is-pinned' : ''}`} aria-current={botPage === bot.id ? 'page' : undefined} aria-label={`${bot.name} 的设置`} title="Bot 设置" onClick={act(() => props.onBotSettings(bot.id))}><GearIcon size={13} /></button>
         </li>)}</ul>

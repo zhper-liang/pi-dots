@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react'
+import { mergeBotSkills } from './bot-directory.mjs'
+
 // Skills are picked on demand: by the Bot from its catalog, or by the user with "/" in the composer.
 // There is no activation panel; the conversation shows a one-line card per use and the session
 // details keep the read-only history (pinned versions, references read, lifecycle).
@@ -39,4 +42,37 @@ export function SkillHistory({ state }: { state?: SkillState }) {
     {!!state.resourceAccesses?.length && <details><summary>读过的参考资料（{state.resourceAccesses.length}）</summary><ul>{state.resourceAccesses.map((item, index) => <li key={index}>{item.source} · 字符 [{item.offset}, {item.end}) / {item.totalCharacters} · {new Date(item.accessedAt).toLocaleString('zh-CN')}</li>)}</ul></details>}
     <details><summary>使用记录（{state.history.length}）</summary><ul>{state.history.map((event) => <li key={event.entryId}>{new Date(event.createdAt).toLocaleString('zh-CN')} · {event.skillId} {event.ref?.version} · {event.status === 'active' ? '已加载' : event.status === 'inactive' ? '已停用' : `没能加载：${event.error?.message ?? event.error?.code}`} · {EVENTS[event.source ?? ''] ?? '用户操作'}</li>)}</ul></details>
   </details>
+}
+
+
+type CatalogSkill = { id: string; name?: string; description?: string; version?: string; available: boolean; requiredTools?: string[]; requiredResources?: string[]; error?: Failure }
+/** All registered Skills are visible; availability comes from this Bot's real main Task. */
+export function BotSkills({ token, mainTaskId, active }: { token: string; mainTaskId: number | null; active: boolean }) {
+  const [skills, setSkills] = useState<CatalogSkill[] | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    if (!active) return
+    const controller = new AbortController()
+    async function read(path: string) {
+      const response = await fetch(path, { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error?.message ?? '无法读取 Skill 目录。')
+      return body.skills as CatalogSkill[]
+    }
+    Promise.all([read('/api/skills'), mainTaskId === null ? Promise.resolve([]) : read(`/api/tasks/${mainTaskId}/skills`)]).then(([catalog, available]) => {
+      if (controller.signal.aborted) return
+      setSkills(mergeBotSkills(catalog, available, mainTaskId !== null))
+      setError('')
+    }).catch(caught => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : '无法读取 Skill 目录。') })
+    return () => controller.abort()
+  }, [token, mainTaskId, active])
+  return <section aria-label="Skill 目录"><h2>Skills</h2><p className="shell-muted">所有已注册 Skill 都在这里。对话中输入 / 选择；Skill 不授予工具权限。</p>
+    {error ? <p role="alert" className="shell-note">{error}</p> : skills === null ? <p role="status">正在读取 Skill 目录…</p> : skills.length === 0 ? <p>没有已注册的 Skill。</p> : <ul className="bot-skill-list">{skills.map(skill => <li key={skill.id}>
+      <h3>{skill.name ?? skill.id}{skill.version ? ` · v${skill.version}` : ''}</h3>{skill.description && <p>{skill.description}</p>}
+      <p>{skill.available ? '可使用 · 在对话中输入 / 选择' : `暂不可用：${skill.error?.message ?? '本地 Skill 无法读取。'}`}</p>
+      {!!skill.error?.missing?.length && <p>缺少依赖：{skill.error.missing.join('、')}</p>}
+      {!!skill.requiredTools?.length && <p className="shell-muted small">所需工具：{skill.requiredTools.join('、')}</p>}
+      {!!skill.requiredResources?.length && <p className="shell-muted small">所需资源：{skill.requiredResources.join('、')}</p>}
+    </li>)}</ul>}
+  </section>
 }

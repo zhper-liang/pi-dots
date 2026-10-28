@@ -61,8 +61,8 @@ pnpm start:api
 ## 网页使用
 
 1. 输入 `my-app/.env` 中的 `PIDOT_API_TOKEN` 连接本地服务；错误 token 退回连接页。
-2. 选择 Chief、日程助理或待办助理，可选填会话名称，点击“开始会话”。
-3. 左侧列出已保存会话；详情显示 Harness Task ID、独立 Conversation ID、配置版本与固定参数来源。
+2. 首页直接与 Chief 对话；「新建会话」先选 Bot，第一条消息创建独立会话。左栏「机器人」打开卡片目录，新建 Bot 进入独立模板选择页，只填名字即可。
+3. Bot 详情分对话、规则、Skills、MCP、记忆（T11 占位）、设置、任务七标签；对话是原主会话，任务按 Bot 身份列出原 Task/例行任务。MCP 仅当前 Bot 的 stdio 凭证，全局设置仍可管理。会话详情保留 Harness Task ID、Conversation ID、配置版本与固定参数来源。
 4. 刷新保留选中 Task；列表可重开，浏览器前进/后退可切换；关闭标签页后重新输入 token 仍可打开本地会话。
 5. 正常停止/重启 API 后数据仍在；“断开连接”只清除标签页 token，不删除本地会话。
 
