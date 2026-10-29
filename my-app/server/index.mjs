@@ -15,7 +15,7 @@ try {
     : fileURLToPath(new URL('../data/pidot.sqlite', import.meta.url))
   const modelSettings = createModelSettings({ file })
   const modelConfig = await modelSettings.read()
-  tasks = await openTaskStore({ file, workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
+  tasks = await openTaskStore({ file, workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, memoryOptions: { enabled: true }, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
   const server = createApiServer({
     token: config.token, tasks, onError: console.error,
     staticDir: fileURLToPath(new URL('../dist/', import.meta.url)),

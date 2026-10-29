@@ -4,7 +4,7 @@ import Switch from './Switch'
 
 type Bot = { id: string; name: string; description: string; configRef: { botId: string; version: string }; defaults: { model: { id: string } | null; tools: string[]; toolResources: string[] } }
 type View = { bot: Bot; versions: (Bot & { source: string; savedAt: string })[]; assigned: { tools: string[]; resources: string[] }; resources: string[]; models: { id: string; provider: string }[]; audit: { id: number; type: string; source: string; code?: string; createdAt: string; initiatingUser?: string; executingChief?: string; taskId?: number; operationId?: string; next?: unknown; previous?: unknown }[] }
-type Change = { description: string; model: string; resources: string[] }
+type Change = { model: string; resources: string[] }
 
 const toggle = (items: string[], name: string) => items.includes(name) ? items.filter((n) => n !== name) : [...items, name]
 async function request<T>(path: string, token: string, body?: unknown): Promise<T> {
@@ -22,10 +22,9 @@ function describeResource(id: string) {
   return { title: id, note: '' }
 }
 
-/** Role, model and source resources. Sources switch immediately; role and model save together. */
+/** Model and source settings only. Personality is edited exclusively in Bot memory. */
 export default function BotConfiguration({ botId, token, onSaved, readOnly = false }: { botId: string; token: string; readOnly?: boolean; onSaved: (bot: Bot) => void }) {
   const [view, setView] = useState<View | null>(null)
-  const [description, setDescription] = useState('')
   const [model, setModel] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -37,22 +36,22 @@ export default function BotConfiguration({ botId, token, onSaved, readOnly = fal
   // A fresh view replaces the draft only when the user has not edited it.
   const adopt = (next: View, keepDraft = false) => {
     setView(next)
-    if (!keepDraft) { setDescription(next.bot.description); setModel(next.bot.defaults.model?.id ?? '') }
+    if (!keepDraft) { setModel(next.bot.defaults.model?.id ?? '') }
   }
   useEffect(() => {
     let live = true
     request<View>(`/api/bots/${botId}/configuration`, token).then((next) => {
-      if (live) { setView(next); setDescription(next.bot.description); setModel(next.bot.defaults.model?.id ?? '') }
+      if (live) { setView(next); setModel(next.bot.defaults.model?.id ?? '') }
     }).catch((e: Error) => { if (live) setError(e.message) })
     return () => { live = false }
   }, [botId, token])
-  const dirty = !!view && (description !== view.bot.description || (!!view.bot.defaults.model && model !== view.bot.defaults.model.id))
+  const dirty = !!view && (!!view.bot.defaults.model && model !== view.bot.defaults.model.id)
   async function submit(change: Change, done: string, keepDraft: boolean) {
     if (!view || busy) return
     setBusy(true); setError(''); setNotice('')
     try {
       await request(`/api/bots/${botId}/configuration`, token, { expectedVersion: view.bot.configRef.version, requestId: crypto.randomUUID(),
-        description: change.description, tools: view.assigned.tools, resources: change.resources,
+        description: view.bot.description, tools: view.assigned.tools, resources: change.resources,
         ...(view.bot.defaults.model ? { parameters: { model: { id: change.model } } } : {}) })
       const next = await load()
       if (!mounted.current) return
@@ -63,31 +62,28 @@ export default function BotConfiguration({ botId, token, onSaved, readOnly = fal
       setError(code === 'CONFIG_VERSION_CONFLICT' ? '配置已在别处更新：先读取最新版本再改。' : e instanceof Error ? e.message : '保存失败。')
     } finally { if (mounted.current) setBusy(false) }
   }
-  function saveRole(event: FormEvent) {
+  function saveModel(event: FormEvent) {
     event.preventDefault()
     if (!view) return
-    void submit({ description, model, resources: view.assigned.resources }, '已保存。新任务使用新的职责和模型；已开始的会话保持原设置。', false)
+    void submit({ model, resources: view.assigned.resources }, '模型已保存。新任务使用新模型；已开始的会话保持原模型。', false)
   }
   function switchResource(id: string) {
     if (!view) return
-    // Saved role and model go with the switch; an unsaved draft stays in the form.
-    void submit({ description: view.bot.description, model: view.bot.defaults.model?.id ?? '', resources: toggle(view.assigned.resources, id) }, '来源已更新。', dirty)
+    // Source changes preserve the saved model and any unsaved model draft.
+    void submit({ model: view.bot.defaults.model?.id ?? '', resources: toggle(view.assigned.resources, id) }, '来源已更新。', dirty)
   }
   function discard() {
     setError(''); setNotice('')
     void load().then((next) => { if (mounted.current) adopt(next) }).catch((e: Error) => { if (mounted.current) setError(e.message) })
   }
-  if (!view) return <section className="bot-edit-section" aria-label="职责与模型"><h2>职责与模型</h2>
+  if (!view) return <section className="bot-edit-section" aria-label="模型"><h2>模型</h2>
     <p className={error ? 'bot-edit-error' : 'bot-edit-hint'} role={error ? 'alert' : undefined}>{error || '正在读取…'}</p></section>
   return <>
-    <section className="bot-edit-section" aria-label="职责与模型">
-      <h2>职责与模型</h2>
+    <section className="bot-edit-section" aria-label="模型">
+      <h2>模型</h2>
+      <p className="bot-edit-hint">人格与职责统一在「记忆 → 人格」编辑，保存后实时生效。</p>
       <span className="sr-only" data-testid="bot-config-version">{view.bot.configRef.version}</span>
-      <form className="bot-edit-form" onSubmit={saveRole}>
-        <label className="pd-field">
-          <span className="pd-row-title">职责</span>
-          <textarea rows={3} maxLength={2000} required value={description} disabled={readOnly || busy} onChange={(e) => setDescription(e.target.value)} />
-        </label>
+      <form className="bot-edit-form" onSubmit={saveModel}>
         <div className="pd-row pd-row-select">
           <label className="pd-row-text" htmlFor={`bot-model-${botId}`}>
             <span className="pd-row-title">模型</span>
@@ -124,7 +120,7 @@ export default function BotConfiguration({ botId, token, onSaved, readOnly = fal
       <summary>配置历史与审计（{view.versions.length} 个版本 · {view.audit.length} 条记录）</summary>
       <ol className="bot-edit-history">{view.versions.map((v) => <li key={v.configRef.version}>
         <strong>{v.configRef.version}</strong> · {v.source} · {new Date(v.savedAt).toLocaleString('zh-CN')} · 模型 {v.defaults.model?.id ?? '测试模式'} · 资源 {v.defaults.toolResources.join('、') || '无'}
-        <p>{v.description}</p>
+        <p>当时的职责（历史记录）：{v.description}</p>
       </li>)}</ol>
       <ol className="bot-edit-history">{view.audit.map((e) => <li key={e.id}>#{e.id} · {e.type} · {e.source}{e.code ? ` · ${e.code}` : ''} · {new Date(e.createdAt).toLocaleString('zh-CN')}
         <pre>{JSON.stringify({ previous: e.previous, next: e.next, initiatingUser: e.initiatingUser, executingChief: e.executingChief, taskId: e.taskId, operationId: e.operationId }, null, 2)}</pre>

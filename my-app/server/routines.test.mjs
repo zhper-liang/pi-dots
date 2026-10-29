@@ -21,11 +21,13 @@ const plan = (requestId, rule, extra = {}) => ({ requestId, command: 'create', t
 const proposal = (extra = {}) => ({ title: '每日待办整理', prompt: '整理今天到期的待办', rule: { type: 'daily', time: '08:00' }, sourceIds: ['local'], notification: 'inbox', ...extra })
 
 // Main sessions reply from state.main; every other Task (runs, derived) from state.run.
-async function fixture(fn) {
+async function fixture(fn, { extraModel } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pidot-routine-')); let s, time = start
   const state = { mains: new Set(), main: [], run: [] }
   const modelReply = async (_m, opts) => (state.mains.has(opts.taskId) ? state.main : state.run).shift() ?? text()
-  const opts = { file: join(dir, 'isolated.sqlite'), bots: listBots(modelConfig), modelReply, legacyApprovalRules: false, workspaceScheduleOptions: { autoStart: false, onError: e => console.error(e), now: () => time } }
+  const bots = listBots(modelConfig)
+  if (extraModel) bots.find(b => b.id === 'todo').defaults.model.id = extraModel
+  const opts = { file: join(dir, 'isolated.sqlite'), bots, modelReply, legacyApprovalRules: false, workspaceScheduleOptions: { autoStart: false, onError: e => console.error(e), now: () => time } }
   try {
     s = await openTaskStore(opts)
     for (const id of Object.values(await s.mainSessions())) state.mains.add(id)
@@ -252,3 +254,65 @@ test('T5-06 Bot page routine form and labels (pure UI logic)', async () => {
   assert.deepEqual([runLabel({ state: 'skipped', reason: 'automation_paused' }), runLabel({ state: 'succeeded', test: true })], ['跳过（自动化暂停中）', '测试 · 完成'])
   assert.deepEqual(cardActions(inboxCard({ kind: 'approval', detail: { toolName: 'routine_propose' } })), ['approve', 'always', 'reject'])
 })
+
+test('T09 routine_propose weekly creates the bound confirmation card and its weekday label', () => fixture(async ({ s, state }) => {
+  const { ruleLabel } = await import('../src/routines.mjs')
+  const { mainTools, ROUTINE_RULE_SCHEMA } = await import('./main-tools.mjs')
+  const weekly = { type: 'weekly', weekdays: [1, 3, 5], time: '09:00' }
+  assert.equal(mainTools.find(t => t.name === 'routine_propose').parameters.properties.rule, ROUTINE_RULE_SCHEMA)
+  assert.deepEqual(ROUTINE_RULE_SCHEMA.oneOf.map(r => r.properties.type.const), ['at', 'daily', 'weekly', 'monthly', 'interval', 'event'])
+  await s.rules.add({ botId: 'calendar', match: { tool: 'routine_propose' }, effect: 'ask' })
+  const mainId = (await s.mainSessions()).calendar
+  state.main.push(turn(['routine_propose', proposal({ title: '每周整理', rule: weekly })]), text('已设置'))
+  await s.send(mainId, '每周一三五早上九点整理待办')
+  const card = (await awaiting(s, mainId)).approvals.items.at(-1)
+  assert.equal(card.toolName, 'routine_propose')
+  assert.deepEqual(card.arguments.rule, weekly)
+  assert.equal(card.arguments.title, '每周整理')
+  // RoutineCard renders ruleLabel(args.rule); verify the actual bound approval data, not a mock.
+  assert.equal(ruleLabel(card.arguments.rule), '每周 周一、周三、周五 09:00')
+  assert.equal((await s.workspaceSchedules.list({})).items.length, 0)
+  await s.decideApproval(mainId, card.id, { decision: 'approved' })
+  await settled(s, mainId)
+  const [created] = (await s.workspaceSchedules.list({})).items
+  assert.deepEqual(created.rule, weekly)
+  assert.equal(created.timezone, 'Asia/Shanghai')
+  assert.equal(created.actionSpec.botId, 'calendar')
+  assert.equal(created.nextDueAt, '2026-10-19T01:00:00.000Z')
+}))
+
+test('T09 optional routine model accepts only an id and freezes it for normal and test Tasks', () => fixture(async ({ s, setTime, tick }) => {
+  for (const model of [{ id: 'https://host.invalid?apiKey=bad' }, { id: 'fixture-model', baseUrl: 'https://host.invalid' }, { id: '' }, null]) {
+    await assert.rejects(s.workspaceSchedules.manage(plan(`bad-model-${++seq}`, { type: 'daily', time: '09:00' }, { model })), { code: 'INVALID_PARAMETERS' })
+  }
+  assert.equal((await s.workspaceSchedules.list({})).items.length, 0)
+  const p = (await s.workspaceSchedules.manage(plan('model-weekly', { type: 'weekly', weekdays: [1], time: '09:00' }, { model: { id: 'fixture/weekly-model' } }))).receipt.schedule
+  assert.deepEqual(p.actionSpec.model, { id: 'fixture/weekly-model' })
+  const first = await s.workspaceSchedules.testRun({ id: p.id, requestId: 'weekly-model-test' })
+  const tested = await settled(s, first.receipt.taskId)
+  assert.equal(tested.parameters.model.id, 'fixture/weekly-model')
+  await tick()
+  setTime(start + 60 * MIN); await tick()
+  const row = (await runs(s, p.id)).find(r => !r.test)
+  const run = await settled(s, row.taskId)
+  assert.equal(run.parameters.model.id, 'fixture/weekly-model')
+  assert.equal(run.parameters.callLimits.modelCalls, p.callLimits.modelCalls)
+  assert.equal(tested.parameters.model.id, 'fixture/weekly-model')
+}, { extraModel: 'fixture/weekly-model' }))
+
+test('T09 global automation pause skips weekly/monthly due runs and never replays them', () => fixture(async ({ s, setTime, tick }) => {
+  const weekly = (await s.workspaceSchedules.manage(plan('paused-weekly', { type: 'weekly', weekdays: [1], time: '09:00' }))).receipt.schedule
+  const monthly = (await s.workspaceSchedules.manage(plan('paused-monthly', { type: 'monthly', day: 19, time: '09:00' }))).receipt.schedule
+  await s.setAutomation({ paused: true, confirmed: true })
+  setTime(start + 60 * MIN); await tick()
+  for (const p of [weekly, monthly]) {
+    const [row] = await runs(s, p.id)
+    assert.equal(row.state, 'skipped'); assert.equal(row.reason, 'automation_paused'); assert.equal(row.taskId, undefined)
+  }
+  await s.setAutomation({ paused: false, confirmed: true })
+  setTime(start + 61 * MIN); await tick()
+  for (const p of [weekly, monthly]) assert.equal((await runs(s, p.id)).length, 1)
+  const current = (await s.workspaceSchedules.list({})).items
+  assert.equal(current.find(p => p.id === weekly.id).nextDueAt, '2026-10-26T01:00:00.000Z')
+  assert.equal(current.find(p => p.id === monthly.id).nextDueAt, '2026-11-19T01:00:00.000Z')
+}))

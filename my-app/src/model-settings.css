@@ -1,0 +1,15 @@
+.model-settings { display: grid; gap: var(--space-2); min-width: 0; }
+.model-settings fieldset { display: grid; gap: var(--space-3); min-width: 0; padding: 0; margin: 0; border: 0; }
+.model-settings-row { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 288px); gap: var(--space-3); align-items: center; min-height: 42px; }
+.model-settings-row input { min-width: 0; width: 100%; box-sizing: border-box; }
+.model-settings-row small { display: block; font-weight: normal; }
+.model-settings fieldset > button { justify-self: start; }
+.model-settings [role="alert"], .model-picker-error { color: var(--c-danger, #b42318); overflow-wrap: anywhere; }
+.model-picker { max-width: 240px; min-width: 0; }
+.app-shell .model-picker select { max-width: 180px; min-width: 0; text-overflow: ellipsis; }
+.model-picker-error { flex-basis: 100%; font-size: var(--fs-small); }
+@media (max-width: 600px) {
+  .model-settings-row { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+  .model-picker { max-width: 160px; }
+  .app-shell .model-picker select { max-width: 115px; }
+}

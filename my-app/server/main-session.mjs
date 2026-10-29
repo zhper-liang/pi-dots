@@ -152,6 +152,23 @@ export async function settleDigest(tx, mainTaskId, entryId, failed) {
   digest.byMain[mainTaskId] = list.filter(i => i.consumingEntryId !== entryId)
 }
 
+/** A safe per-input model snapshot. Call at send admission, before appending pidot.user. */
+export function mainInputModel(card, input = {}, models = []) {
+  const explicit = Object.hasOwn(input, 'model')
+  if (card.kind !== 'main') {
+    if (explicit) fail(409, 'MODEL_FIXED', '独立 Task 的模型快照只读。')
+    return undefined
+  }
+  if (card.parameters.mode !== 'model') {
+    if (explicit) fail(409, 'MODEL_UNAVAILABLE', '测试会话不能切换真实模型。')
+    return undefined
+  }
+  const model = explicit ? input.model : { id: card.parameters.model.id }
+  const parameters = taskParameters({ model }, copy(card.parameters))
+  if (explicit && !models.some(item => item.id === parameters.model.id)) fail(400, 'MODEL_NOT_CONFIGURED', '请选择当前已配置的模型。')
+  return { id: parameters.model.id }
+}
+
 /**
  * Admission of a new input into a main session. Per-input call budget (lifetime kept separately).
  * S1: removed D-04 permission refresh; tools now reflect current assignment, effective immediately.
@@ -159,8 +176,13 @@ export async function settleDigest(tx, mainTaskId, entryId, failed) {
 export async function beginMainInput(tx, card, entryId) {
   const usage = await tx.doc(CallUsage, card.taskId)
   if (usage.inputEntryId === entryId) return
+  // Read the entry before mutating any document (Harness transaction read barrier).
+  // Captured on pidot.user admission: later selections cannot rewrite an already queued input.
+  const entry = await tx.entry(entryId)
+  const model = entry?.kind === 'pidot.user' && entry.conversationId === card.conversationId ? entry.data.model : undefined
   usage.lifetime ??= { modelCalls: 0, toolCalls: 0, totalTokens: 0, unknownTokenCalls: 0 }
   for (const key of ['modelCalls', 'toolCalls', 'totalTokens', 'unknownTokenCalls']) { usage.lifetime[key] += usage[key] ?? 0; usage[key] = 0 }
+  if (model !== undefined) card.parameters = taskParameters({ model }, copy(card.parameters))
   usage.inputEntryId = entryId
   await reconcileMainChildren(tx, card)
 }
@@ -169,7 +191,7 @@ export async function projectMainCard(tx, card) {
   if (card.kind !== 'main') return card
   const bot = (await tx.doc(BotDirectory)).items.find(b => b.id === card.bot.id), access = await tx.doc(ToolAccess)
   if (!bot || !access.assignments?.[bot.id]) return card
-  const parameters = { ...taskParameters(undefined, copy(bot.defaults)), tools: [...access.assignments[bot.id].tools], toolResources: [...access.assignments[bot.id].resources] }
+  const parameters = { ...copy(card.parameters), tools: [...access.assignments[bot.id].tools], toolResources: [...access.assignments[bot.id].resources] }
   return { ...copy(card), parameters }
 }
 // S1: refreshMainPermissions deleted.

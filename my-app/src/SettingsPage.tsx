@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
 import StdioCredentials from './StdioCredentials'
+import ModelSettings from './ModelSettings'
+import UserPreferences from './UserPreferences'
 import WorkspaceStatus from './WorkspaceStatus'
 import ExternalWorkspace from './ExternalWorkspace'
 import { AutomationSettings } from './AutomationControls'
@@ -26,9 +28,11 @@ export default function SettingsPage({ token, footer }: { token: string; footer?
       <AssistSettings token={token} />
     </section>
     <section className="today-card" aria-labelledby="settings-model">
-      <h2 id="settings-model">模型与测试模式</h2>
-      <p>每个 Bot 模板有自己的模型设置。没有配置真实模型时，任务使用测试模式，回复不是模型生成的。</p>
-      <p className="shell-muted small">在侧栏「Bot 模板」里打开某个 Bot，点「编辑」即可更改模型。修改只影响之后新建的任务，已有任务不受影响。</p>
+      <h2 id="settings-model">模型</h2>
+      <ModelSettings key={token} token={token} />
+    </section>
+    <section className="today-card" aria-label="共享偏好">
+      <UserPreferences token={token} />
     </section>
     {footer && <section className="today-card settings-account" aria-label="连接">{footer}</section>}
   </div>

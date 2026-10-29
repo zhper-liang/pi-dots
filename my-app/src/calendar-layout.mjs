@@ -58,3 +58,18 @@ export function dueDay(due) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(due)) return due
   const t = Date.parse(due); return Number.isNaN(t) ? null : dayKey(t)
 }
+
+/** Desktop shows both panes; phones retain the chosen pane without unmounting drafts. */
+export function workspacePanes(narrow, selected = 'calendar') {
+  return { calendar: !narrow || selected === 'calendar', todos: !narrow || selected === 'todos' }
+}
+
+/** Active todos in deadline order, undated last. Never infer a calendar duration. */
+export function calendarTodos(items) {
+  const deadline = item => {
+    if (!dueDay(item.due)) return Infinity
+    return item.due.length === 10 ? dayStart(item.due) : Date.parse(item.due)
+  }
+  return items.filter(item => !item.deletedAt && item.status !== 'completed')
+    .slice().sort((a, b) => deadline(a) - deadline(b) || a.title.localeCompare(b.title, 'zh-CN') || a.id.localeCompare(b.id))
+}

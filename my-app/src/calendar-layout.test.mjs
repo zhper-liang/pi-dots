@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { layoutDay, periodDays, weekStart, shiftAnchor, eventDays, dueDay, dayKey, toOffsetIso, dayStart } from './calendar-layout.mjs'
+import { layoutDay, periodDays, weekStart, shiftAnchor, eventDays, dueDay, dayKey, toOffsetIso, dayStart, workspacePanes, calendarTodos } from './calendar-layout.mjs'
 
 const at = (d, t) => Date.parse(`${d}T${t}:00+08:00`)
 const D = '2026-05-14' // Thursday
@@ -44,4 +44,25 @@ test('cross-midnight events are clipped and min height applied', () => {
 test('due parsing and iso formatting', () => {
   assert.equal(dueDay('2026-05-14'), D); assert.equal(dueDay('2026-05-14T23:30:00+08:00'), D); assert.equal(dueDay(null), null)
   assert.equal(toOffsetIso(dayStart(D) + 16 * 3600000), '2026-05-14T16:00:00+08:00')
+})
+
+test('T08 desktop shows calendar and todo panes; mobile shows exactly the selected pane', () => {
+  for (const pane of ['calendar', 'todos']) assert.deepEqual(workspacePanes(false, pane), { calendar: true, todos: true })
+  assert.deepEqual(workspacePanes(true), { calendar: true, todos: false })
+  assert.deepEqual(workspacePanes(true, 'todos'), { calendar: false, todos: true })
+})
+
+test('T08 same-screen todos include overdue and undated items without completed/deleted history', () => {
+  const items = [
+    { id: 'undated', title: '无日期' },
+    { id: 'future', title: '明天', due: '2026-05-15' },
+    { id: 'deleted', title: '已删', due: '2026-05-10', deletedAt: '2026-05-11' },
+    { id: 'done', title: '完成', due: D, status: 'completed' },
+    { id: 'today', title: '今天上午', due: '2026-05-14T01:00:00Z' },
+    { id: 'overdue', title: '逾期', due: '2026-05-13' },
+    { id: 'invalid', title: '异常日期', due: 'invalid' }
+  ]
+  const original = [...items]
+  assert.deepEqual(calendarTodos(items).map(item => item.id), ['overdue', 'today', 'future', 'undated', 'invalid'])
+  assert.deepEqual(items, original)
 })

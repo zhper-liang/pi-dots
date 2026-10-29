@@ -167,3 +167,72 @@ test('05 occurrence pagination preserves historical rows and owner local access 
   await assert.rejects(service.manageLocalGrant(actor, { requestId: 'revoke-list', sourceId: 'local', enabled: false, expectedEpoch: 1, confirmed: true }), { code: 'WORKSPACE_OWNER_IMPLICIT' })
   assert.equal((await scheduler.list(actor, { scheduleId: s.id, limit: 100 })).items.length, 100)
 }))
+
+test('T09 weekly accepts unique ISO weekdays and rejects malformed weekly/monthly fields', () => {
+  assert.deepEqual(normalizeScheduleRule({ type: 'weekly', weekdays: [5, 1, 3], time: '09:00' }, 'UTC'), { type: 'weekly', weekdays: [1, 3, 5], time: '09:00' })
+  assert.deepEqual(normalizeScheduleRule({ type: 'monthly', day: 31, time: '09:00' }, 'UTC'), { type: 'monthly', day: 31, time: '09:00' })
+  for (const rule of [
+    ...[[], [0], [8], [1, 1], ['1'], [1.5], '1,3'].map(weekdays => ({ type: 'weekly', weekdays, time: '09:00' })),
+    ...[0, 32, 1.5, '31'].map(day => ({ type: 'monthly', day, time: '09:00' })),
+    { type: 'weekly', weekdays: [1], time: '9:00' }, { type: 'monthly', day: 1, time: '24:00' },
+    { type: 'weekly', weekdays: [1], time: '09:00', cron: '*' }, { type: 'monthly', day: 1, time: '09:00', month: 2 },
+  ]) assert.throws(() => normalizeScheduleRule(rule, 'UTC'), { code: 'WORKSPACE_SCHEDULE_RULE' })
+})
+
+test('T09 weekly Mon/Wed/Fri crosses DST with local 09:00 and latest-only recovery', () => {
+  const rule = { type: 'weekly', weekdays: [1, 3, 5], time: '09:00' }, zone = 'America/New_York'
+  let after = Date.parse('2026-03-05T23:00:00Z')
+  for (const expected of ['2026-03-06T14:00:00.000Z', '2026-03-09T13:00:00.000Z', '2026-03-11T13:00:00.000Z', '2026-03-13T13:00:00.000Z']) {
+    after = nextScheduleDue(rule, zone, after)
+    assert.equal(new Date(after).toISOString(), expected)
+  }
+  assert.equal(new Date(latestScheduleDue(rule, zone, Date.parse('2026-03-06T14:00:00Z'), Date.parse('2026-03-12T01:00:00Z'))).toISOString(), '2026-03-11T13:00:00.000Z')
+  assert.equal(new Date(nextScheduleDue(rule, zone, Date.parse('2026-10-30T13:00:00Z'))).toISOString(), '2026-11-02T14:00:00.000Z')
+})
+
+test('T09 weekly and monthly skip DST gaps and select only the first overlap', () => {
+  for (const rule of [{ type: 'weekly', weekdays: [7], time: '02:30' }, { type: 'monthly', day: 8, time: '02:30' }]) {
+    const expected = rule.type === 'weekly' ? '2026-03-15T06:30:00.000Z' : '2026-04-08T06:30:00.000Z'
+    assert.equal(new Date(nextScheduleDue(rule, 'America/New_York', Date.parse('2026-03-08T05:00:00Z'))).toISOString(), expected)
+  }
+  for (const rule of [{ type: 'weekly', weekdays: [7], time: '01:30' }, { type: 'monthly', day: 1, time: '01:30' }]) {
+    const zone = 'America/New_York', first = Date.parse('2026-11-01T05:30:00Z')
+    assert.equal(nextScheduleDue(rule, zone, Date.parse('2026-11-01T04:00:00Z')), first)
+    assert.equal(latestScheduleDue(rule, zone, first, Date.parse('2026-11-01T06:45:00Z')), first)
+    assert.equal(new Date(nextScheduleDue(rule, zone, first)).toISOString(), rule.type === 'weekly' ? '2026-11-08T06:30:00.000Z' : '2026-12-01T06:30:00.000Z')
+  }
+})
+
+test('T09 monthly 31 clamps February/April and preserves 31 across leap-year and year boundaries', () => {
+  const rule = { type: 'monthly', day: 31, time: '09:00' }, zone = 'Asia/Shanghai'
+  for (const [after, expected] of [
+    ['2026-01-31T01:00:00Z', '2026-02-28T01:00:00.000Z'],
+    ['2026-02-28T01:00:00Z', '2026-03-31T01:00:00.000Z'],
+    ['2026-03-31T01:00:00Z', '2026-04-30T01:00:00.000Z'],
+    ['2026-04-30T01:00:00Z', '2026-05-31T01:00:00.000Z'],
+    ['2028-01-31T01:00:00Z', '2028-02-29T01:00:00.000Z'],
+    ['2028-02-29T01:00:00Z', '2028-03-31T01:00:00.000Z'],
+    ['2026-12-31T01:00:00Z', '2027-01-31T01:00:00.000Z'],
+  ]) assert.equal(new Date(nextScheduleDue(rule, zone, Date.parse(after))).toISOString(), expected)
+  assert.equal(new Date(latestScheduleDue(rule, zone, Date.parse('2026-01-31T01:00:00Z'), Date.parse('2026-05-15T00:00:00Z'))).toISOString(), '2026-04-30T01:00:00.000Z')
+})
+
+test('T09 paused weekly/monthly schedules resume strictly after now, without backfill', () => fixture(async ({ scheduler, actor, setTime }) => {
+  for (const [key, rule, resumed, expected] of [
+    ['weekly', { type: 'weekly', weekdays: [1, 3, 5], time: '09:00' }, '2026-10-23T01:00:00Z', '2026-10-26T01:00:00.000Z'],
+    ['monthly', { type: 'monthly', day: 31, time: '09:00' }, '2027-02-28T01:00:00Z', '2027-03-31T01:00:00.000Z'],
+  ]) {
+    setTime(start)
+    let s = (await scheduler.manage(actor, create(`new-${key}`, rule))).receipt.schedule
+    s = (await scheduler.manage(actor, { requestId: `pause-${key}`, command: 'pause', id: s.id, expectedRevision: s.revision })).receipt.schedule
+    setTime(Date.parse(resumed)); await scheduler.tick()
+    assert.deepEqual((await history(scheduler, actor, s.id)).items, [])
+    s = (await scheduler.manage(actor, { requestId: `resume-${key}`, command: 'resume', id: s.id, expectedRevision: s.revision, confirmed: true })).receipt.schedule
+    assert.equal(s.nextDueAt, expected)
+    await scheduler.tick(); assert.deepEqual((await history(scheduler, actor, s.id)).items, [])
+    setTime(Date.parse(expected)); await scheduler.tick()
+    const rows = (await history(scheduler, actor, s.id)).items
+    assert.equal(rows.length, 1); assert.equal(rows[0].scheduledFor, expected); assert.equal(rows[0].state, 'succeeded')
+    await scheduler.manage(actor, { requestId: `cancel-${key}`, command: 'cancel', id: s.id, expectedRevision: s.revision })
+  }
+}))

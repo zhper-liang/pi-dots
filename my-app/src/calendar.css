@@ -102,3 +102,53 @@
   /* The agenda list is the phone's default view; its rows are the main targets. */
   .cal-agenda .cal-event { min-height:44px; align-items:center; }
 }
+
+/* T08: reuse the existing calendar and local editor in a quiet two-pane workspace. */
+.cal-workspace { display:grid; grid-template-columns:minmax(0, 1fr) minmax(240px, 300px); gap:24px; align-items:start; }
+.cal-calendar-pane, .cal-todo-pane { min-width:0; }
+.cal-calendar-pane { display:flex; flex-direction:column; gap:12px; }
+.cal-workspace [hidden] { display:none; }
+.cal-pane-switch { display:none; gap:8px; }
+.cal-todo-pane { background:var(--c-surface); border:1px solid var(--c-border); border-radius:var(--radius-sm); padding:16px; }
+.cal-todos-workspace { display:flex; flex-wrap:wrap; gap:10px; font-size:13px; overflow-wrap:anywhere; }
+.cal-todos-workspace h2 { flex-basis:100%; margin:0 0 4px; font-size:22px; font-weight:600; }
+.cal-todos-workspace p { margin:0; color:var(--c-text-2); }
+.cal-todos-workspace > p, .cal-todos-workspace > ul, .cal-todos-workspace > form, .cal-todos-workspace > section { flex-basis:100%; min-width:0; }
+.cal-todos-workspace button { min-height:32px; margin:0; padding:5px 8px; background:var(--c-bg); border:1px solid var(--c-border); border-radius:var(--radius-sm); font:inherit; color:var(--c-text); cursor:pointer; }
+.cal-todos-workspace button:hover:not(:disabled) { background:var(--c-hover); }
+.cal-todos-workspace button:disabled { opacity:.55; cursor:default; }
+.cal-todos-workspace form, .cal-todos-workspace fieldset, .cal-todos-workspace label { display:flex; flex-direction:column; gap:8px; min-width:0; }
+.cal-todos-workspace fieldset { border:1px solid var(--c-border); padding:10px; margin:0; }
+.cal-todos-workspace input { width:100%; min-width:0; box-sizing:border-box; padding:8px; color:var(--c-text); background:var(--c-bg); border:1px solid var(--c-border-strong); border-radius:var(--radius-sm); font:inherit; }
+.cal-todo-list { display:flex; flex-direction:column; gap:16px; margin:0; padding:0; list-style:none; }
+.cal-todo-list > li { display:flex; flex-wrap:wrap; gap:6px; }
+.cal-todo-list strong, .cal-todo-list p { flex-basis:100%; }
+.cal-todo-list strong { font-size:14px; font-weight:500; }
+.cal-todo-list p { font-size:12px; color:var(--c-muted); }
+.cal-conflict { display:flex; flex-direction:column; gap:8px; padding:12px; border:1px solid var(--c-border-strong); background:var(--c-sidebar); overflow-wrap:anywhere; }
+.cal-edit-fields { border:0; padding:0; margin:0; display:flex; flex-direction:column; gap:10px; min-width:0; }
+.cal-pop { max-height:calc(100dvh - 32px); overflow-y:auto; box-sizing:border-box; }
+.cal-pop-actions { flex-wrap:wrap; }
+.cal :is(button, input, textarea):focus-visible { outline:2px solid var(--c-accent); outline-offset:2px; }
+@media (max-width: 1100px) and (min-width: 720px) {
+  .cal-workspace { grid-template-columns:minmax(0, 1fr); }
+}
+@media (max-width: 719px) {
+  .cal-pane-switch { display:flex; }
+  .cal-workspace { grid-template-columns:minmax(0, 1fr); gap:0; }
+  .cal-todo-pane { padding:12px; }
+  .cal-pane-switch button, .cal-todos-workspace button, .cal-pop-actions button { min-height:44px; }
+  .cal-field-row { flex-direction:column; }
+  .cal-pop-backdrop { padding:12px; }
+  .cal-pop { max-height:calc(100dvh - 24px); }
+}
+
+/* Dialog contents are governed by the shared T05 focus stack, never a second Escape handler. */
+.cal-main { display:contents; }
+@media (max-width: 719px) {
+  .cal-toolbar .cal-btn, .cal-toolbar .cal-mode, .cal-pop .cal-btn, .cal-link, .cal-more { min-height:44px; min-width:44px; }
+  .cal-field input, .cal-field textarea { min-height:44px; box-sizing:border-box; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cal *, .cal *::before, .cal *::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }
+}

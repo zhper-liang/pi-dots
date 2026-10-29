@@ -14,10 +14,13 @@ const quote = s => typeof s === 'string' && s.trim() ? `「${s.trim().slice(0, 8
 const kindName = { Event: '日程', Todo: '待办' }
 
 
+const WEEKDAYS = [[1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日']]
 const EVENT_TEXT = { todo_due: '待办到期时', event_changed: '日程变更时', task_finished: '本Bot的任务结束时' }
 /** Plain-language schedule rule (PLAN §8.5), shared by the inbox summary and the routine card. */
 export function ruleText(rule = {}) {
   if (rule.type === 'daily') return `每天 ${rule.time}`
+  if (rule.type === 'weekly') return `每周 ${WEEKDAYS.filter(([day]) => rule.weekdays?.includes(day)).map(([, label]) => label).join('、')} ${rule.time}`
+  if (rule.type === 'monthly') return `每月 ${rule.day} 日 ${rule.time}（短月取最后一天）`
   if (rule.type === 'interval') return rule.seconds % 3600 === 0 ? `每 ${rule.seconds / 3600} 小时` : rule.seconds % 60 === 0 ? `每 ${rule.seconds / 60} 分钟` : `每 ${rule.seconds} 秒`
   if (rule.type === 'at') return `${chineseTime(rule.at)} 一次`
   if (rule.type === 'event') return EVENT_TEXT[rule.event] ?? '事件触发'

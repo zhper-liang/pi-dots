@@ -1,0 +1,48 @@
+/* Scoped T11 documents only. All surfaces and colors inherit the shell tokens. */
+.memory-view, .memory-view * { box-sizing: border-box; }
+.memory-view { width: 100%; min-width: 0; max-width: var(--column-w, 800px); color: var(--c-text); }
+.memory-view h2 { font-size: var(--fs-section); margin: 0; }
+.memory-view h3 { font-size: var(--fs-body); margin: 0; }
+.memory-view p { margin: 0; line-height: 1.7; }
+.memory-view .memory-intro { color: var(--c-muted); margin: 0 0 var(--space-6); }
+.memory-section { border-bottom: 1px solid var(--c-border); padding: var(--space-6) 0; min-width: 0; }
+.memory-section:first-child { padding-top: 0; }
+.memory-section:last-child { border-bottom: 0; }
+.memory-section > * + * { margin-top: var(--space-3); }
+.memory-section-head, .memory-item-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.memory-meta, .memory-hint { font-size: var(--fs-small); color: var(--c-muted); overflow-wrap: anywhere; }
+.memory-content { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.memory-view .memory-empty { color: var(--c-muted); }
+.memory-view button, .memory-view a, .memory-view summary { min-height: 44px; min-width: 44px; touch-action: manipulation; }
+.memory-view button, .memory-view a { display: inline-flex; align-items: center; justify-content: center; padding: var(--space-2) var(--space-3); border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-bg); color: var(--c-text); font: inherit; cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
+.memory-view button:hover:not(:disabled) { background: var(--c-hover); }
+.memory-view button:disabled { color: var(--c-muted); cursor: not-allowed; }
+.memory-view button.memory-primary { background: var(--c-primary); color: var(--c-on-primary); border-color: var(--c-primary); }
+.memory-view button.memory-danger { color: var(--c-danger); }
+.memory-view :where(button, a, textarea, summary):focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+.memory-view summary { padding: var(--space-3) 0; cursor: pointer; font-size: var(--fs-small); color: var(--c-text-2); overflow-wrap: anywhere; }
+.memory-view textarea { display: block; width: 100%; max-width: 100%; min-height: 132px; border: 1px solid var(--c-border-strong); border-radius: var(--radius); padding: var(--space-3); background: var(--c-bg); color: var(--c-text); font: inherit; line-height: 1.7; resize: vertical; }
+.memory-editor { display: grid; gap: var(--space-3); min-width: 0; }
+.memory-editor label { font-weight: 600; }
+.memory-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.memory-items, .memory-history { list-style: none; padding: 0; margin: 0; min-width: 0; }
+.memory-items > li { padding: var(--space-4) 0; border-top: 1px solid var(--c-border); min-width: 0; }
+.memory-items > li:first-child { border-top: 0; padding-top: 0; }
+.memory-item-head + * { margin-top: var(--space-2); }
+.memory-pending, .memory-conflict { background: var(--c-attention-bg); border-left: 2px solid var(--c-attention-border); padding: var(--space-3); color: var(--c-attention); overflow-wrap: anywhere; }
+.memory-error { color: var(--c-danger); overflow-wrap: anywhere; }
+.memory-notice { color: var(--c-ok); }
+.memory-history > li { padding: var(--space-3) 0; border-top: 1px solid var(--c-border); }
+.memory-history li > * + * { margin-top: var(--space-2); }
+.memory-sources { padding-left: var(--space-4); margin: 0; }
+.memory-sources li { overflow-wrap: anywhere; }
+.memory-diagnostics { font-size: var(--fs-small); color: var(--c-muted); }
+.memory-diagnostics dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); }
+.memory-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .memory-section { padding: var(--space-4) 0; }
+  .memory-section-head { align-items: flex-start; }
+  .memory-section-head h2 { font-size: 20px; }
+  .memory-actions { width: 100%; }
+  .memory-view textarea { font-size: 16px; }
+}

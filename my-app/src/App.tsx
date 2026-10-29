@@ -1,3 +1,4 @@
+import ModelPicker, { type ComposerModel } from './ModelPicker'
 import UnifiedWorkspace from './UnifiedWorkspace'
 import FeishuCalendarPanel from './FeishuCalendarPanel'
 import GroupIssueControls, {type GroupIssue} from './GroupIssueControls'
@@ -209,6 +210,7 @@ function App() {
   const [targets, setTargets] = useState<Record<number,string>>({})
   const directedRequests = useRef<Record<number,{signature:string;requestId:string}>>({})
   const [drafts, setDrafts] = useState<Record<number, string>>({})
+  const [pickedModels, setPickedModels] = useState<Record<number, ComposerModel>>({})
   const [sendingId, setSendingId] = useState<number | null>(null)
   const sendingRef = useRef(false)
   const [refresh, setRefresh] = useState(0)
@@ -258,7 +260,7 @@ function App() {
   function disconnect() {
     requestEpoch.current += 1
     try { sessionStorage.removeItem(tokenKey) } catch { /* storage may be disabled */ }
-    setDrafts({}); setToken(''); setDraftToken(''); setBots([]); setTasks([]); setDetail(null)
+    setDrafts({}); setPickedModels({}); setToken(''); setDraftToken(''); setBots([]); setTasks([]); setDetail(null)
   }
   function report(error: unknown) {
     if (error instanceof ApiError && error.status === 401) disconnect()
@@ -394,7 +396,8 @@ function App() {
       if (!directedRequests.current[id] || directedRequests.current[id].signature !== signature) directedRequests.current[id] = {signature,requestId:crypto.randomUUID()}
       if (!steering && detail.group && target) { try { sessionStorage.setItem(`pidot.directed-input.${id}`,JSON.stringify(directedRequests.current[id])) } catch { /* in-memory retry remains */ } }
       const skill = !steering && !detail.group ? pickedSkill[id] : undefined
-      await api(taskPath(detail, `/${steering ? 'steer' : 'messages'}`), token, { method: 'POST', body: JSON.stringify({ message: content, ...(skill ? { skillId: skill.id } : {}), ...(!steering && detail.group && target ? {targetBotId:target,requestId:directedRequests.current[id].requestId} : {}) }) })
+      const model = !steering && !detail.group && detail.kind === 'main' ? pickedModels[id] : undefined
+      await api(taskPath(detail, `/${steering ? 'steer' : 'messages'}`), token, { method: 'POST', body: JSON.stringify({ message: content, ...(model ? { model } : {}), ...(skill ? { skillId: skill.id } : {}), ...(!steering && detail.group && target ? {targetBotId:target,requestId:directedRequests.current[id].requestId} : {}) }) })
       if (skill) setPickedSkill(current => { const next = { ...current }; delete next[id]; return next })
       delete directedRequests.current[id]
       try { sessionStorage.removeItem(`pidot.directed-input.${id}`) } catch { /* storage unavailable */ }
@@ -617,7 +620,7 @@ function App() {
                   <textarea ref={composerRef} role="combobox" aria-autocomplete="list" aria-haspopup="listbox" id="message" rows={2} maxLength={4000} value={drafts[detail.taskId] ?? ''} onChange={(event) => setDrafts((current) => ({ ...current, [detail.taskId]: event.target.value }))} placeholder={`给 ${detail.bot.name} 发消息…（打 / 看命令）`} disabled={composerLocked} />
                   <div className="pd-composer-bar">
                     <button type="button" className="pd-tool" title="命令与 Skill" aria-label="打开命令与 Skill 菜单" disabled={composerLocked || Boolean(drafts[detail.taskId])} onClick={() => { setDrafts(current => ({ ...current, [detail.taskId]: '/' })); composerRef.current?.focus() }}>/</button>
-                    <span className="pd-tool pd-tool-static" title="当前模型">{detail.parameters.mode === 'model' ? ((detail.parameters.model as { id?: string } | undefined)?.id ?? '模型') : '测试模式'}</span>
+                    <ModelPicker key={`${token}:${detail.taskId}`} token={token} task={detail} value={pickedModels[detail.taskId]} disabled={sendingId === detail.taskId || taskInactive(detail) || taskCancelled(detail)} onChange={model => setPickedModels(current => ({ ...current, [detail.taskId]: model }))} />
                     {!detail.group && detail.kind === 'main' && detail.parameters.mode === 'model' && <label className="pd-tool" title="思考深度：从你的下一条消息开始生效；已开始的独立任务保持原设置"><span>思考</span>
                       <select id="thinking-level" aria-label="思考深度" value={thinkingLevelOf(detail.parameters)} disabled={sendingId === detail.taskId || taskInactive(detail) || taskCancelled(detail) || thinkingPending === detail.taskId} onChange={(e) => void setThinking(detail, e.target.value)}><option value="low">低</option><option value="high">高</option></select></label>}
                     <span className="pd-composer-hint pd-composer-count">{(drafts[detail.taskId] ?? '').length} / 4000</span>
@@ -633,7 +636,7 @@ function App() {
             <aside ref={detailsRef} id="chat-details" className="shell-details" aria-label="会话详情" role={detailsOverlay ? 'dialog' : undefined} aria-modal={detailsOverlay ? true : undefined} hidden={!detailsOpen}>
               <div className="shell-details-header"><h3>会话详情</h3><button type="button" className="shell-icon-button" aria-label="关闭会话详情" onClick={() => setDetailsOpen(false)}>×</button></div>
               <SkillHistory state={detail.skillState} />
-<p className="muted small">{detail.parameters.mode === 'model' ? (Array.isArray(detail.parameters.tools) && detail.parameters.tools.some((name: string) => name.startsWith('calendar_feishu_')) ? '真实模型持续对话 · 按 Bot 当前工具、资源和规则使用飞书应用日历；默认删除先问，其余直接做。外部内容仅作资料。' : '真实模型持续对话 · 使用 Bot 当前工具、资源和规则；默认删除先问，其余直接做。') : '确定性测试对话 · 非模型输出。旧会话保留固定配置，不自动升级为真实模型。'}</p>
+<p className="muted small">{detail.parameters.mode === 'model' ? (Array.isArray(detail.parameters.tools) && detail.parameters.tools.some((name: string) => name.startsWith('calendar_feishu_')) ? '真实模型持续对话 · 按 Bot 当前工具、资源和规则使用飞书应用日历；写入按当前工具组开关与全局暂停状态裁决。外部内容仅作资料。' : '真实模型持续对话 · 使用 Bot 当前工具、资源和规则；写入按当前工具组开关与全局暂停状态裁决。') : '确定性测试对话 · 非模型输出。旧会话保留固定配置，不自动升级为真实模型。'}</p>
                 {detail.kind !== 'main' && <TaskCancellationControls key={`cancel:${detail.taskId}:${token}`} task={detail} token={token} onError={report} onUpdated={(updated) => {
                   setDetail((current) => current?.taskId === updated.taskId ? updated : current)
                   setRefresh((value) => value + 1)

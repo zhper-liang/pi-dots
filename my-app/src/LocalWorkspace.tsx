@@ -1,5 +1,6 @@
 import WorkspaceIdentity from './WorkspaceIdentity'
-import { useEffect, useRef, useState } from 'react'
+import { calendarTodos } from './calendar-layout.mjs'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 
 type Item = { id: string; sourceId: string; title: string; version: number; status?: 'open' | 'completed'; due?: string | null; timezone: string; start?: string; end?: string; description?: string; deletedAt?: string | null }
 type Ref = { type: 'Todo' | 'Event'; sourceId: string; id: string }
@@ -7,12 +8,13 @@ type Link = { todoRef: Ref; eventRef: Ref; id: string; todoId: string; eventId: 
 type Form = { type: 'Todo' | 'Event'; id?: string; version?: number; title: string; description: string; start: string; end: string; due: string; timezone: string }
 type Receipt = { id: string; requestId: string; state: string; receipt: { target?: { id: string; sourceId: string }; version?: number; status?: string } }
 const initial = (type: Form['type']): Form => ({ type, title: '', description: '', start: '', end: '', due: '', timezone: 'Asia/Shanghai' })
-export default function LocalWorkspace({ token, view = 'todos' }: { token: string; view?: 'todos' | 'calendar' }) {
+export default function LocalWorkspace({ token, view = 'todos', compact = false, onChanged }: { token: string; view?: 'todos' | 'calendar'; compact?: boolean; onChanged?: () => void }) {
   const [enabled, setEnabled] = useState(false), [epoch, setEpoch] = useState(0), [loaded, setLoaded] = useState(false)
   const [todos, setTodos] = useState<Item[]>([]), [events, setEvents] = useState<Item[]>([]), [links, setLinks] = useState<Link[]>([])
   const [form, setForm] = useState<Form | null>(null), [deleting, setDeleting] = useState<{ type: Form['type']; item: Item } | null>(null)
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [receipt, setReceipt] = useState<Receipt | null>(null)
   const [hasPending, setHasPending] = useState(false)
+  const [conflict, setConflict] = useState<{ type: Form['type']; item: Item } | null>(null)
   const [todoId, setTodoId] = useState(''), [eventId, setEventId] = useState('')
   const [externalEvents, setExternalEvents] = useState<Item[]>([])
   const [linkConfirm, setLinkConfirm] = useState<{ todo: Item; event: Item } | null>(null)
@@ -23,7 +25,7 @@ export default function LocalWorkspace({ token, view = 'todos' }: { token: strin
   async function api<T>(path: string, input?: object): Promise<T> {
     const response = await fetch(`/api/workspace/${path}`, { method: input ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, ...(input ? { 'Content-Type': 'application/json' } : {}) }, ...(input ? { body: JSON.stringify(input) } : {}) }).catch(() => { throw new Error('连接中断，结果未确认。请查询原请求回执，不要改参数重建请求。') })
     const body = await response.json()
-    if (!response.ok) throw new Error(`${body.error?.code ?? response.status}：${body.error?.message ?? '业务操作失败，请重试。'}`)
+    if (!response.ok) { const error = new Error(body.error?.message ?? '业务操作失败，请重试。'); error.name = response.status >= 500 ? 'NetworkError' : body.error?.code ?? String(response.status); throw error }
     return body.data
   }
   async function page<T>(type: string): Promise<T[]> {
@@ -45,6 +47,7 @@ export default function LocalWorkspace({ token, view = 'todos' }: { token: strin
     setLoaded(true)
     return true
   }
+  const initialize = useEffectEvent(() => { if (compact) void act(refresh) })
   // A stale authorized projection is not retained after source revocation/change.
   useEffect(() => {
     let active = true, checking = false, identity: string | undefined
@@ -66,9 +69,10 @@ export default function LocalWorkspace({ token, view = 'todos' }: { token: strin
         if (active) { visibility.current++; setTodos([]); setEvents([]); setLinks([]); setExternalEvents([]); setLinkConfirm(null); setReceipt(null); setForm(null); setDeleting(null); setLoaded(false); setError('无法核验当前来源权限，已隐藏关联数据。') }
       } finally { checking = false }
     }
+    initialize()
     void check(); const timer = setInterval(() => void check(), 3000)
     return () => { active = false; clearInterval(timer) }
-  }, [token])
+  }, [token, compact])
   async function loadExternalEvents() {
     const generation = visibility.current
     setExternalEvents([]); setLinkConfirm(null); setEventId('')
@@ -91,13 +95,28 @@ export default function LocalWorkspace({ token, view = 'todos' }: { token: strin
   }
   async function command(input: object, path = 'command') {
     const key = JSON.stringify({ path, input })
-    if (pending.current?.key !== key) pending.current = { key, requestId: crypto.randomUUID() }
+    if (pending.current && pending.current.key !== key) throw Error('上次请求结果未确认，请先查询原请求回执。')
+    if (!pending.current) pending.current = { key, requestId: crypto.randomUUID() }
     setHasPending(true)
     const generation = visibility.current
-    const result = await api<Receipt>(path, { ...input, requestId: pending.current.requestId })
+    let result: Receipt
+    try { result = await api<Receipt>(path, { ...input, requestId: pending.current.requestId }) }
+    catch (error) {
+      if ((error as Error).name.startsWith('WORKSPACE_')) { pending.current = null; setHasPending(false) }
+      if ((error as Error).name === 'WORKSPACE_VERSION_CONFLICT') {
+        pending.current = null; setHasPending(false)
+        const target = input as { type: Form['type']; id: string }
+        const detail = await api<{ items: Item[] }>('get', { sourceId: 'local', type: target.type, id: target.id })
+        setConflict(detail.items[0] ? { type: target.type, item: detail.items[0] } : null)
+        setForm(null); setDeleting(null)
+      }
+      throw error
+    }
     if (generation !== visibility.current) throw Error('操作期间权限已变化；请查询原请求回执，不要重建请求。')
     setReceipt(result); pending.current = null; setHasPending(false); setForm(null); setDeleting(null)
+    setConflict(null)
     if (await refresh()) setReceipt(result)
+    onChanged?.()
   }
   async function edit(type: Form['type'], item: Item) {
     // Detail uses the same service and permission projection as list.
@@ -107,19 +126,20 @@ export default function LocalWorkspace({ token, view = 'todos' }: { token: strin
     setForm({ ...initial(type), id: latest.id, version: latest.version, title: latest.title, description: latest.description ?? '', start: latest.start ?? '', end: latest.end ?? '', due: latest.due ?? '', timezone: latest.timezone })
   }
   function renderItems(type: Form['type'], items: Item[]) {
-    return <ul>{items.map(item => <li key={item.id} style={{ overflowWrap: 'anywhere' }}><strong>{item.title}</strong><p>source: {item.sourceId} · version: {item.version} · {item.deletedAt ? `已删除 ${item.deletedAt}` : item.status ?? 'active'} · ID: {item.id}</p><p>{type === 'Todo' ? `截止：${item.due ?? '无'} · ${item.timezone}` : `${item.start} — ${item.end} · ${item.timezone}`}</p>{!item.deletedAt && <><button disabled={busy} onClick={() => void act(() => edit(type, item))}>编辑{type === 'Todo' ? '待办' : '日程'}</button>{type === 'Todo' && <button disabled={busy} onClick={() => void act(() => command({ sourceId: 'local', type, action: 'update', id: item.id, expectedVersion: item.version, data: { status: item.status === 'completed' ? 'open' : 'completed' } }))}>{item.status === 'completed' ? '重开待办' : '完成待办'}</button>}<button disabled={busy} onClick={() => { setDeleting({ type, item }); setForm(null) }}>删除{type === 'Todo' ? '待办' : '日程'}</button></>}</li>)}</ul>
+    return <ul className={compact ? 'cal-todo-list' : undefined}>{items.map(item => <li key={item.id} style={{ overflowWrap: 'anywhere' }}><strong>{item.title}</strong>{!compact && <p>source: {item.sourceId} · version: {item.version} · {item.deletedAt ? `已删除 ${item.deletedAt}` : item.status ?? 'active'} · ID: {item.id}</p>}<p>{type === 'Todo' ? `截止：${item.due ?? '无'} · ${item.timezone}` : `${item.start} — ${item.end} · ${item.timezone}`}</p>{!item.deletedAt && <><button disabled={busy} onClick={() => void act(() => edit(type, item))}>编辑{type === 'Todo' ? '待办' : '日程'}</button>{type === 'Todo' && <button disabled={busy} onClick={() => void act(() => command({ sourceId: 'local', type, action: 'update', id: item.id, expectedVersion: item.version, data: { status: item.status === 'completed' ? 'open' : 'completed' } }))}>{item.status === 'completed' ? '重开待办' : '完成待办'}</button>}<button disabled={busy} onClick={() => { setDeleting({ type, item }); setForm(null) }}>删除{type === 'Todo' ? '待办' : '日程'}</button></>}</li>)}</ul>
   }
-  return <section className="feishu-panel"><h2>{view === 'calendar' ? '本地日程' : '本地待办与事项关联'}</h2><p>本地用户操作无需聊天Task，不调用模型。你对本地日程与待办始终拥有完整权限；Bot 权限在 Bot 设置中单独选择。</p><button disabled={busy} onClick={() => void act(refresh)}>{busy ? '正在处理…' : '刷新本地工作区'}</button>
+  return <section className={compact ? 'cal-todos-workspace' : 'feishu-panel'} aria-label={compact ? '日历旁待办清单' : undefined}><h2>{compact ? '待办清单' : view === 'calendar' ? '本地日程' : '本地待办与事项关联'}</h2>{!compact && <p>本地用户操作无需聊天Task，不调用模型。你对本地日程与待办始终拥有完整权限；Bot 权限在 Bot 设置中单独选择。</p>}<button disabled={busy} onClick={() => void act(refresh)}>{busy ? '正在处理…' : '刷新本地工作区'}</button>
     {busy && <p role="status">正在读取或保存本地事项…</p>}{!loaded && !busy && <p>正在读取本地事项；如未显示请刷新。</p>}{error && <p role="alert">{error}</p>}{receipt && <p role="status" style={{ overflowWrap: 'anywhere' }}>持久回执：{receipt.state} · 请求 {receipt.requestId} · 对象 {receipt.receipt.target?.id ?? '用户来源许可'} · 版本 {receipt.receipt.version ?? '—'}</p>}
-    {hasPending && <button disabled={busy} onClick={() => void act(async () => { const op = await api<Receipt | null>('operation', { requestId: pending.current!.requestId, sourceId: 'local' }); if (!op) throw new Error('未查询到回执；保留原请求标识，仅原参数可重试。'); pending.current = null; setHasPending(false); if (await refresh()) setReceipt(op) })}>查询上次请求回执</button>}
-    {loaded && <><WorkspaceIdentity sourceId="local" authority="local" scope={enabled ? 'full' : 'none'} epoch={epoch} /></>}
-    {loaded && <><button disabled={busy} onClick={() => { setForm(initial('Todo')); setDeleting(null) }}>新建待办</button><button disabled={busy} onClick={() => { setForm(initial('Event')); setDeleting(null) }}>新建日程</button>
+    {hasPending && <button disabled={busy} onClick={() => void act(async () => { const op = await api<Receipt | null>('operation', { requestId: pending.current!.requestId, sourceId: 'local' }); if (!op) throw new Error('未查询到回执；保留原请求标识，仅原参数可重试。'); if (op.state !== 'succeeded') throw new Error(`原请求状态：${op.state}，请继续查询，不要新建请求。`); pending.current = null; setHasPending(false); if (await refresh()) setReceipt(op); onChanged?.() })}>查询上次请求回执</button>}
+    {loaded && !compact && <><WorkspaceIdentity sourceId="local" authority="local" scope={enabled ? 'full' : 'none'} epoch={epoch} /></>}
+    {loaded && <><button disabled={busy} onClick={() => { setForm(initial('Todo')); setDeleting(null) }}>新建待办</button>{!compact && <button disabled={busy} onClick={() => { setForm(initial('Event')); setDeleting(null) }}>新建日程</button>}
+      {conflict && <section className="cal-conflict" role="alert"><h3>当前版本 {conflict.item.version}</h3><p>{conflict.item.title} · {conflict.item.deletedAt ? '已删除' : conflict.item.due ?? conflict.item.start ?? '无截止日期'}</p><p>未覆盖当前内容。请重新读取并确认后保存。</p>{!conflict.item.deletedAt && <button disabled={busy} onClick={() => void act(async () => { await edit(conflict.type, conflict.item); setConflict(null) })}>按当前版本重新编辑</button>}</section>}
       {form && <form aria-label="本地事项表单" onSubmit={e => { e.preventDefault(); void act(() => command({ sourceId: 'local', type: form.type, action: form.id ? 'update' : 'create', ...(form.id ? { id: form.id, expectedVersion: form.version } : {}), data: form.type === 'Todo' ? { title: form.title, due: form.due || null, timezone: form.timezone } : { title: form.title, description: form.description, start: form.start, end: form.end, timezone: form.timezone } })) }}><fieldset disabled={busy}><legend>{form.id ? '编辑' : '创建'}{form.type === 'Todo' ? '待办' : '日程'} · 本地来源{form.version && ` · 版本${form.version}`}</legend><label>标题<input required maxLength={500} aria-label="本地标题" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /></label><label>IANA时区<input required aria-label="本地时区" value={form.timezone} onChange={e => setForm({ ...form, timezone: e.target.value })} /></label>{form.type === 'Todo' ? <label>截止日期（可选；YYYY-MM-DD或带偏移ISO）<input aria-label="待办截止日期" value={form.due} onChange={e => setForm({ ...form, due: e.target.value })} /></label> : <><label>描述<textarea aria-label="本地描述" maxLength={4000} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></label><label>开始（例2026-10-20T09:00:00+08:00）<input required aria-label="本地开始" value={form.start} onChange={e => setForm({ ...form, start: e.target.value })} /></label><label>结束（带偏移ISO）<input required aria-label="本地结束" value={form.end} onChange={e => setForm({ ...form, end: e.target.value })} /></label></>}<p>明确提交保存；不支持重复/全天写入。修改冲突时请刷新并重新编辑，不会自动覆盖。</p><button type="submit">明确提交保存</button><button type="button" onClick={() => setForm(null)}>取消编辑</button></fieldset></form>}
       {deleting && <section aria-label="精确删除确认" style={{ overflowWrap: 'anywhere' }}><p>确认删除 {deleting.item.title} · source local · ID {deleting.item.id} · version {deleting.item.version}？保留删除标记和关联记录，不删除另一事项。</p><button disabled={busy} onClick={() => void act(() => command({ sourceId: 'local', type: deleting.type, action: 'delete', id: deleting.item.id, expectedVersion: deleting.item.version, confirmedDelete: true }))}>确认删除此对象</button><button disabled={busy} onClick={() => setDeleting(null)}>取消删除</button></section>}
-      {view === 'todos' ? <><h3>待办清单（含历史删除标记）</h3>{todos.length === 0 && <p className="workspace-empty">暂无待办。新建待办后会获得持久回执；无截止日期不会自动占用日历。</p>}{renderItems('Todo', todos)}</> : <><h3>本地日程（含历史删除标记）</h3>{events.length === 0 && <p className="workspace-empty">暂无本地日程；外部来源独立展示，不自动合并或授权。</p>}{renderItems('Event', events)}</>}
-      <section aria-label="外部关联日程查询"><label>关联窗口开始<input aria-label="关联窗口开始" value={linkWindow.start} onChange={e => setLinkWindow({ ...linkWindow, start: e.target.value })} /></label><label>关联窗口结束<input aria-label="关联窗口结束" value={linkWindow.end} onChange={e => setLinkWindow({ ...linkWindow, end: e.target.value })} /></label><button disabled={busy} onClick={() => void act(loadExternalEvents)}>查询可关联外部日程</button></section>
+      {view === 'todos' ? <>{!compact && <h3>待办清单（含历史删除标记）</h3>}{(compact ? calendarTodos(todos) : todos).length === 0 && <p className="workspace-empty">暂无待办。新建待办后会获得持久回执；无截止日期不会自动占用日历。</p>}{renderItems('Todo', compact ? calendarTodos(todos) : todos)}</> : <><h3>本地日程（含历史删除标记）</h3>{events.length === 0 && <p className="workspace-empty">暂无本地日程；外部来源独立展示，不自动合并或授权。</p>}{renderItems('Event', events)}</>}
+      {!compact && <><section aria-label="外部关联日程查询"><label>关联窗口开始<input aria-label="关联窗口开始" value={linkWindow.start} onChange={e => setLinkWindow({ ...linkWindow, start: e.target.value })} /></label><label>关联窗口结束<input aria-label="关联窗口结束" value={linkWindow.end} onChange={e => setLinkWindow({ ...linkWindow, end: e.target.value })} /></label><button disabled={busy} onClick={() => void act(loadExternalEvents)}>查询可关联外部日程</button></section>
       <form aria-label="显式事项关联" onSubmit={e => { e.preventDefault(); const todo = todos.find(t => t.id === todoId), event = [...events, ...externalEvents].find(v => `${v.sourceId}|${v.id}` === eventId); if (todo && event) setLinkConfirm({ todo, event }) }}><fieldset disabled={busy}><legend>显式关联（本地或已授权外部日程；不级联删除）</legend><label>待办<select required aria-label="关联待办" value={todoId} onChange={e => { setTodoId(e.target.value); setLinkConfirm(null) }}><option value="">请选择待办</option>{todos.filter(i => !i.deletedAt).map(i => <option key={i.id} value={i.id}>{i.title}</option>)}</select></label><label>日程<select required aria-label="关联日程" value={eventId} onChange={e => { setEventId(e.target.value); setLinkConfirm(null) }}><option value="">请选择日程</option>{[...events, ...externalEvents].filter(i => !i.deletedAt).map(i => <option key={`${i.sourceId}|${i.id}`} value={`${i.sourceId}|${i.id}`}>{i.title} · {i.sourceId === 'local' ? '本地' : '外部'} · v{i.version}</option>)}</select></label><button type="submit">核对关联对象</button></fieldset></form>
       {linkConfirm && <section aria-label="精确关联确认" style={{ overflowWrap: 'anywhere' }}><p>待办：{linkConfirm.todo.title} · source {linkConfirm.todo.sourceId} · ID {linkConfirm.todo.id} · v{linkConfirm.todo.version}</p><p>日程：{linkConfirm.event.title} · source {linkConfirm.event.sourceId} · 实例ID {linkConfirm.event.id} · v{linkConfirm.event.version}</p><p>仅保存关系，不修改外部日程；删除待办不会删除日程。权限或版本变化时拒绝保存。</p><button disabled={busy} onClick={() => void act(() => command({ sourceId: 'local', type: 'ItemLink', action: 'create', data: { todoRef: { type: 'Todo', sourceId: linkConfirm.todo.sourceId, id: linkConfirm.todo.id }, eventRef: { type: 'Event', sourceId: linkConfirm.event.sourceId, id: linkConfirm.event.id }, expectedTodoVersion: linkConfirm.todo.version, expectedEventVersion: linkConfirm.event.version, relation: 'related' } }))}>明确提交关联</button><button disabled={busy} onClick={() => setLinkConfirm(null)}>取消关联</button></section>}
-      <ul aria-label="持久事项关联">{links.map(link => <li key={link.id} style={{ overflowWrap: 'anywhere' }}>{link.todoRef?.sourceId ?? 'local'} / {link.todoId}（{link.todoState}）↔ {link.eventRef?.sourceId ?? 'local'} / {link.eventId}（{link.eventState}） · related</li>)}</ul></>}
+      <ul aria-label="持久事项关联">{links.map(link => <li key={link.id} style={{ overflowWrap: 'anywhere' }}>{link.todoRef?.sourceId ?? 'local'} / {link.todoId}（{link.todoState}）↔ {link.eventRef?.sourceId ?? 'local'} / {link.eventId}（{link.eventState}） · related</li>)}</ul></>}</>}
   </section>
 }

@@ -14,3 +14,7 @@ export type Placed = { key: string; top: number; height: number; col: number; co
 export function layoutDay(events: { key: string; start: number; end: number }[], key: string, minMinutes?: number): Placed[]
 export function eventDays(start: number, end: number): string[]
 export function dueDay(due: string | null | undefined): string | null
+
+export type WorkspacePane = 'calendar' | 'todos'
+export function workspacePanes(narrow: boolean, selected?: WorkspacePane): { calendar: boolean; todos: boolean }
+export function calendarTodos<T extends { id: string; title: string; due?: string | null; status?: string; deletedAt?: string | null }>(items: T[]): T[]

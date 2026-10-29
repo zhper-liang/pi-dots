@@ -1,0 +1,16 @@
+.routine-form, .schedule-workspace form { min-width: 0; display: grid; gap: 10px; }
+.routine-form input:not([type="checkbox"]), .routine-form select, .routine-form textarea,
+.schedule-workspace input:not([type="checkbox"]), .schedule-workspace select, .schedule-workspace textarea { box-sizing: border-box; max-width: 100%; min-width: 0; }
+.routine-weekdays { display: flex; flex-wrap: wrap; gap: 10px 14px; min-width: 0; border: 0; padding: 4px 0; margin: 0; }
+.routine-weekdays legend { margin-bottom: 6px; color: var(--c-text-2); }
+.routine-weekdays label { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.routine-advanced { padding: 8px 0; color: var(--c-text-2); }
+.routine-advanced summary { cursor: pointer; margin-bottom: 8px; }
+.routine-advanced label { display: block; margin: 8px 0; }
+.routine-advanced fieldset { min-width: 0; }
+.routine-head, .routine-prompt, .schedule-workspace { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .routine-form, .schedule-workspace form { width: 100%; }
+  .routine-form input:not([type="checkbox"]), .routine-form select, .routine-form textarea { width: 100%; }
+  .routine-weekdays label { min-height: 44px; }
+}

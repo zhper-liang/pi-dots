@@ -59,12 +59,14 @@ async function readJson(req) {
   return data
 }
 
-// Task messages may carry the Skill picked with "/" in the composer: {message, skillId?}.
+// Main-session messages may pin a model for this input; independent Tasks remain fixed.
 async function readTaskMessage(req) {
   const data = await readJson(req)
-  if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(k => !['message', 'skillId'].includes(k)) ||
-    typeof data.message !== 'string' || !data.message.trim() || data.message.length > MAX_MESSAGE_LENGTH || (data.skillId !== undefined && typeof data.skillId !== 'string')) {
-    throw new RequestError(400, 'INVALID_MESSAGE', '请提供 message（1–4000 个字符的非空字符串），可选 skillId。')
+  if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(k => !['message', 'skillId', 'model'].includes(k)) ||
+    typeof data.message !== 'string' || !data.message.trim() || data.message.length > MAX_MESSAGE_LENGTH || (data.skillId !== undefined && typeof data.skillId !== 'string') ||
+    (data.model !== undefined && (!data.model || typeof data.model !== 'object' || Array.isArray(data.model) || Object.keys(data.model).length !== 1 ||
+      typeof data.model.id !== 'string' || !/^[\w./:-]{1,200}$/.test(data.model.id)))) {
+    throw new RequestError(400, 'INVALID_MESSAGE', '请提供 message（1–4000 个字符的非空字符串），可选 skillId 和 model: { id }。')
   }
   return data
 }
@@ -83,6 +85,7 @@ async function readMessage(req) {
 /** reply is injectable so service failures can be verified without a debug API. */
 export function createApiServer({ token, reply = createTestReply, tasks, staticDir, onError = () => {} }) {
   if (typeof token !== 'string' || !token) throw new Error('API token is required')
+  tasks?.registerMemorySecrets?.(token)
   const digest = (value) => createHash('sha256').update(value).digest()
   const expected = digest(`Bearer ${token}`)
   const server = createServer(async (req, res) => {
@@ -114,6 +117,22 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         if (req.method === 'GET') { req.resume(); sendJson(res, 200, { data: await tasks.getModelSettings() }); return }
         if (req.method === 'POST') { sendJson(res, 200, { data: await tasks.saveModelSettings(await readJson(req)) }); return }
         req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET 与 POST。' } }, { Allow: 'GET, POST' }); return
+      }
+      const memoryMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/memory$/.exec(req.url)
+      if (tasks && (memoryMatch || req.url === '/api/settings/preferences')) {
+        if (req.method === 'GET') {
+          req.resume()
+          sendJson(res, 200, { data: memoryMatch ? await tasks.getBotMemory(memoryMatch[1]) : await tasks.getPreferences() })
+          return
+        }
+        if (req.method === 'POST') {
+          const input = await readJson(req)
+          sendJson(res, 200, { data: memoryMatch ? await tasks.editBotMemory(memoryMatch[1], input) : await tasks.editPreferences(input) })
+          return
+        }
+        req.resume()
+        sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET 与 POST。' } }, { Allow: 'GET, POST' })
+        return
       }
       if (tasks && req.url === '/api/inbox') {
         if (req.method !== 'GET') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET。' } }, { Allow: 'GET' }); return }
@@ -318,7 +337,7 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         sendJson(res, 200, { task: await tasks.updateState(Number(taskMatch[1]), await readJson(req)) })
       } else if (route === 'messages') {
         const accepted = groupRoute?.[1] ? await tasks.send(Number(taskMatch[1]), await readJson(req).then(data => data && Object.keys(data).length === 1 && typeof data.message === 'string' ? data.message : data))
-          : await readTaskMessage(req).then(({ message, skillId }) => tasks.send(Number(taskMatch[1]), message, undefined, skillId === undefined ? {} : { skillId }))
+          : await readTaskMessage(req).then(({ message, skillId, model }) => tasks.send(Number(taskMatch[1]), message, undefined, { ...(skillId === undefined ? {} : { skillId }), ...(model === undefined ? {} : { model }) }))
         sendJson(res, 202, accepted)
       } else if (route === 'bots' && req.method === 'POST') {
         const result = await tasks.createBot(await readJson(req))

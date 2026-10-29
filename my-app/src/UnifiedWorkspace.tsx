@@ -73,7 +73,7 @@ export default function UnifiedWorkspace({ bots, onOpenTask, token, view, itemTa
             <div hidden={automation !== 'schedules'} className="items-routines">
               <h2>例行任务</h2>
               <label>执行 Bot<select aria-label="事项例行任务 Bot" value={routineBot} onChange={event => setRoutineBot(event.target.value)}>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}{bot.status === 'inactive' ? '（已停用）' : ''}</option>)}</select></label>
-              {bots.map(bot => <div key={bot.id} hidden={routineBot !== bot.id}><BotRoutines token={token} botId={bot.id} readOnly={bot.status === 'inactive'} onOpenTask={id => onOpenTask(id, bot.id)} /></div>)}
+              {bots.map(bot => <div key={bot.id} hidden={routineBot !== bot.id}><BotRoutines token={token} botId={bot.id} botName={bot.name} readOnly={bot.status === 'inactive'} onOpenTask={id => onOpenTask(id, bot.id)} /></div>)}
             </div>
             <details className="shell-more" open={automation === 'runs'}><summary>{automation === 'runs' ? '全部计划执行记录' : '全部计划与只读简报'}</summary><ScheduleWorkspace token={token} view={automation} /></details>
           </div>

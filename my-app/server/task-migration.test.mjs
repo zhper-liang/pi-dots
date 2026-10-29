@@ -60,8 +60,21 @@ test('03 preview is read-only; explicit migration retains identity, requirements
   assert.equal(after.migrationHistory.length, 1); assert.equal(after.migrationHistory[0].id, migration.entryId)
   assert.ok((await s.getBotConfiguration('calendar')).audit.some((a) => a.type === 'task-configuration-migrated' && a.taskId === task.taskId && a.source === 'authenticated-user'))
   await s.send(task.taskId, '迁移后继续'); const final = await idle(s, task.taskId)
-  assert.ok(observed.context.systemPrompt.includes('新的迁移职责')); assert.ok(observed.context.systemPrompt.includes('不改上午事项'))
+  const personality = (await s.getBotMemory('calendar')).personality
+  assert.equal(personality.content, before.bot.description, 'legacy description seeds personality once, not on configuration migration')
+  assert.ok(observed.context.systemPrompt.includes(personality.content))
+  assert.ok(!observed.context.systemPrompt.includes('新的迁移职责'), 'migration preserves stored description without overriding live personality')
+  assert.ok(observed.context.systemPrompt.includes('不改上午事项'))
   assert.ok(observed.context.messages.some((m) => m.content === '原历史')); assert.equal(final.callUsage.modelCalls, before.callUsage.modelCalls + 1)
+  const livePersonality = '你是实时人格日程专家，回答简洁且明确来源。'
+  await s.editBotMemory('calendar', { kind: 'personality', action: 'set', content: livePersonality, requestId: requestId(), expectedVersion: personality.version })
+  await s.send(task.taskId, '人格编辑后继续'); const updated = await idle(s, task.taskId)
+  assert.ok(observed.context.systemPrompt.includes(livePersonality))
+  assert.ok(!observed.context.systemPrompt.includes(personality.content))
+  assert.ok(observed.context.systemPrompt.includes('不改上午事项'))
+  assert.deepEqual(updated.bot, final.bot, 'live personality edits never rewrite frozen historical Bot identity')
+  assert.deepEqual(updated.configRef, final.configRef)
+  assert.equal(updated.callUsage.modelCalls, before.callUsage.modelCalls + 2)
 })
 
 test('03 preserves explicit Task parameter overrides and raised limits, does not reset unknown usage', async (t) => {

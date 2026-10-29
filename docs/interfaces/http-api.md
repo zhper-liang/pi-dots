@@ -59,6 +59,12 @@ HTTP 成功状态不等于业务 Operation 已 succeeded；必须读取 data 内
 
 详细校验入口：[本地事项](../../my-app/server/workspace-local.mjs)、[外部来源](../../my-app/server/workspace-feishu.mjs)、[授权](../../my-app/server/workspace-grants.mjs)、[MCP业务](../../my-app/server/workspace-mcp-business.mjs)、[计划](../../my-app/server/workspace-schedule.mjs)、[提醒](../../my-app/server/workspace-reminders.mjs)。
 
+## 周期规则与例行任务
+
+`schedule-manage` 与例行任务提案共用结构化规则，不解析自由文本 cron。新增 `weekly: {type:'weekly', weekdays:[1,3,5], time:'09:00'}`（ISO 周一=1 至周日=7）和 `monthly: {type:'monthly', day:31, time:'09:00'}`。时区单独传 IANA 名称；短月取月末，DST 缺失时刻跳过、重复时刻只运行第一次；暂停恢复不补跑。仍支持 at/daily/interval/event。
+
+例行任务可在 `actionSpec.model:{id}` 固定模型名，并以通知开关控制应用内结果通知；地址/key 每次调用实时读取。测试运行保持只读且不投递通知。旧版回滚约束见 [运行手册](../engineering/operations.md#周月计划的回滚边界t09)。
+
 ## 本地事项请求字段
 
 | 请求 | 字段与约束 |
@@ -83,6 +89,19 @@ Todo data 允许title、status、due、timezone；创建必须有标题，status
 ## 本机 MCP relay
 `POST /api/workspace/mcp-dispatch` 不是普通用户业务 API，也不是公网 HTTP MCP。只接受无 Origin、本机来源和本机 Host、受限 client bearer；管理员 API token 不可用。body 仅包含 message/close，session 使用 `x-pidot-mcp-session`。身份由可信 session 绑定，不接受任意 taskId 冒用。见 [MCP契约](mcp.md)。
 
+## Bot 人格、记忆与共享偏好
+
+所有端点仍要求本机认证 Bearer token；不授予模型或外部 MCP 修改人格的权限。
+
+| 路由 | 方法 | 数据合同 |
+|---|---|---|
+| `/api/bots/:botId/memory` | GET | `{data:{personality, memory, preferences, history, historyNextBeforeVersion}}`；共享偏好在 Bot 页只读 |
+| `/api/bots/:botId/memory` | POST | `{kind:'personality'|'memory', requestId, expectedVersion, action, id?, content?, sourceEntries?}`；人格 action=set，记忆纠正/删除为 update/delete |
+| `/api/settings/preferences` | GET | `{data:document}`，含最近历史及历史分页提示，所有 Bot 共用 |
+| `/api/settings/preferences` | POST | `{requestId, expectedVersion, action, id?, content?, sourceEntries?}`；不接受 botId/kind，路由固定共享文档 |
+
+文档含版本、更新时间、来源 `{taskId,entryId}`、状态 ready/pending；人格含 content，记忆/偏好含 items。结果 `{data:{ok,code,version,changed,replayed,document}}`；版本/请求内容冲突返回 409，不自动覆盖。未知保存结果重试必须保留原 requestId；纠正/删除产生新版本，来源和历史可查，凭证不回显。用户编辑界面只添加/修改人格、纠正/删除既有记忆与偏好；新的偏好由有来源私聊的空闲批处理产生。
+
 ## Agent 运行时主要端点
 主会话使用 Bot 当前全部可用工具，可直接执行写入；task_create 用于长任务。工具、资源及规则无需 Task 配置迁移；模型、提示词等运行配置仍可在安全边界迁移。
 
@@ -95,7 +114,7 @@ Todo data 允许title、status、due、timezone；创建必须有标题，status
 | `/api/bots/:botId/deactivate` | POST | 停用 Bot，保留历史 |
 | `/api/tasks` | GET / POST | 列出/创建持久 Task |
 | `/api/tasks/:taskId` | GET | 查询 Task |
-| `/api/tasks/:taskId/messages` | POST | 持久输入，返回202接受不表示完成。body `{message, skillId?}`：`skillId` 是输入框“/”菜单选的 Skill，只对这条消息生效（输入开始时以 `user-command` 加载，处理完自动停用）；发送时检查，不可用返回 409 `SKILL_UNAVAILABLE`（群聊、Bot 未分配 Skill 工具、依赖缺失或未登记），格式错误 400；带 Skill 的排队消息不能转为插入（409 `SKILL_COMMAND_NOT_STEERABLE`）。Skill 加载失败不再挡住后续发送 |
+| `/api/tasks/:taskId/messages` | POST | 持久输入，返回202接受不表示完成。body `{message, skillId?, model?:{id}}`：`skillId` 是输入框“/”菜单选的 Skill，只对这条消息生效（输入开始时以 `user-command` 加载，处理完自动停用）；主会话可选 model.id 在入队时固定，开始消费才生效，不改在途调用/旧消息/用量；独立 Task 显式传 model 返回 409 MODEL_FIXED，不接受地址或 key。发送时检查，不可用返回 409 `SKILL_UNAVAILABLE`（群聊、Bot 未分配 Skill 工具、依赖缺失或未登记），格式错误 400；带 Skill 的排队消息不能转为插入（409 `SKILL_COMMAND_NOT_STEERABLE`）。Skill 加载失败不再挡住后续发送 |
 | `/api/skills` | GET | 已登记 Skill 目录：自动扫描服务端 `server/skills/<id>/manifest.json`，每次读取，不用重启；格式坏的列为不可用 |
 | `/api/tasks/:taskId/skills` | GET / POST / DELETE | GET 返回这个 Task 能用“/”选的 Skill 及是否可用、原因（所有 Task 均按 Bot 当前权限及各类任务的工具范围计算）；POST/DELETE `{skillId}` 手动启用/停用（前端已不用，保留兼容）|
 | `/api/tasks/:taskId/state` | PATCH | 更新允许的任务状态 |

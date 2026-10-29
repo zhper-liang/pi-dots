@@ -17,10 +17,22 @@ export function normalizeScheduleRule(rule, timezone) {
     if (!Number.isSafeInteger(rule.seconds) || rule.seconds < 60 || rule.seconds > 31536000 || !instant(rule.anchor)) bad('间隔须为60秒至一年整数秒，含明确起点。')
     return { type: 'interval', seconds: rule.seconds, anchor: new Date(rule.anchor).toISOString() }
   }
+  if (rule.type === 'weekly') {
+    exact(['type', 'weekdays', 'time'])
+    if (!Array.isArray(rule.weekdays) || !rule.weekdays.length || rule.weekdays.length > 7 || rule.weekdays.some(day => !Number.isInteger(day) || day < 1 || day > 7) || new Set(rule.weekdays).size !== rule.weekdays.length) bad('每周须选择1至7个不重复的星期（周一为1，周日为7）。')
+    if (typeof rule.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(rule.time)) bad('每周时间须为HH:mm。')
+    return { type: 'weekly', weekdays: [...rule.weekdays].sort((a, b) => a - b), time: rule.time }
+  }
+  if (rule.type === 'monthly') {
+    exact(['type', 'day', 'time'])
+    if (!Number.isInteger(rule.day) || rule.day < 1 || rule.day > 31) bad('每月日期须为1至31。')
+    if (typeof rule.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(rule.time)) bad('每月时间须为HH:mm。')
+    return { type: 'monthly', day: rule.day, time: rule.time }
+  }
   if (rule.type === 'daily') { exact(['type', 'time']); if (typeof rule.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(rule.time)) bad('每日时间须为HH:mm。'); return { type: 'daily', time: rule.time } }
   // PLAN §8.5 event triggers (first batch); they have no clock due and fire from the scheduler's event poll.
   if (rule.type === 'event') { exact(['type', 'event']); if (!SCHEDULE_EVENTS.includes(rule.event)) bad('事件只支持待办到期、日程变更、本Bot任务结束。'); return { type: 'event', event: rule.event } }
-  bad('仅支持at/daily/interval/event。')
+  bad('仅支持at/daily/weekly/monthly/interval/event。')
 }
 const formatters = new Map()
 function localParts(at, zone) {
@@ -43,19 +55,39 @@ function civilInstant(day, time, zone) {
   }
   return candidates.length ? Math.min(...candidates) : null
 }
+// ISO weekdays: Monday = 1, Sunday = 7. Short months clamp to their last day.
+function matchesDay(rule, day) {
+  const date = new Date(day)
+  if (rule.type === 'weekly') return rule.weekdays.includes(date.getUTCDay() || 7)
+  if (rule.type === 'monthly') {
+    const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate()
+    return date.getUTCDate() === Math.min(rule.day, last)
+  }
+  return true
+}
 export function nextScheduleDue(rule, zone, after) {
   if (rule.type === 'event') return null
   if (rule.type === 'at') return Date.parse(rule.at) > after ? Date.parse(rule.at) : null
   if (rule.type === 'interval') { const anchor = Date.parse(rule.anchor), step = rule.seconds * 1000; return anchor + Math.max(0, Math.floor((after - anchor) / step) + 1) * step }
   const p = localParts(after, zone), day = Date.UTC(p.year, p.month - 1, p.day)
-  for (let i = 0; i < 370; i++) { const at = civilInstant(day + i * 86400000, rule.time, zone); if (at !== null && at > after) return at }
-  bad('无法计算下一每日触发点。')
+  for (let i = 0; i < 370; i++) {
+    const candidate = day + i * 86400000
+    if (!matchesDay(rule, candidate)) continue
+    const at = civilInstant(candidate, rule.time, zone)
+    if (at !== null && at > after) return at
+  }
+  bad('无法计算下一周期触发点。')
 }
 export function latestScheduleDue(rule, zone, first, now) {
   if (rule.type === 'event') return now
   if (rule.type === 'interval') return first + Math.floor((now - first) / (rule.seconds * 1000)) * rule.seconds * 1000
-  if (rule.type !== 'daily') return first
+  if (!['daily', 'weekly', 'monthly'].includes(rule.type)) return first
   const p = localParts(now, zone), day = Date.UTC(p.year, p.month - 1, p.day)
-  for (let i = 0; i < 370; i++) { const at = civilInstant(day - i * 86400000, rule.time, zone); if (at !== null && at <= now) return Math.max(first, at) }
+  for (let i = 0; i < 370; i++) {
+    const candidate = day - i * 86400000
+    if (!matchesDay(rule, candidate)) continue
+    const at = civilInstant(candidate, rule.time, zone)
+    if (at !== null && at <= now) return Math.max(first, at)
+  }
   return first
 }

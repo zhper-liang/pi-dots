@@ -1,8 +1,11 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import BotAvatar, { ShapeIcon } from './BotAvatar'
 import { avatarColors, avatarShapes, loadLook, saveLook, shapeLabels, type BotLook } from './botLook'
 import BotConfiguration from './BotConfiguration'
+import BotMemory from './BotMemory'
+import { resolveMemorySourceHash } from './memory-helpers.mjs'
+import type { MemoryApi, MemorySource, MemorySourceHandler } from './memory-types'
 import BotRules from './BotRules'
 import BotRoutines from './BotRoutines'
 import { BotSkills } from './SkillControls'
@@ -17,14 +20,35 @@ type Props = {
   onTab: (tab: BotTab) => void; onDirectory: () => void
   onNewTask: () => void; onOpenTask: (taskId: number) => void
   onSaved: (bot: Bot) => void; onDeactivate: () => void
+  memoryApi?: MemoryApi; onOpenPreferences?: () => void; onOpenMemorySource?: MemorySourceHandler
 }
 
-export default function BotTemplatePage({ bot, token, tasks, creating, tab, mainTaskId, chat, onTab, onDirectory, onNewTask, onOpenTask, onSaved, onDeactivate }: Props) {
+export default function BotTemplatePage({ bot, token, tasks, creating, tab, mainTaskId, chat, onTab, onDirectory, onNewTask, onOpenTask, onSaved, onDeactivate, memoryApi, onOpenPreferences, onOpenMemorySource }: Props) {
   const [look, setLook] = useState<BotLook>(() => loadLook(bot.id))
+  const [sourceNotice, setSourceNotice] = useState('')
+  const sourceRequest = useRef<AbortController | null>(null)
+  useEffect(() => () => { sourceRequest.current?.abort() }, [bot.id, token])
   const tabRefs = useRef<Partial<Record<BotTab, HTMLButtonElement | null>>>({})
   const inactive = bot.status === 'inactive'
   const chief = bot.id === 'chief'
   function updateLook(next: BotLook) { setLook(next); saveLook(bot.id, next) }
+  async function openMemorySource(source: MemorySource) {
+    if (sourceRequest.current) return
+    const controller = new AbortController()
+    sourceRequest.current = controller
+    setSourceNotice('正在打开来源对话…')
+    try {
+      const hash = await resolveMemorySourceHash(token, source, controller.signal)
+      if (controller.signal.aborted) return
+      window.location.hash = hash
+      setSourceNotice('')
+    } catch {
+      if (!controller.signal.aborted) setSourceNotice('无法打开这条来源，原消息可能已不可见。请刷新后核对。')
+    } finally {
+      if (sourceRequest.current === controller) sourceRequest.current = null
+    }
+  }
+
   function onTabKey(event: KeyboardEvent) {
     const next = nextTab(botTabs.map(item => item.id), tab, event.key)
     if (next === tab) return
@@ -34,14 +58,13 @@ export default function BotTemplatePage({ bot, token, tasks, creating, tab, main
   return <div className="bot-page bot-detail-page">
     <nav className="bot-detail-nav" aria-label="机器人导航"><button type="button" className="text-button" onClick={onDirectory}>← 机器人目录</button><button type="button" className="text-button" onClick={onNewTask} disabled={inactive || creating}>{creating ? '正在创建…' : '新建独立任务'}</button></nav>
     <header className="bot-detail-head"><BotAvatar name={bot.name} look={look} size={56} /><div><h1>{bot.name}</h1><p className="shell-muted">{look.role ?? (chief ? '主管 · 负责分派与验收' : '机器人')}{inactive ? ' · 已停用' : ''}</p></div></header>
-    <p className="bot-detail-desc">{bot.description}</p>
     {inactive && <p role="status" className="shell-note">这个 Bot 已停用：不能再发消息或新建任务。历史任务和真实结果都保留。</p>}
     <div className="bot-detail-tabs" role="tablist" aria-label="Bot 详情">{botTabs.map(item => <button key={item.id} ref={el => { tabRefs.current[item.id] = el }} type="button" role="tab" id={`bot-tab-${item.id}`} aria-controls={`bot-panel-${item.id}`} aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => onTab(item.id)} onKeyDown={onTabKey}>{item.label}{item.id === 'tasks' ? ` (${tasks.length})` : ''}</button>)}</div>
     <div {...panelProps('chat')}>{mainTaskId === null ? <p role="status">主会话尚未就绪，请刷新后核对。</p> : chat}</div>
     <div {...panelProps('rules')}><BotRules key={`rules:${bot.id}:${token}`} token={token} botId={bot.id} readOnly={inactive} /></div>
     <div {...panelProps('skills')}><BotSkills token={token} mainTaskId={mainTaskId} active={tab === 'skills'} /></div>
     <div {...panelProps('mcp')}><h2>MCP</h2><p className="shell-muted">仅管理这个 Bot 的本机 stdio 凭证。凭证不是模型 key，请勿粘贴进对话。</p><StdioCredentials key={`mcp:${bot.id}:${token}`} token={token} fixedBotId={bot.id} readOnly={inactive} expanded /></div>
-    <div {...panelProps('memory')}><section className="bot-memory-placeholder"><h2>记忆</h2><p>人格、用户偏好和记忆文档将在 T11 提供。本页暂不读取或改写历史记忆。</p></section></div>
+    <div {...panelProps('memory')}><BotMemory botId={bot.id} token={token} active={tab === 'memory'} readOnly={inactive} api={memoryApi} onOpenPreferences={onOpenPreferences} onOpenSource={onOpenMemorySource ?? (source => { void openMemorySource(source) })} />{sourceNotice && <p role="status" className="memory-hint">{sourceNotice}</p>}</div>
     <div {...panelProps('settings')}>
       <section className="bot-edit-section" aria-label="外观">
         <h2>外观</h2>
@@ -54,8 +77,8 @@ export default function BotTemplatePage({ bot, token, tasks, creating, tab, main
             <fieldset className="bot-picker" disabled={inactive}><legend className="sr-only">形状</legend>
               {avatarShapes.map(s => <label key={s} className="shape-option" title={shapeLabels[s]}><input type="radio" name={`look-shape-${bot.id}`} checked={look.shape === s} onChange={() => updateLook({ ...look, shape: s })} aria-label={shapeLabels[s]} /><ShapeIcon shape={s} color={look.shape === s ? look.color : 'var(--c-muted)'} size={28} /></label>)}
             </fieldset></li>
-          <li className="pd-row"><label className="pd-row-title" htmlFor={`look-role-${bot.id}`}>角色</label>
-            <input id={`look-role-${bot.id}`} className="pd-input" maxLength={40} placeholder="例如：日程管家" value={look.role ?? ''} disabled={inactive} onChange={e => updateLook({ ...look, role: e.target.value || undefined })} /></li>
+          <li className="pd-row"><label className="pd-row-title" htmlFor={`look-role-${bot.id}`}>显示标签</label>
+            <input id={`look-role-${bot.id}`} className="pd-input" maxLength={40} placeholder="仅用于展示，例如：日程管家" value={look.role ?? ''} disabled={inactive} onChange={e => updateLook({ ...look, role: e.target.value || undefined })} /></li>
         </ul>
       </section>
       <BotConfiguration key={`config:${bot.id}:${token}`} botId={bot.id} token={token} readOnly={inactive} onSaved={onSaved} />
