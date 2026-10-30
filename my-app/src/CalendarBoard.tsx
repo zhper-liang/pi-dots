@@ -95,7 +95,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       }
       const [ev, td] = await Promise.all([pageAll('Event'), pageAll('Todo')])
       if (!current()) return
-      const ext: Item[] = [], names: string[] = []; let warn = ''
+      const ext: Item[] = [], extTodos: Item[] = [], names: string[] = []; let warn = ''
       const sources = before.external
       const start = toOffsetIso(dayStart(days[0])), end = toOffsetIso(dayStart(addDays(days[days.length - 1], 1)))
       for (const source of sources.filter(x => x.authorized && x.readScope === 'full')) {
@@ -105,7 +105,8 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
           const page = await api<{ items: Item[]; complete: boolean; stale?: boolean }>('external-query', { sourceId: source.id, start, end, timezone }, signal)
           if (!current()) return
           if (!page.complete || page.stale) warn = '外部日程不完整，不代表空闲'
-          ext.push(...page.items.filter(item => !item.deletedAt).map(item => ({ ...item, sourceId: source.id })))
+          // R3: Todo-type sources (Google Tasks) show as due-day chips, never as timed blocks (D8).
+          ;(source.itemType === 'Todo' ? extTodos : ext).push(...page.items.filter(item => !item.deletedAt).map(item => ({ ...item, sourceId: source.id })))
         } catch (error) {
           if (!current()) return
           if (isWorkspacePermissionError(error)) throw error
@@ -117,7 +118,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       const after = await permissions()
       if (!current()) return
       if (after.key !== before.key) { clearProjection(true); permission.current = after.key; void refresh(); return }
-      setLocal(ev); setTodos(td); setExternal(ext); setExtSources(names); setExtWarning(warn); setAuthorized(true); setRefreshError('')
+      setLocal(ev); setTodos([...td, ...extTodos]); setExternal(ext); setExtSources(names); setExtWarning(warn); setAuthorized(true); setRefreshError('')
     } catch (error) {
       if (!current()) return
       // No permission proof is preferable to keeping a potentially revoked cached projection.

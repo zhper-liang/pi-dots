@@ -16,7 +16,8 @@ const fields = {
   Source: ['connectionId', 'providerContainerId', 'authority', 'capabilities'],
   Grant: ['principalKind', 'subjectId', 'actions', 'readScope', 'epoch', 'tier', 'autoApply', 'allowRules'],
   Event: ['remoteId', 'instanceKey', 'title', 'description', 'start', 'end', 'timezone', 'version', 'remoteVersion', 'authority', 'deletedAt', 'observedAt', 'readOnly', 'providerEvent'],
-  Todo: ['title', 'status', 'due', 'timezone', 'version', 'deletedAt'],
+  // Optional external fields have the same names and meaning as on Event (R3 §5); local Todos omit them.
+  Todo: ['title', 'status', 'due', 'timezone', 'version', 'deletedAt', 'remoteId', 'remoteVersion', 'authority', 'readOnly', 'observedAt', 'providerTask'],
   ItemLink: ['todoId', 'eventId', 'relation', 'todoRef', 'eventRef', 'todoVersion', 'eventVersion'],
   Operation: ['requestId', 'actor', 'action', 'normalizedArgs', 'expectedVersion', 'payloadHash', 'grantEpoch', 'state', 'receipt', 'error', 'external', 'confirmation'],
   Outbox: ['operationId', 'targetRef', 'state', 'dedupeKey'],
@@ -70,6 +71,10 @@ export function validateRecord(type, record) {
   // PLAN §8.5: event-triggered routines have no clock due (nextDueAt null).
   if (type === 'Schedule' && ((record.rule?.type === 'event' ? record.nextDueAt !== null : !Number.isFinite(Date.parse(record.nextDueAt))) || !object(record.executionPrincipal) || !object(record.actionSpec) || !object(record.rule))) fail(400, 'WORKSPACE_SCHEMA', '计划定义无效。')
   if (type === 'Todo' && (!['open', 'completed'].includes(record.status) || typeof record.title !== 'string')) fail(400, 'WORKSPACE_SCHEMA', '待办状态或标题无效。')
+  if (type === 'Todo' && (record.remoteId !== undefined && (typeof record.remoteId !== 'string' || !record.remoteId || record.remoteId.length > 1024) ||
+    record.remoteVersion !== undefined && record.remoteVersion !== null && (typeof record.remoteVersion !== 'string' || record.remoteVersion.length > 1024) ||
+    record.readOnly !== undefined && typeof record.readOnly !== 'boolean' || record.observedAt !== undefined && !Number.isFinite(Date.parse(record.observedAt)) ||
+    record.providerTask !== undefined && !object(record.providerTask) || record.authority === 'external' && record.remoteId === undefined)) fail(400, 'WORKSPACE_SCHEMA', '外部待办字段无效。')
   if (type === 'Operation' && !['prepared', 'awaiting_confirmation', 'ready', 'dispatching', 'succeeded', 'failed', 'conflict', 'unknown', 'cancelled', 'expired', 'skipped'].includes(record.state)) fail(400, 'WORKSPACE_SCHEMA', '操作状态无效。')
   if (type === 'Occurrence' && (!Number.isFinite(Date.parse(record.scheduledFor)) || !record.scheduledFor.endsWith('Z'))) fail(400, 'WORKSPACE_SCHEMA', '触发点必须为UTC时间。')
   return copy(record)

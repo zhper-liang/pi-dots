@@ -85,9 +85,10 @@ export default function LocalWorkspace({ token, view = 'todos', compact = false,
   async function loadExternalEvents() {
     const generation = visibility.current, operationToken = token
     setExternalEvents([]); setLinkConfirm(null); setEventId('')
-    const { sources } = await api<{ sources: { id: string; authorized: boolean; readScope: string }[] }>('external-sources', {})
+    const { sources } = await api<{ sources: { id: string; authorized: boolean; readScope: string; itemType?: 'Event' | 'Todo' }[] }>('external-sources', {})
     const result: Item[] = []
-    for (const source of sources.filter(s => s.authorized && s.readScope === 'full')) {
+    // Links target external events only; Todo-type sources (Google Tasks) are not link targets.
+    for (const source of sources.filter(s => s.authorized && s.readScope === 'full' && s.itemType !== 'Todo')) {
       const page = await api<{ items: Item[]; complete: boolean; stale?: boolean }>('external-query', { sourceId: source.id, ...linkWindow, timezone: 'Asia/Shanghai' })
       if (!page.complete || page.stale) throw Error('外部窗口不完整或缓存过期，请缩小时间范围后重试。')
       result.push(...page.items.filter(item => item.id && item.version && !item.deletedAt).map(item => ({ ...item, sourceId: source.id })))

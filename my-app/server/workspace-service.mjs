@@ -1,9 +1,63 @@
 import { createWorkspaceLinks } from './workspace-links.mjs'
 import { rawWorkspaceRecord, workspaceSourceReadable } from './workspace-grants.mjs'
 import { createFeishuWorkspaceService } from './workspace-feishu.mjs'
+import { createGoogleCalendarWorkspaceService } from './workspace-google-calendar.mjs'
+import { createGoogleTasksWorkspaceService } from './workspace-google-tasks.mjs'
 import { createLocalWorkspaceService } from './workspace-local.mjs'
+import { providerById } from './workspace-providers.mjs'
 import { LOCAL_OWNER, payloadHash, copy, fail, object, validId } from './workspace-schema.mjs'
 import { projectWorkspaceRecord } from './workspace-policy.mjs'
+
+// Provider adapter table (CONTRACTS.md §1). Key = option name under `external`; order = routing order.
+// Each factory returns the Feishu-shaped method set; the router below adds provider/owns.
+export const WORKSPACE_ADAPTERS = Object.freeze([
+  Object.freeze({ key: 'feishu', provider: 'feishu', create: createFeishuWorkspaceService }),
+  Object.freeze({ key: 'googleCalendar', provider: 'google-calendar', create: createGoogleCalendarWorkspaceService }),
+  Object.freeze({ key: 'googleTasks', provider: 'google-tasks', create: createGoogleTasksWorkspaceService }),
+])
+const BY_SOURCE = ['reminderExternalPermission', 'syncStatus', 'configureSync', 'refreshSync', 'grantExternal', 'queryExternal', 'getExternal', 'prepareExternal']
+const BY_OPERATION = ['confirmExternal', 'cancelExternal', 'getExternalOperation', 'executeExternal']
+
+/**
+ * Compose provider adapters into the single external surface the service has always exposed.
+ * Per-source calls route by sourceId prefix, per-operation calls by the stored Operation's source;
+ * anything unrouteable goes to the first adapter so its own validation/denial is unchanged.
+ */
+export function composeExternalAdapters(repo, adapters) {
+  if (adapters.length === 1) return adapters[0].methods
+  const first = adapters[0]
+  const pick = sourceId => adapters.find(a => typeof sourceId === 'string' && sourceId.startsWith(a.prefix)) ?? first
+  async function forOperation(actor, input) {
+    if (!object(input) || !validId(input.requestId)) return first
+    try {
+      const op = await repo.transaction(tx => repo.get(tx, 'Operation', LOCAL_OWNER, 'operations', payloadHash([LOCAL_OWNER, input.requestId])))
+      return op?.external ? pick(op.normalizedArgs?.sourceId) : first
+    } catch { return first }
+  }
+  const methods = {}
+  for (const name of BY_SOURCE) methods[name] = name === 'reminderExternalPermission' ? (tx, actor, sourceId, ...rest) => pick(sourceId).methods[name](tx, actor, sourceId, ...rest) : (actor, input, ...rest) => pick(input?.sourceId).methods[name](actor, input, ...rest)
+  for (const name of BY_OPERATION) methods[name] = async (actor, input, ...rest) => (await forOperation(actor, input)).methods[name](actor, input, ...rest)
+  methods.externalSources = async (actor, input) => {
+    const results = []
+    for (const a of adapters) results.push(await a.methods.externalSources(actor, input))
+    const sources = results.flatMap(r => r.sources), notices = [...new Set(results.filter(r => r.sources.length).map(r => r.notice).filter(Boolean))]
+    return { sources, notice: notices.length ? notices.join(' ') : results[0].notice }
+  }
+  // Lifecycle hooks run for every adapter; one provider's failure never skips another's work.
+  for (const name of ['recoverExternal', 'tickExternalSync', 'closeExternalSync']) methods[name] = async () => {
+    let failure = null
+    for (const a of adapters) { try { await a.methods[name]() } catch (error) { failure ??= error } }
+    if (failure) throw failure
+  }
+  return methods
+}
+function externalAdapters({ repository, authority, external }) {
+  if (!external) return []
+  // Legacy shape (Feishu only): { calendar, client, ... }. Table shape: { feishu, googleCalendar, googleTasks }.
+  const table = Object.hasOwn(external, 'calendar') || Object.hasOwn(external, 'client') ? { feishu: external } : external
+  if (Object.keys(table).some(key => !WORKSPACE_ADAPTERS.some(a => a.key === key))) throw new Error('Unknown workspace adapter')
+  return WORKSPACE_ADAPTERS.filter(a => table[a.key]).map(a => ({ provider: a.provider, prefix: providerById(a.provider).prefix, methods: a.create({ repository, authority, ...table[a.key] }) }))
+}
 
 // Shared workspace boundary: local commands reuse the foundation transaction/authority.
 export function createWorkspaceService({ repository: repo, authority, external }) {
@@ -84,6 +138,7 @@ export function createWorkspaceService({ repository: repo, authority, external }
       })
     },
   }
-  if (external) Object.assign(service, createFeishuWorkspaceService({ repository: repo, authority, ...external }))
+  const adapters = externalAdapters({ repository: repo, authority, external })
+  if (adapters.length) Object.assign(service, composeExternalAdapters(repo, adapters))
   return Object.assign(service, createLocalWorkspaceService({ repository: repo, authority, links, authorizeReminderSource: (tx, actor, sourceId) => sourceId === 'local' ? authority.authorize(repo, tx, actor, sourceId, 'read') : service.reminderExternalPermission(tx, actor, sourceId), commitLocal: (...args) => service.commitLocal(...args) }))
 }

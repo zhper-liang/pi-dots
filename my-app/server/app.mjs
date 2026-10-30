@@ -230,6 +230,16 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         if (req.method === 'POST') { sendJson(res, 200, { data: await tasks.setAutomation(await readJson(req)) }); return }
         req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET 与 POST。' } }, { Allow: 'GET, POST' }); return
       }
+      // R3-02 Google connection. Bodies may carry a client secret or a pasted redirect URL: they are
+      // never logged or echoed; responses are the public status projection only.
+      const googleRoute = /^\/api\/google\/(status|client|connect|paste|disconnect)$/.exec(req.url)
+      if (tasks && googleRoute) {
+        const method = googleRoute[1] === 'status' ? 'GET' : 'POST'
+        if (req.method !== method) { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: `该接口仅支持 ${method}。` } }, { Allow: method }); return }
+        const handlers = { status: 'googleStatus', client: 'googleSaveClient', connect: 'googleConnect', paste: 'googlePaste', disconnect: 'googleDisconnect' }
+        if (method === 'GET') req.resume()
+        sendJson(res, 200, { data: await tasks[handlers[googleRoute[1]]](method === 'GET' ? undefined : await readJson(req)) }); return
+      }
       if (tasks && req.url?.startsWith('/api/workspace/')) {
         const path = req.url.slice('/api/workspace/'.length)
         if (path === 'status' && req.method === 'GET') { req.resume(); sendJson(res, 200, { data: await tasks.workspaceDiagnostics() }); return }

@@ -12,6 +12,9 @@ import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { createWorkspaceRepository } from './workspace-repository.mjs'
 import { LOCAL_OWNER, payloadHash } from './workspace-schema.mjs'
 import { createWorkspaceService } from './workspace-service.mjs'
+import { applyGoogleAccount, GoogleAccount } from './google-account.mjs'
+import { googleError } from './google-client.mjs'
+import { providerLabel, sourceItemType } from './workspace-providers.mjs'
 import { createActorAuthority, projectWorkspaceRecord } from './workspace-policy.mjs'
 import { calendarViewSnapshot, calendarCommandMessage, admitCalendarCommand, calendarToolMatches } from './calendar-commands.mjs'
 import { FEISHU_MUTATION_TOOLS, dispatchFeishuMutation, feishuBeforeHash } from './feishu-mutation.mjs'
@@ -1003,7 +1006,7 @@ async function appendToolReceipt(tx, request, result, afterCancellation = false)
 
 /** Test hooks stay in-process; never exposed as HTTP parameters. */
 export async function openTaskStore({ file, bots = listBots(), beforeCommit, reply = createTestReply, modelReply, modelSettings, readModelSettings = modelSettings?.read,
-  toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, memoryOptions = {}, memoryFiles: memoryFileOptions = {}, feishuClient = createFeishuClient(), toolGroupsMigration = true, readCapabilityCatalog = async () => [], externalMcp, capabilityManagementEnabled = false } = {}) {
+  toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, memoryOptions = {}, memoryFiles: memoryFileOptions = {}, feishuClient = createFeishuClient(), google = null, toolGroupsMigration = true, readCapabilityCatalog = async () => [], externalMcp, capabilityManagementEnabled = false } = {}) {
   if (!file) throw new Error('Task storage file is required')
   if (typeof readCapabilityCatalog !== 'function') throw new Error('Capability catalog reader must be a server-owned function')
   const skillImport = skillDirectory && typeof skillDirectory === 'object' ? skillDirectory.userSkills : null
@@ -1199,7 +1202,11 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       } while (cursor)
       return false
     }
-    const workspaceService = createWorkspaceService({ repository: workspaceRepository, authority: workspaceAuthority, external: { calendar: feishu, client: feishuClient, legacyUnresolved, syncOptions: workspaceSyncOptions } })
+    // R3: adapters see only the token-free handle below (CONTRACTS.md §1); raw tokens stay in google-connection.
+    const googleHandle = { available: !!google, api: (...args) => google ? google.api(...args) : Promise.reject(googleError('GOOGLE_UNAVAILABLE')),
+      current: tx => tx.doc(GoogleAccount).then(d => JSON.parse(JSON.stringify(d))), redact: text => google ? google.redact(text) : String(text) }
+    const workspaceService = createWorkspaceService({ repository: workspaceRepository, authority: workspaceAuthority, external: { feishu: { calendar: feishu, client: feishuClient, legacyUnresolved, syncOptions: workspaceSyncOptions },
+      googleCalendar: { google: googleHandle, syncOptions: workspaceSyncOptions }, googleTasks: { google: googleHandle, syncOptions: workspaceSyncOptions } } })
     // Binds batch counting and auto-applied cards to the Task's current input (ADR-012).
     const taskInput = async (tx, taskId) => {
       const card = await tx.doc(TaskCard, taskId)
@@ -1209,6 +1216,11 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     }
     workspaceMcp = createWorkspaceMcpBusiness({ repository: workspaceRepository, authority: workspaceAuthority, service: workspaceService, resolveTask: resolveWorkspaceTask, TaskCard, taskInput, prepareSchedule: (actor, args) => workspaceWorkflows.prepare(actor, args) })
     await workspaceService.recoverExternal()
+    // The credentials file is the truth; the GoogleAccount doc mirrors it for in-transaction checks.
+    const reconcileGoogle = async () => google ? harness.commit(async tx => applyGoogleAccount(tx, await google.accountView(), { ToolAccess }), context) : null
+    await reconcileGoogle()
+    const unsubscribeGoogle = google?.subscribe(() => reconcileGoogle().catch(() => {})) ?? (() => {})
+    const googleCall = async work => { if (!google) throw googleError('GOOGLE_UNAVAILABLE'); return work(google) }
     const recoveryGuard = createActionRecoveryGuard({ TaskCard, ChatInput, bots, collaboration })
     const queryAction = createActionQuery({ harness, context, TaskCard, ChatInput, bots, collaboration, queryImpl: async (request, options) => {
       const card = await harness.snapshot(TaskCard, request.taskId, context)
@@ -2084,11 +2096,15 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       try {
         const fmt = t => new Date(t + 8 * 3600000).toISOString().slice(0, 19) + '+08:00'
         for (const src of (await workspaceService.externalSources(owner, {})).sources) if (src.authorized && ['busy', 'full'].includes(src.readScope)) {
+          // R3: Todo-type sources (Google Tasks) feed the to-do detectors; labels follow the provider.
+          const todo = (src.itemType ?? sourceItemType(src.id)) === 'Todo', label = providerLabel(src.id)
+          if (todo && src.readScope !== 'full') continue
           try {
             const r = await workspaceService.queryExternal(owner, { sourceId: src.id, start: fmt(at), end: fmt(at + 8 * 86400000), timezone: 'Asia/Shanghai' })
-            if (r.stale || r.complete === false) { input.incomplete.push('飞书日历'); continue }
-            for (const e of r.items) input.events.push({ ...e, sourceId: src.id, id: e.id ?? `busy:${e.start}:${e.end}`, version: e.version ?? 1, busyOnly: src.readScope !== 'full', title: e.title ?? '忙碌' })
-          } catch { input.incomplete.push('飞书日历') }
+            if (r.stale || r.complete === false) { input.incomplete.push(label); continue }
+            for (const e of r.items) if (todo) { if (!e.deletedAt) input.todos.push({ ...e, sourceId: src.id, version: e.version ?? 1 }) }
+            else input.events.push({ ...e, sourceId: src.id, id: e.id ?? `busy:${e.start}:${e.end}`, version: e.version ?? 1, busyOnly: src.readScope !== 'full', title: e.title ?? '忙碌' })
+          } catch { input.incomplete.push(label) }
         }
       } catch { /* no external binding */ }
       return input
@@ -2449,6 +2465,12 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       workspaceDiagnostics: () => workspaceService.diagnostics(workspaceAuthority.user()),
       workspace: Object.fromEntries(['query', 'getLocalItem', 'executeLocal', 'manageLocalGrant', 'getLocalOperation', 'externalSources', 'grantExternal', 'queryExternal', 'getExternal', 'prepareExternal', 'confirmExternal', 'cancelExternal', 'executeExternal', 'getExternalOperation', 'syncStatus', 'configureSync', 'refreshSync'].map(name => [name, input => workspaceService[name](workspaceAuthority.user(), input)])),
       harness, stopWork, feishuCalendar: feishu,
+      // R3-02 Google connection (HTTP: /api/google/*). Never returns tokens; each change re-syncs the account mirror.
+      googleStatus: () => googleCall(async g => { await reconcileGoogle(); return g.status() }),
+      googleSaveClient: input => googleCall(async g => { const result = await g.saveClient(input); await reconcileGoogle(); return result }),
+      googleConnect: input => googleCall(g => g.start(input)),
+      googlePaste: input => googleCall(async g => { const result = await g.paste(input); await reconcileGoogle(); return result }),
+      googleDisconnect: input => googleCall(async g => { const result = await g.disconnect(input); await reconcileGoogle(); return result }),
       async readFeishuCalendar(input) {
         const authorize = () => harness.commit(async tx => {
           await feishu.sync(tx)
@@ -2911,7 +2933,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         harness.resume()
         return entry
       },
-      close: async () => { await externalMcp?.close(); await memoryWorker?.close(); await memoryFiles?.close(); await detectorWorker?.close(); await workspaceScheduler.close(); await workspaceService.closeExternalSync(); for (const e of workspaceMcpSessions.values()) e.session.close(); workspaceMcpSessions.clear(); return harness.close(context) },
+      close: async () => { unsubscribeGoogle(); await externalMcp?.close(); await memoryWorker?.close(); await memoryFiles?.close(); await detectorWorker?.close(); await workspaceScheduler.close(); await workspaceService.closeExternalSync(); for (const e of workspaceMcpSessions.values()) e.session.close(); workspaceMcpSessions.clear(); return harness.close(context) },
     }
   } catch (error) {
     if (harness) await harness.close(context)

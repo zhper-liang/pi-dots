@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import Switch from './Switch'
 
 type Bot = { id: string; name: string; description: string; configRef: { botId: string; version: string }; defaults: { model: { id: string } | null; tools: string[]; toolResources: string[] } }
-type View = { bot: Bot; versions: (Bot & { source: string; savedAt: string })[]; assigned: { tools: string[]; resources: string[] }; resources: string[]; models: { id: string; provider: string }[]; audit: { id: number; type: string; source: string; code?: string; createdAt: string; initiatingUser?: string; executingChief?: string; taskId?: number; operationId?: string; next?: unknown; previous?: unknown }[] }
+type View = { bot: Bot; versions: (Bot & { source: string; savedAt: string })[]; assigned: { tools: string[]; resources: string[] }; resources: string[]; resourceLabels?: Record<string, { title: string; note: string }>; models: { id: string; provider: string }[]; audit: { id: number; type: string; source: string; code?: string; createdAt: string; initiatingUser?: string; executingChief?: string; taskId?: number; operationId?: string; next?: unknown; previous?: unknown }[] }
 type Change = { model: string; resources: string[] }
 
 const toggle = (items: string[], name: string) => items.includes(name) ? items.filter((n) => n !== name) : [...items, name]
@@ -14,7 +14,9 @@ async function request<T>(path: string, token: string, body?: unknown): Promise<
   return result
 }
 // Readable names for source resources; the raw id stays in the row tooltip.
-function describeResource(id: string) {
+function describeResource(id: string, labels?: Record<string, { title: string; note: string }>) {
+  // Server-provided titles for multi-source providers (e.g. each Google calendar or task list).
+  if (labels && Object.hasOwn(labels, id)) return labels[id]
   if (id === 'mock:personal') return { title: '模拟日程', note: '测试用的个人日程，不是真实日历' }
   if (id === 'workspace:local') return { title: '本地待办与日程', note: '本机保存的事项' }
   if (id.startsWith('workspace:feishu:')) return { title: '飞书日历（事项）', note: '通过待办与事项工具读写飞书日程' }
@@ -106,7 +108,7 @@ export default function BotConfiguration({ botId, token, onSaved, readOnly = fal
       <p className="bot-edit-hint">开了才能读写这个来源。切换立即生效，用于所有会话的下一次操作。</p>
       {view.resources.length === 0 ? <p className="bot-edit-hint">还没有可用的来源。</p>
         : <ul className="pd-rows">{view.resources.map((id) => {
-          const { title, note } = describeResource(id)
+          const { title, note } = describeResource(id, view.resourceLabels)
           return <li key={id} className="pd-row" title={id}>
             <div className="pd-row-text"><span className="pd-row-title">{title}</span>{note && <span className="pd-row-desc">{note}</span>}</div>
             <Switch label={title} checked={view.assigned.resources.includes(id)} disabled={readOnly || busy} onChange={() => switchResource(id)} />

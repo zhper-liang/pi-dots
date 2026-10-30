@@ -1,4 +1,5 @@
 import { FeishuCalendar } from './feishu-calendar.mjs'
+import { externalWorkspaceResources } from './workspace-providers.mjs'
 import { MANAGEMENT_TOOLS } from './management-tools.mjs'
 import { createHash } from 'node:crypto'
 import { assertBotActive, BotDirectory, createDirectoryBot } from './bot-directory.mjs'
@@ -14,6 +15,12 @@ const fail = (status, code, message) => { throw new TaskInputError(status, code,
 const object = (x) => x && typeof x === 'object' && !Array.isArray(x)
 const names = (access) => toolCatalog({ externalTools: access?.externalMcp?.tools ?? [] }).map((t) => t.name).filter(n => !MANAGEMENT_TOOLS.includes(n))
 export const supportedResources = ['mock:personal', 'workspace:local']
+// S1 + R3: assignable = supported + Feishu binding + live multi-source providers (Google), with titles.
+async function availableResourceList(tx) {
+  const binding = (await tx.doc(FeishuCalendar)).binding, external = await externalWorkspaceResources(tx)
+  const resources = [...supportedResources, ...(binding ? [binding.resource, `workspace:feishu:${hash([binding.connectionId, binding.calendarId])}`] : []), ...external.map(e => e.resource)]
+  return { resources, ...(external.length ? { resourceLabels: Object.fromEntries(external.map(e => [e.resource, { title: e.title || e.label, note: e.readOnly ? `${e.label} · 只读` : e.label }])) } : {}) }
+}
 export function initializeConfiguration(directory, access) {
   directory.configurations ??= {}
   directory.managementRequests ??= {}
@@ -65,7 +72,7 @@ export async function changeConfiguration(tx, botId, input, { models }) {
       await assertBotActive(tx, botId)
       if (typeof input.expectedVersion !== 'string' || input.expectedVersion !== bot.configRef.version) fail(409, 'CONFIG_VERSION_CONFLICT', '配置已更新；请重新加载并比较后再保存。')
       // S1: available tools = installed tools; available resources = supportedResources + feishu binding.
-      const availableTools = names(a), availableResources = [...supportedResources, ...((await tx.doc(FeishuCalendar)).binding ? [(await tx.doc(FeishuCalendar)).binding.resource, `workspace:feishu:${hash([(await tx.doc(FeishuCalendar)).binding.connectionId, (await tx.doc(FeishuCalendar)).binding.calendarId])}`] : [])]
+      const availableTools = names(a), availableResources = (await availableResourceList(tx)).resources
       if (typeof input.description !== 'string' || input.description.length > 2000 || !subset(input.tools, availableTools) || !subset(input.resources, availableResources)) fail(400, 'CAPABILITY_NOT_GRANTED', '职责无效或工具/资源不可用。')
       const defaults = taskParameters(input.parameters, copy(bot.defaults))
       if (defaults.mode === 'model' && !models.some((m) => m.id === defaults.model.id)) fail(400, 'MODEL_NOT_CONFIGURED', '仅可选择服务端已配置的模型。')
@@ -105,7 +112,7 @@ export function configurationApi({ harness, context, catalog, models, refreshMod
       return copy({ bot, versions: d.configurations[botId], installed: names(a), toolLabels: Object.fromEntries(names(a).map((n) => [n, toolLabel(n)])),
         toolGroups: describeGroups({ rules, botId, assigned: assigned.tools, revoked, mainSession: botId !== 'group' }),
         assigned, revoked,
-        models: models.map((m) => ({ id: m.id, provider: m.provider })), resources: [...supportedResources, ...((await tx.doc(FeishuCalendar)).binding ? [(await tx.doc(FeishuCalendar)).binding.resource, `workspace:feishu:${hash([(await tx.doc(FeishuCalendar)).binding.connectionId, (await tx.doc(FeishuCalendar)).binding.calendarId])}`] : [])],
+        models: models.map((m) => ({ id: m.id, provider: m.provider })), ...await availableResourceList(tx),
         audit: d.managementAudit.filter((e) => !e.botId || e.botId === botId) })
     }, context)
   }

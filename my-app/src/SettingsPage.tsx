@@ -5,6 +5,7 @@ import ModelSettings from './ModelSettings'
 import UserPreferences from './UserPreferences'
 import WorkspaceStatus from './WorkspaceStatus'
 import ExternalWorkspace from './ExternalWorkspace'
+import GoogleConnection from './GoogleConnection'
 import { AutomationSettings } from './AutomationControls'
 import { AssistSettings, MutedDetectors } from './Findings'
 
@@ -14,6 +15,10 @@ export default function SettingsPage({ token, footer }: { token: string; footer?
       <h2 id="settings-sources">来源与状态</h2>
       <WorkspaceStatus token={token} />
       <details className="shell-more"><summary>飞书日历来源</summary><p className="shell-muted small">只读同步不会授予写权限。</p><ExternalWorkspace token={token} /></details>
+    </section>
+    <section className="today-card" aria-labelledby="settings-google">
+      <h2 id="settings-google">连接 Google</h2>
+      <GoogleConnection key={token} token={token} />
     </section>
     <section className="today-card" aria-labelledby="settings-mcp">
       <h2 id="settings-mcp">MCP 工具连接</h2>

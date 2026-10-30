@@ -8,8 +8,9 @@ import { listBots } from './bots.mjs'
 import { createModelSettings } from './model-settings.mjs'
 import { SKILL_DIRECTORY, skillCapabilityCatalog } from './skills.mjs'
 import { createSkillImportService } from './skill-import.mjs'
+import { openGoogleConnection } from './google-connection.mjs'
 
-let tasks, externalMcp
+let tasks, externalMcp, google
 try {
   const config = readConfig()
   // R2 file memory is on by default; PIDOT_MEMORY_FILES=0 is the rollback switch (imports unsynced hand edits once).
@@ -23,8 +24,10 @@ try {
   const modelConfig = await modelSettings.read()
   const skillImport = createSkillImportService({ dataDirectory: join(dirname(file), 'skills') })
   const skillDirectory = { builtinDirectory: SKILL_DIRECTORY, userSkills: skillImport }
+  // R3-02: fixed Google hosts; client config by ADR-016 order (env, my-app/.env, root .env, then the settings file).
+  google = await openGoogleConnection({ dataDirectory: join(dirname(file), 'google') })
   externalMcp = await createExternalMcpService({ dataDirectory: join(dirname(file), 'external-mcp') })
-  tasks = await openTaskStore({ file, skillDirectory, externalMcp, capabilityManagementEnabled: true, readCapabilityCatalog: () => skillCapabilityCatalog(skillDirectory), workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, memoryOptions: { enabled: true }, memoryFiles: { enabled: memoryFilesFlag === '1', root: join(dirname(file), 'bot-workspaces') }, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
+  tasks = await openTaskStore({ file, skillDirectory, externalMcp, google, capabilityManagementEnabled: true, readCapabilityCatalog: () => skillCapabilityCatalog(skillDirectory), workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, memoryOptions: { enabled: true }, memoryFiles: { enabled: memoryFilesFlag === '1', root: join(dirname(file), 'bot-workspaces') }, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
   const server = createApiServer({
     token: config.token, tasks, onError: console.error,
     staticDir: fileURLToPath(new URL('../dist/', import.meta.url)),
@@ -45,7 +48,7 @@ try {
   function stop() {
     console.log('正在停止 Pidot…')
     server.close(async () => {
-      try { await tasks.close(); process.exitCode = 0 }
+      try { await tasks.close(); await google?.close(); process.exitCode = 0 }
       catch { console.error('存储关闭失败。'); process.exitCode = 1 }
     })
     server.closeIdleConnections()
@@ -56,6 +59,7 @@ try {
 } catch (error) {
   if (tasks) await tasks.close()
   else await externalMcp?.close()
+  await google?.close()
   // Do not expose provider configuration, filesystem paths, or SQL diagnostics.
   console.error(error.message?.startsWith('PIDOT_') ? `配置错误：${error.message}` : 'Pidot 启动失败，请检查本地数据库及配置。')
   process.exitCode = 1

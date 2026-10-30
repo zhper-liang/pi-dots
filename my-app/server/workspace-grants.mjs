@@ -1,6 +1,7 @@
 import { defineDoc } from '@earendil-works/pi-durable'
-import { WorkspaceRecords, identityKey, LOCAL_OWNER, ownerLocalGrant, OWNER_LOCAL_GRANT_ID, payloadHash } from './workspace-schema.mjs'
+import { WorkspaceRecords, identityKey, LOCAL_OWNER, ownerLocalGrant, OWNER_LOCAL_GRANT_ID } from './workspace-schema.mjs'
 import { BotDirectory } from './bot-directory.mjs'
+import { externalSourceLive } from './workspace-providers.mjs'
 export const WorkspaceClients = defineDoc({ kind: 'pidot.workspace-clients', version: 1, scope: 'session', initial: () => ({ items: {} }) })
 export const sourceResource = sourceId => `workspace:${sourceId}`
 export async function rawWorkspaceRecord(tx, type, sourceId, id) {
@@ -23,11 +24,9 @@ export async function workspaceSourceReadable(tx, botId, sourceId) {
   if (!bot || (bot.status ?? 'active') !== 'active' || !assigned?.resources.includes(sourceResource(sourceId)) || ['workspace.list', 'workspace.get'].some(name => !assigned.tools.includes(name) || access.revoked?.[botId]?.includes(name))) return false
   const source = await rawWorkspaceRecord(tx, 'Source', sourceId, sourceId), user = await rawWorkspaceRecord(tx, 'Grant', sourceId, 'user:authenticated-user'), connection = source && await rawWorkspaceRecord(tx, 'Connection', sourceId, source.connectionId)
   if (!source?.capabilities.includes('read') || !user?.actions.includes('read') || !['busy', 'full'].includes(user.readScope) || connection?.status !== 'active') return false
-  if (sourceId !== 'local') {
-    const { FeishuCalendar } = await import('./feishu-calendar.mjs')
-    const binding = (await tx.doc(FeishuCalendar)).binding
-    if (!binding || sourceId !== `feishu:${payloadHash([binding.connectionId, binding.calendarId])}`) return false
-  }
+  // Feishu: the bound calendar is this source. Google: account connected, service granted and the
+  // Connection stamped with the current accountKey/authEpoch. Unknown providers fail closed.
+  if (sourceId !== 'local' && !await externalSourceLive(tx, sourceId, connection)) return false
   return true
 }
 

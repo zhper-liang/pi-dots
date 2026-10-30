@@ -1,0 +1,31 @@
+.google-connection { display: grid; gap: var(--space-3); min-width: 0; }
+.google-connection p { margin: 0; overflow-wrap: anywhere; }
+.google-connection-card { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--c-border); border-radius: 12px; }
+.google-connection-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-2); min-width: 0; }
+.google-connection-head h3 { margin: 0; font-size: inherit; }
+.google-connection-state { color: var(--c-muted); font-size: var(--fs-small, 13px); overflow-wrap: anywhere; min-width: 0; }
+.google-connection-state.is-connected { color: var(--c-text); }
+.google-connection-state.is-needs_auth { color: var(--c-danger, #b42318); }
+.google-service-rows { margin: 0; }
+.google-service-state { margin-left: var(--space-2); font-size: 12px; color: var(--c-muted); }
+.google-service-state.is-missing, .google-service-state.is-partial { color: var(--c-danger, #b42318); }
+.google-connection-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.google-connection-actions button { min-height: 44px; }
+.google-connection-waiting { padding: var(--space-3); border: 1px solid var(--c-attention-border, var(--c-border)); background: var(--c-attention-bg, transparent); border-radius: var(--radius-sm); }
+/* Scoped to beat the generic `.workspace-page form/label` rules of the settings page. */
+.google-connection form.google-paste { display: grid; gap: var(--space-2); min-width: 0; margin: 0; padding: var(--space-3) 0 0; border: 0; border-top: 1px solid var(--c-border); border-radius: 0; }
+.google-connection .google-paste > label { display: block; margin: 0; font-size: 13px; font-weight: 500; }
+.google-paste-row { display: flex; gap: var(--space-2); min-width: 0; }
+.google-paste-row input { flex: 1; min-width: 0; min-height: 44px; box-sizing: border-box; }
+.google-paste-row button { min-height: 44px; flex: none; }
+.google-connection [role="alert"] { color: var(--c-danger, #b42318); }
+.google-connection form.google-client-form { display: grid; gap: var(--space-3); min-width: 0; margin: var(--space-2) 0 0; padding: 0; border: 0; }
+.google-connection .google-client-row { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 288px); gap: var(--space-3); align-items: center; margin: 0; font-size: 13px; }
+.google-client-row input { width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box; }
+.google-client-form > button { justify-self: start; min-height: 44px; }
+@media (max-width: 600px) {
+  .google-connection-card { padding: var(--space-3); }
+  .google-paste-row { flex-direction: column; }
+  .google-paste-row button { align-self: flex-start; }
+  .google-connection .google-client-row { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+}

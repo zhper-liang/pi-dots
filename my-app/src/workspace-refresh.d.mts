@@ -1,7 +1,7 @@
 export const WORKSPACE_REFRESH_MS: number
 export const WORKSPACE_REQUEST_TIMEOUT_MS: number
 export type WorkspaceRead = { signal: AbortSignal; isCurrent: () => boolean }
-export type PermissionSource = { id: string; authorized: boolean; readScope?: string; grantEpoch?: number; epoch?: number }
+export type PermissionSource = { id: string; authorized: boolean; readScope?: string; grantEpoch?: number; epoch?: number; itemType?: 'Event' | 'Todo'; provider?: string; title?: string; readOnly?: boolean }
 export function workspacePermissionKey(local: PermissionSource[], external: PermissionSource[]): string
 export function isWorkspacePermissionError(error: unknown): boolean
 export type WorkspaceRefreshController = {
