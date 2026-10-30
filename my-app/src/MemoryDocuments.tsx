@@ -1,7 +1,19 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import type { MemoryDocument, MemoryEdit, MemoryItem, MemoryOutcome, MemoryRevision, MemorySource, MemorySourceHandler } from './memory-types'
-import { createMemoryRequestTracker, memoryDate, memoryErrorMessage, reconcileMemoryDraft } from './memory-helpers.mjs'
+import type { MemoryDocument, MemoryEdit, MemoryFileStatus, MemoryItem, MemoryKind, MemoryOutcome, MemoryRevision, MemorySource, MemorySourceHandler } from './memory-types'
+import { createMemoryRequestTracker, memoryActorLabel, memoryDate, memoryErrorMessage, memoryFileView, memoryHandwritten, memorySavedNotice, reconcileMemoryDraft } from './memory-helpers.mjs'
 import './memory.css'
+
+const Handwritten = ({ item }: { item: Pick<MemoryItem, 'sourceEntries'> }) => memoryHandwritten(item) ? <span className="memory-tag">手写</span> : null
+
+/** R2 file mode only: where the file lives, when it last matched, and why it is not used. Nothing when file is null. */
+function MemoryFileState({ file, kind }: { file?: MemoryFileStatus | null; kind: MemoryKind }) {
+  const view = memoryFileView(file, kind)
+  if (!view) return null
+  return <div className="memory-file-state">
+    <dl className="memory-file"><dt>文件位置</dt><dd><code>{view.path}</code></dd><dt>最近同步</dt><dd>{view.synced}</dd></dl>
+    {view.reason && <p className="memory-pending" role="status">{view.reason}</p>}
+  </div>
+}
 
 export function MemorySources({ sources, onOpenSource }: { sources: MemorySource[]; onOpenSource?: MemorySourceHandler }) {
   if (!sources.length) return null
@@ -14,8 +26,8 @@ export function MemorySources({ sources, onOpenSource }: { sources: MemorySource
 function MemoryHistory({ history, truncated, onOpenSource }: { history?: MemoryRevision[]; truncated?: boolean; onOpenSource?: MemorySourceHandler }) {
   return <details><summary>最近历史{history ? `（${history.length}）` : ''}</summary>
     {!history ? <p className="memory-hint">暂未读取到历史，请刷新后查看。</p> : !history.length ? <p className="memory-hint">还没有编辑记录。</p> : <ol className="memory-history">{history.map(revision => <li key={revision.version}>
-      <p className="memory-meta">版本 {revision.version} · {memoryDate(revision.updatedAt)} · {revision.actor === 'user' ? '你编辑的' : '对话整理'}</p>
-      {revision.kind === 'personality' ? <p className="memory-content">{revision.content || '人格已清空'}</p> : (revision.items?.length ? revision.items.map(item => <p key={item.id} className="memory-content">{item.content}</p>) : <p className="memory-hint">没有条目</p>)}
+      <p className="memory-meta">版本 {revision.version} · {memoryDate(revision.updatedAt)} · {memoryActorLabel(revision.actor)}</p>
+      {revision.kind === 'personality' ? <p className="memory-content">{revision.content || '人格已清空'}</p> : (revision.items?.length ? revision.items.map(item => <p key={item.id} className="memory-content">{item.content}<Handwritten item={item} /></p>) : <p className="memory-hint">没有条目</p>)}
       <MemorySources sources={revision.sourceEntries} onOpenSource={onOpenSource} />
     </li>)}</ol>}
     {truncated && <p className="memory-hint">仅显示最近 20 个版本，更早的记录仍保留。</p>}
@@ -64,7 +76,7 @@ export function MemoryDocumentSection({ title, description, document: doc, histo
         setError(memoryErrorMessage(outcome.code))
       } else {
         setDraft(null); setConflict(false)
-        setNotice(draft.action === 'delete' ? '已删除，编辑历史仍保留。' : '已保存，所有会话的下一次模型调用会读取最新内容。')
+        setNotice(memorySavedNotice(draft.action, outcome.document?.file))
       }
     } catch (cause) {
       if (!mounted.current) return
@@ -83,7 +95,7 @@ export function MemoryDocumentSection({ title, description, document: doc, histo
     {draft.action === 'delete' ? <p>删除这条{title}？历史记录仍然保留。</p> : <>
       <label htmlFor={`${id}-draft`}>{doc.kind === 'personality' ? '编辑人格' : `纠正${title}`}</label>
       <textarea id={`${id}-draft`} rows={5} maxLength={limit} value={draft.content} disabled={blocked || !editable} aria-describedby={`${id}-draft-hint`} onChange={event => setDraft({ ...draft, content: event.target.value })} />
-      <p id={`${id}-draft-hint`} className="memory-hint">{draft.content.length} / {limit} 字 · {doc.kind === 'personality' ? '由你编辑；不要填写密钥。留空可清除人格。' : '保留原对话来源；纠正不会改写历史对话。'}</p>
+      <p id={`${id}-draft-hint`} className="memory-hint">{draft.content.length} / {limit} 字 · {doc.kind === 'personality' ? '由你编辑；不要填写密钥。留空可清除人格。' : draft.sourceEntries.length ? '保留原对话来源；纠正不会改写历史对话。' : '手写条目，纠正后仍标为手写。'}</p>
     </>}
     {(mismatch || conflict) && <div className="memory-conflict" role="status">
       <p>当前版本 {doc.version}，草稿基于版本 {draft.expectedVersion}。草稿未被覆盖。</p>
@@ -100,13 +112,14 @@ export function MemoryDocumentSection({ title, description, document: doc, histo
   return <section className="memory-section" aria-labelledby={`${id}-title`}>
     <div className="memory-section-head"><h2 id={`${id}-title`}>{title}</h2><span className="memory-meta">{memoryDate(doc.updatedAt)}</span></div>
     <p className="memory-hint">{description}</p>
+    <MemoryFileState file={doc.file} kind={doc.kind} />
     {doc.status.state === 'pending' && <p className="memory-pending" role="status">{memoryErrorMessage(doc.status.code)}</p>}
     {doc.kind === 'personality' ? <>
       {draft ? itemEditor : <><p className={`memory-content${doc.content ? '' : ' memory-empty'}`}>{doc.content || '还没有设置人格。'}</p>{editable && <button type="button" onClick={() => begin()}>编辑人格</button>}</>}
       <MemorySources sources={doc.sourceEntries} onOpenSource={onOpenSource} />
     </> : <>
       {!doc.items?.length ? <p className="memory-empty">还没有{title}。在对话中说明后，服务会在空闲时整理。</p> : <ul className="memory-items">{doc.items.map(item => <li key={item.id}>
-        <p className="memory-content">{item.content}</p>
+        <p className="memory-content">{item.content}<Handwritten item={item} /></p>
         <MemorySources sources={item.sourceEntries} onOpenSource={onOpenSource} />
         {editable && !draft && <div className="memory-actions"><button type="button" onClick={() => begin(item)}>纠正</button><button type="button" className="memory-danger" onClick={() => begin(item, true)}>删除</button></div>}
         {draft?.id === item.id && itemEditor}

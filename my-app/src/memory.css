@@ -36,6 +36,12 @@
 .memory-history li > * + * { margin-top: var(--space-2); }
 .memory-sources { padding-left: var(--space-4); margin: 0; }
 .memory-sources li { overflow-wrap: anywhere; }
+/* R2 file state. `.memory-view p` zeroes paragraph margins, so the block itself keeps the gap to the content below. */
+.memory-file-state { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); min-width: 0; }
+.memory-file { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-1) var(--space-3); margin: 0; font-size: var(--fs-small); color: var(--c-muted); min-width: 0; }
+.memory-file dd { margin: 0; min-width: 0; color: var(--c-text-2); overflow-wrap: anywhere; }
+.memory-file code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: inherit; overflow-wrap: anywhere; }
+.memory-tag { display: inline-block; margin-left: var(--space-2); padding: 0 var(--space-2); border: 1px solid var(--c-border); border-radius: var(--radius); font-size: var(--fs-small); line-height: 1.6; color: var(--c-muted); white-space: nowrap; vertical-align: 1px; }
 .memory-diagnostics { font-size: var(--fs-small); color: var(--c-muted); }
 .memory-diagnostics dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); }
 .memory-diagnostics dd { margin: 0; overflow-wrap: anywhere; }

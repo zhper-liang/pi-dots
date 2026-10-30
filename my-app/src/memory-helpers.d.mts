@@ -1,4 +1,8 @@
-import type { MemoryDocument, MemoryEdit } from './memory-types'
+import type { MemoryDocument, MemoryEdit, MemoryFileStatus, MemoryItem, MemoryKind } from './memory-types'
+export function memoryActorLabel(actor?: string | null): string
+export function memoryHandwritten(item?: Pick<MemoryItem, 'sourceEntries'> | null): boolean
+export function memorySavedNotice(action: string, file?: MemoryFileStatus | null): string
+export function memoryFileView(file: MemoryFileStatus | null | undefined, kind: MemoryKind): { path: string; synced: string; reason: string | null } | null
 export function createMemoryRequestTracker(makeId?: () => string): {
   prepare(body: Omit<MemoryEdit, 'requestId'>): MemoryEdit
   settle(): void

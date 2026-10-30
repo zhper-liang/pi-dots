@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { createMemoryApi } from './memory-api.mjs'
-import { createMemoryRequestTracker, memoryErrorMessage, memoryDate, reconcileMemoryDraft, resolveMemorySourceHash } from './memory-helpers.mjs'
+import { readdir } from 'node:fs/promises'
+import { createMemoryRequestTracker, memoryActorLabel, memoryErrorMessage, memoryDate, memoryFileView, memoryHandwritten, memorySavedNotice, reconcileMemoryDraft, resolveMemorySourceHash } from './memory-helpers.mjs'
 
 const response = (data, status = 200) => new Response(JSON.stringify({ data }), { status, headers: { 'Content-Type': 'application/json' } })
 const doc = { kind: 'memory', version: 3, updatedAt: null, items: [], sourceEntries: [], status: { state: 'ready', code: null, updatedAt: null } }
@@ -150,4 +151,70 @@ test('source resolver preserves cancellation rather than opening a late response
   await assert.rejects(resolveMemorySourceHash('test', { taskId: 1, entryId: 2 }, controller.signal, async (_path, init) => {
     init.signal.throwIfAborted()
   }), error => error.name === 'AbortError')
+})
+
+const file = (state, code = null, syncedAt = '2026-10-30T08:00:00.120Z', path = 'bot-workspaces/bots/chief/MEMORY.md') => ({ path, state, code, syncedAt })
+
+test('R2-07 file state: nothing when file mode is off; location and sync time when synced', () => {
+  for (const off of [null, undefined, {}, { path: '' }, { path: 7, state: 'synced' }]) assert.equal(memoryFileView(off, 'memory'), null)
+  const synced = memoryFileView(file('synced'), 'memory')
+  assert.equal(synced.path, 'bot-workspaces/bots/chief/MEMORY.md')
+  assert.equal(synced.synced, new Date('2026-10-30T08:00:00.120Z').toLocaleString('zh-CN'))
+  assert.equal(synced.reason, null)
+  assert.match(memoryFileView(file('synced', null, null), 'memory').synced, /还没有生成文件/)
+  assert.equal(memoryFileView(file('rejected', 'MEMORY_FILE_TOO_LONG', null), 'memory').synced, '尚未同步')
+  assert.equal(memoryFileView(file('synced', null, 'invalid'), 'memory').synced, '同步时间不可用')
+})
+
+test('R2-07 rejected and pending reasons are plain Chinese without codes, paths or internals', () => {
+  const tooLong = memoryFileView(file('rejected', 'MEMORY_FILE_TOO_LONG'), 'memory').reason
+  assert.match(tooLong, /文件太长/)
+  assert.match(tooLong, /Bot 暂时拿不到/)
+  assert.match(tooLong, /精简后保存，会自动恢复/)
+  assert.match(tooLong, /64 条/)
+  assert.match(memoryFileView(file('rejected', 'MEMORY_FILE_TOO_LONG', null, 'bot-workspaces/bots/chief/PROFILE.md'), 'personality').reason, /8192 字/)
+  assert.match(memoryFileView(file('rejected', 'MEMORY_FILE_INVALID'), 'memory').reason, /无法读取.*UTF-8/)
+  assert.match(memoryFileView(file('rejected', 'MEMORY_FILE_UNAVAILABLE'), 'preferences').reason, /不可访问/)
+  assert.match(memoryFileView(file('pending', 'MEMORY_FILE_WRITE_FAILED'), 'memory').reason, /已保存.*Bot 照常使用.*自动重试/)
+  assert.ok(memoryFileView(file('rejected', 'SOMETHING_NEW'), 'memory').reason)
+  assert.ok(memoryFileView(file('pending', 'SOMETHING_NEW'), 'memory').reason)
+  for (const [state, code] of [['rejected', 'MEMORY_FILE_TOO_LONG'], ['rejected', 'MEMORY_FILE_INVALID'], ['rejected', 'MEMORY_FILE_UNAVAILABLE'], ['pending', 'MEMORY_FILE_WRITE_FAILED'], ['rejected', 'SOMETHING_NEW']]) {
+    const reason = memoryFileView(file(state, code), 'memory').reason
+    assert.doesNotMatch(reason, /MEMORY_|SOMETHING|bot-workspaces|\.md|ENOSPC|EACCES|symlink/)
+  }
+})
+
+test('R2-07 history labels file edits; empty sources mean hand-written; unknown actors never echo raw values', () => {
+  assert.equal(memoryActorLabel('file'), '文件修改')
+  assert.equal(memoryActorLabel('user'), '你编辑的')
+  assert.equal(memoryActorLabel('candidate'), '对话整理')
+  for (const unknown of ['toString', '__proto__', 'other', undefined, null]) assert.equal(memoryActorLabel(unknown), '已更新')
+  assert.equal(memoryHandwritten({ sourceEntries: [] }), true)
+  assert.equal(memoryHandwritten({ sourceEntries: [{ taskId: 1, entryId: 2 }] }), false)
+  assert.equal(memoryHandwritten({}), false)
+  assert.equal(memoryHandwritten(null), false)
+})
+
+test('R2-07 adapter keeps the file field; file state lives only in the memory section, without new gates', async () => {
+  const view = { personality: { ...doc, kind: 'personality', content: '', file: file('synced') }, memory: { ...doc, file: file('rejected', 'MEMORY_FILE_TOO_LONG') }, preferences: { ...doc, kind: 'preferences', file: null } }
+  assert.deepEqual((await createMemoryApi('disposable-test', async () => response(view)).getBot('chief')).memory.file, view.memory.file)
+  const section = await readFile(new URL('./MemoryDocuments.tsx', import.meta.url), 'utf8')
+  assert.match(section, /<MemoryFileState file=\{doc\.file\} kind=\{doc\.kind\} \/>/)
+  assert.match(section, /memoryActorLabel\(revision\.actor\)/)
+  assert.match(section, /<Handwritten item=\{item\} \/>/)
+  assert.doesNotMatch(section, /type="checkbox"|window\.confirm|EditorDialog|<input/)
+  assert.match(section, />纠正<\/button>/)
+  const others = (await readdir(new URL('.', import.meta.url))).filter(name => /\.(tsx|ts|mjs)$/.test(name) && !['MemoryDocuments.tsx', 'memory-helpers.mjs', 'memory-helpers.d.mts', 'memory-types.ts', 'memory-ui.test.mjs'].includes(name))
+  for (const name of others) {
+    const source = await readFile(new URL(`./${name}`, import.meta.url), 'utf8')
+    assert.doesNotMatch(source, /memoryFileView|MemoryFileState|bot-workspaces/, `${name} must not show memory file paths`)
+  }
+})
+
+test('R2 save notice does not promise the Bot sees an edit while its file is rejected', () => {
+  const rejected = { path: 'bot-workspaces/bots/chief/MEMORY.md', state: 'rejected', code: 'MEMORY_FILE_TOO_LONG', syncedAt: null }
+  assert.equal(memorySavedNotice('update', { ...rejected, state: 'synced', code: null }), '已保存，所有会话的下一次模型调用会读取最新内容。')
+  assert.equal(memorySavedNotice('update', null), '已保存，所有会话的下一次模型调用会读取最新内容。')
+  assert.match(memorySavedNotice('update', rejected), /Bot 暂时拿不到/)
+  assert.equal(memorySavedNotice('delete', rejected), '已删除，编辑历史仍保留。')
 })

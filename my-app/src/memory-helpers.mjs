@@ -37,6 +37,42 @@ export function memoryDate(value) {
   return Number.isNaN(date.getTime()) ? '更新时间不可用' : date.toLocaleString('zh-CN')
 }
 
+const ACTOR_LABELS = { user: '你编辑的', candidate: '对话整理', file: '文件修改' }
+export function memoryActorLabel(actor) {
+  return Object.hasOwn(ACTOR_LABELS, actor) ? ACTOR_LABELS[actor] : '已更新'
+}
+
+/** An item with an explicit empty source list was written by hand (file or UI), not extracted from a conversation. */
+export function memoryHandwritten(item) {
+  return Array.isArray(item?.sourceEntries) && item.sourceEntries.length === 0
+}
+
+/** Save confirmation; while the file is rejected the Bot gets nothing from this document, so do not promise it. */
+export function memorySavedNotice(action, file) {
+  if (action === 'delete') return '已删除，编辑历史仍保留。'
+  return file?.state === 'rejected' ? '已保存。这份文件现在无法使用，Bot 暂时拿不到它的内容，修好文件后恢复。' : '已保存，所有会话的下一次模型调用会读取最新内容。'
+}
+
+// Mirrors BOT_MEMORY_LIMITS so the user knows how far to trim; the server stays the authority.
+const FILE_LIMITS = { personality: '人格最多 8192 字', memory: '最多 64 条、每条 2048 字、合计 16384 字', preferences: '最多 64 条、每条 2048 字、合计 16384 字' }
+/** Plain-Chinese file state for the memory pages. Never shows codes, OS errors or anything beyond the relative path. */
+export function memoryFileView(file, kind) {
+  if (!file || typeof file !== 'object' || typeof file.path !== 'string' || !file.path) return null
+  const time = file.syncedAt ? new Date(file.syncedAt) : null
+  const synced = time ? Number.isNaN(time.getTime()) ? '同步时间不可用' : time.toLocaleString('zh-CN')
+    : file.state === 'synced' ? '还没有生成文件，有内容后自动创建' : '尚未同步'
+  const reasons = {
+    MEMORY_FILE_TOO_LONG: `文件太长，超出记忆上限（${FILE_LIMITS[kind] ?? FILE_LIMITS.memory}），Bot 暂时拿不到这份文件的内容。精简后保存，会自动恢复。`,
+    MEMORY_FILE_INVALID: '文件无法读取（可能不是 UTF-8 编码），Bot 暂时拿不到这份文件的内容。改正后保存，会自动恢复。',
+    MEMORY_FILE_UNAVAILABLE: '文件不可访问（可能是链接或权限问题），Bot 暂时拿不到这份文件的内容。修复后会自动恢复。',
+    MEMORY_FILE_WRITE_FAILED: '最新内容已保存，Bot 照常使用；写入文件失败，稍后自动重试。',
+  }
+  const reason = file.state === 'rejected' || file.state === 'pending'
+    ? Object.hasOwn(reasons, file.code) ? reasons[file.code] : file.state === 'pending' ? '文件暂时没有同步，稍后自动重试。' : '文件暂时无法使用，Bot 暂时拿不到这份文件的内容。'
+    : null
+  return { path: file.path, synced, reason }
+}
+
 /** An external refresh never rebases a user's draft without explicit confirmation. */
 export function reconcileMemoryDraft(draft, document) {
   return { draft, current: document, conflicted: !!draft && draft.expectedVersion !== document.version }
