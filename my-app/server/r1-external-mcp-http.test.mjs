@@ -96,7 +96,7 @@ test('production external MCP HTTP configures, saves credentials, checks, binds,
   assert.deepEqual(replay.body.data, removed.body.data)
 })
 
-test('actual Harness advertises a bound dynamic schema, asks once and stores the official SDK result', async t => {
+test('actual Harness advertises a bound dynamic schema, runs an enabled tool directly and stores the official SDK result', async t => {
   let alias, sawSchema = false, turns = 0
   const f = await fixture(t, { modelReply: async (_message, options) => {
     sawSchema ||= options.context.tools?.some(tool => tool.name === alias && tool.parameters.required.includes('text'))
@@ -108,13 +108,10 @@ test('actual Harness advertises a bound dynamic schema, asks once and stores the
   await f.bind(bot.id)
   const task = await f.store.create({ botId: bot.id })
   await f.store.send(task.taskId, 'Use the configured echo')
-  const waiting = await until(() => f.store.get(task.taskId), task => task.runtime.checkpoint?.phase === 'awaitApproval' && task.approvals.activeId !== null)
-  assert.equal(sawSchema, true); assert.equal(f.remote.calls.length, 0)
-  const item = waiting.approvals.items.find(item => item.id === waiting.approvals.activeId)
-  assert.equal(item.externalMcp.connectionId, 'fixture'); assert.equal(item.allowAlways, false)
-  await f.store.decideApproval(task.taskId, item.id, { decision: 'approved' })
   const done = await until(() => f.store.get(task.taskId), task => task.activeInputId === null && task.runtime.checkpoint?.phase === 'awaitInput')
-  assert.equal(f.remote.calls.length, 1)
+  assert.equal(sawSchema, true); assert.equal(f.remote.calls.length, 1)
+  const item = done.approvals.items[0]
+  assert.equal(item.externalMcp.connectionId, 'fixture'); assert.equal(item.decision.source, 'policy-rule')
   assert.deepEqual(done.approvals.items[0].receipt.result.data.structuredContent, { echoed: 'hello fixture' })
   assert.equal(done.callUsage.toolCalls, 1)
   assert.equal(done.messages.at(-1).content, 'receipt received')
@@ -167,8 +164,6 @@ test('large official MCP results are stored whole and read through the actual pa
     description: '', tools: [...current.assigned.tools, 'tool_result_read'], resources: [] })
   const task = await f.store.create({ botId: bot.id })
   await f.store.send(task.taskId, 'Read the complete normal fixture result')
-  const waiting = await until(() => f.store.get(task.taskId), task => task.approvals.activeId !== null)
-  await f.store.decideApproval(task.taskId, waiting.approvals.activeId, { decision: 'approved' })
   const done = await until(() => f.store.get(task.taskId), task => task.activeInputId === null && task.runtime.checkpoint?.phase === 'awaitInput')
   assert.equal(f.remote.calls.length, 1)
   assert.equal(chunks.size > 1, true)
@@ -195,8 +190,6 @@ test('reviewed source replacement retires old context while a new request can co
   const task = await f.store.create({ botId: bot.id })
   const run = async message => {
     await f.store.send(task.taskId, message)
-    const waiting = await until(() => f.store.get(task.taskId), task => task.approvals.activeId !== null)
-    await f.store.decideApproval(task.taskId, waiting.approvals.activeId, { decision: 'approved' })
     return until(() => f.store.get(task.taskId), task => task.activeInputId === null && task.runtime.checkpoint?.phase === 'awaitInput')
   }
   await run('first request')
@@ -226,8 +219,6 @@ test('disabling an in-flight benign MCP call stores one unknown receipt and neve
     await f.bind(bot.id)
     const task = await f.store.create({ botId: bot.id })
     await f.store.send(task.taskId, 'Run the benign fixture call')
-    const waiting = await until(() => f.store.get(task.taskId), task => task.approvals.activeId !== null)
-    await f.store.decideApproval(task.taskId, waiting.approvals.activeId, { decision: 'approved' })
     await began
     assert.equal((await f.call('/disable', { requestId: 'disable-inflight', connectionId: 'fixture', expectedRevision: checked.revision })).status, 200)
     const receipt = await until(() => f.store.harness.snapshot(TaskApprovals, task.taskId, context), state => Boolean(state.items[0].receipt))

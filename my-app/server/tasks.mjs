@@ -77,6 +77,8 @@ import { ToolAccess, CallUsage, CALENDAR_TOOL, toolSets, toolDefinitions, toolCa
   callLimits, checkModelLimit, CallLimitError, parseRevocation, modelVisible, externalToolValidator } from './tools.mjs'
 export { TaskInputError } from './task-config.mjs'
 
+// Who may decide an approval: the signed-in user, or an allow rule (tool group on).
+const APPROVAL_SOURCES = ['authenticated-user', 'policy-rule']
 const CapabilityHostApprovals = defineDoc({ kind: 'pidot.capability-host-approvals', version: 1, scope: 'session', initial: () => ({ items: {} }) })
 const ExternalMcpRemovals = defineDoc({ kind: 'pidot.external-mcp-removals', version: 1, scope: 'session', initial: () => ({ requests: {} }) })
 export const TaskCard = defineDoc({
@@ -219,7 +221,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
       const call = { id: item.callId, name: item.toolName, arguments: JSON.parse(JSON.stringify(item.arguments)) }
       let check = checkToolCall({ card, record: await tx.task(runtime.taskId), conversation: await tx.conversation(card.conversationId), call, displayed: turn?.data.displayed ?? [], sets })
       if (!original || JSON.stringify(original.arguments) !== JSON.stringify(item.arguments) || turn.byTaskId !== card.taskId ||
-        decision?.data.binding !== item.binding || decision.data.source !== 'authenticated-user') check = failure('APPROVAL_BINDING_MISMATCH', '外部操作原调用或决定不匹配。')
+        decision?.data.binding !== item.binding || !APPROVAL_SOURCES.includes(decision.data.source)) check = failure('APPROVAL_BINDING_MISMATCH', '外部操作原调用或决定不匹配。')
       if (!external || external.catalogRevision !== item.externalMcp.catalogRevision || external.connectionId !== item.externalMcp.connectionId) check = failure('CAPABILITY_CATALOG_CONFLICT', '连接工具目录已改变，请重新核对并确认。')
       const usage = await tx.doc(CallUsage, runtime.taskId), limits = callLimits(card.parameters)
       if (usage.toolCalls > limits.toolCalls || limits.totalTokens !== undefined && (usage.unknownTokenCalls > 0 || usage.totalTokens >= limits.totalTokens)) check = failure('CALL_LIMIT_REACHED', '当前工具或 token 预算不足，未调用外部服务。')
@@ -1299,13 +1301,17 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       const { card, call, entryId, turnId } = request, { kind, args } = parseCapabilityManagementCall(call)
       const task = await readCapabilityTask(tx, card.taskId), entry = await tx.entry(entryId)
       if (!task || task.activeInputId !== entryId || !await canManageCapabilities(tx, { task, toolName: call.name }) || entry?.kind !== 'pidot.user' || entry.data.source || entry.conversationId !== card.conversationId) throw new TaskInputError(403, 'SETUP_INPUT_INVALID', '配置必须由当前真实用户输入和宿主精确确认发起。')
-      if ((await decide(tx, { botId: card.bot.id, tool: call.name, action: args.action })).effect === 'deny') return { ok: false, error: { code: 'POLICY_DENIED', message: '当前规则禁止该配置动作。' } }
+      const verdict = await decide(tx, { botId: card.bot.id, tool: call.name, action: args.action })
+      if (verdict.effect === 'deny') return { ok: false, error: { code: 'POLICY_DENIED', message: '当前规则禁止该配置动作。' } }
       const capabilityId = kind === 'mcp' ? `mcp:${args.connectionId}` : args.skillId ? `skill:${args.skillId}` : null
       const item = catalog.find(item => item.id === capabilityId)
       const target = (await tx.doc(BotDirectory)).items.find(bot => bot.id === args.targetBotId)
       const intent = { kind, proposal: args, sourceFingerprint: payloadHash([kind, args, item?.revision ?? null]),
         scope: ['update', 'remove', 'rollback'].includes(args.action) ? 'global' : 'target-bot' }
-      return requestManagementApproval(tx, card, call, entryId, turnId, payloadHash(['capability-intent', call.name, intent]), target, call.name, false, null, intent)
+      const result = await requestManagementApproval(tx, card, call, entryId, turnId, payloadHash(['capability-intent', call.name, intent]), target, call.name, false, null, intent)
+      // The user's explicit request is the authorization; only an ask/deny rule makes it wait.
+      if (verdict.effect === 'allow' && result.ok && result.data?.approvalId) await autoApproveByRule(tx, card, (await tx.doc(TaskApprovals, card.taskId)).items.find(i => i.id === result.data.approvalId), verdict.reason)
+      return result
     }
     async function authorizeCapabilityIntent(tx, { task, entry, originEntry, proposal, sourceFingerprint }) {
       if (originEntry.kind !== 'pidot.user' || originEntry.data.source || originEntry.conversationId !== task.conversationId || task.activeInputId !== entry.id) return null
@@ -1318,7 +1324,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         if (!item.capabilityIntent || item.inReplyTo !== originEntry.id || item.capabilityIntent.sourceFingerprint !== sourceFingerprint || payloadHash(item.capabilityIntent.proposal) !== payloadHash(proposal) || !validApprovalBinding(task, item) || item.decision.decision !== 'approved') continue
         const decision = await tx.entry(item.decision.id), turn = await tx.entry(item.turnId)
         const call = turn?.data.assistant?.content?.find(call => call.id === item.callId && call.name === item.toolName)
-        if (decision?.kind !== 'pidot.approval-decided' || decision.data.source !== 'authenticated-user' || decision.data.binding !== item.binding || decision.conversationId !== task.conversationId || turn?.byTaskId !== task.taskId || !call || payloadHash(call.arguments) !== payloadHash(item.arguments)) continue
+        if (decision?.kind !== 'pidot.approval-decided' || !APPROVAL_SOURCES.includes(decision.data.source) || decision.data.binding !== item.binding || decision.conversationId !== task.conversationId || turn?.byTaskId !== task.taskId || !call || payloadHash(call.arguments) !== payloadHash(item.arguments)) continue
         return { authorizationId: `approval:${item.id}:${item.binding}`, taskId: task.taskId, inputId: originEntry.id,
           targetBotId: proposal.targetBotId, action: proposal.action, sourceFingerprint, scope: item.capabilityIntent.scope }
       }
@@ -1332,6 +1338,8 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       const call = { id: original.callId, name: original.toolName, arguments: JSON.parse(JSON.stringify(original.arguments)) }
       const result = await requestManagementApproval(tx, card, call, spec.inputId, original.turnId, payloadHash(['capability-scope', spec]), target, call.name, false, null, null, spec)
       if (!result.ok || !result.data?.approvalId) throw new TaskInputError(409, 'SETUP_APPROVAL_INVALID', '无法建立当前配置范围的精确确认。')
+      const verdict = await decide(tx, { botId: card.bot.id, tool: call.name, action: original.capabilityIntent.proposal.action })
+      if (verdict.effect === 'allow') await autoApproveByRule(tx, card, (await tx.doc(TaskApprovals, spec.taskId)).items.find(i => i.id === result.data.approvalId), verdict.reason)
       const approvalId = String(result.data.approvalId)
       ;(await tx.doc(CapabilityHostApprovals)).items[approvalId] = JSON.parse(JSON.stringify(spec))
       return { approvalId }
@@ -1343,7 +1351,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       if (!item || payloadHash(item.capabilitySetupSpec) !== payloadHash(spec)) return null
       if (!item.decision) return { ...JSON.parse(JSON.stringify(spec)), state: 'pending' }
       const decision = await tx.entry(item.decision.id)
-      const verified = validApprovalBinding(card, item) && decision?.kind === 'pidot.approval-decided' && decision.data.source === 'authenticated-user' && decision.data.binding === item.binding
+      const verified = validApprovalBinding(card, item) && decision?.kind === 'pidot.approval-decided' && APPROVAL_SOURCES.includes(decision.data.source) && decision.data.binding === item.binding
       return { ...JSON.parse(JSON.stringify(spec)), state: verified && item.decision.decision === 'approved' ? 'approved' : 'denied' }
     }
     async function verifyManagedCapability({ kind, targetBotId, capabilityId }) {
@@ -1440,7 +1448,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         const turn = await tx.entry(item.turnId), original = turn?.data.assistant?.content?.find(call => call.id === item.callId && call.name === item.toolName)
         const decision = await tx.entry(item.decision.id), sets = toolSets(card, bots, await tx.doc(ToolAccess))
         const check = checkToolCall({ card, record: await tx.task(card.taskId), conversation: await tx.conversation(card.conversationId), call: request.call, displayed: turn?.data.displayed ?? [], sets })
-        if (!check.ok || !original || payloadHash(original.arguments) !== payloadHash(item.arguments) || decision?.data.source !== 'authenticated-user') { previous = check.ok ? { ok: false, error: { code: 'SETUP_APPROVAL_INVALID', message: '配置原调用与真实确认不一致。' } } : check; return }
+        if (!check.ok || !original || payloadHash(original.arguments) !== payloadHash(item.arguments) || !APPROVAL_SOURCES.includes(decision?.data.source)) { previous = check.ok ? { ok: false, error: { code: 'SETUP_APPROVAL_INVALID', message: '配置原调用与真实确认不一致。' } } : check; return }
         if (item.operation) {
           const setupId = item.capabilitySetupSpec?.setupId ?? (await tx.doc(CapabilitySetups)).byOperation[`${card.taskId}:${item.capabilityIntent?.proposal.operationId}`]
           if (setupId) request.recoverSetupId = setupId

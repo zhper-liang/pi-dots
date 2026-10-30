@@ -74,7 +74,7 @@ test('cold store creates a blank Bot and both direct/scoped main GET work while 
   assert.equal((await f.store.get(mainTaskId)).bot.id, bot.id)
 })
 
-test('Chief input configures and binds official MCP only after a genuine precise approval', async t => {
+test('with the capability group set to ask, Chief configures and binds official MCP only after a genuine precise approval', async t => {
   let targetId
   const f = await fixture(t, { modelReply: async (_message, options) => {
     const inspect = resultFor(options, 'mcp_manage')
@@ -86,6 +86,7 @@ test('Chief input configures and binds official MCP only after a genuine precise
   targetId = (await f.store.createBot({ name: 'Configuration target', requestId: 'configuration-target' })).bot.id
   const main = (await f.store.mainSessions()).chief
   assert.equal((await f.store.get(main)).toolSets.authorized.includes('mcp_manage'), true)
+  await f.store.switchGroup('chief', { requestId: 'capabilities-ask-mode', groupId: 'capabilities', mode: 'ask' })
   await f.store.send(main, 'Add the provided fixture MCP to the target Bot')
   const waiting = await f.waitApproval(main)
   assert.deepEqual(await f.mcp.connections(), [])
@@ -118,8 +119,6 @@ test('missing credentials retain the original active input and the same authenti
   targetId = (await f.store.createBot({ name: 'Credential target', requestId: 'credential-target' })).bot.id
   const main = (await f.store.mainSessions()).chief
   await f.store.send(main, 'Configure the authenticated fixture for the target')
-  const waiting = await f.waitApproval(main)
-  await f.approve(main, waiting.approvals.activeId)
   const paused = await until(() => f.store.get(main), task => task.runtime.checkpoint?.phase === 'capabilitySetup')
   const receipt = paused.capabilitySetups[0]
   assert.equal(receipt.state, 'needs_auth'); assert.equal(paused.activeInputId, receipt.inputId)
@@ -138,7 +137,7 @@ test('missing credentials retain the original active input and the same authenti
   assert.equal(JSON.stringify(done).includes('synthetic-mcp-token'), false)
 })
 
-test('Skill setup grants only its three mechanism tools after a second exact approval', async t => {
+test('an explicit Skill request is configured directly and grants only its three mechanism tools', async t => {
   let targetId, sent = false
   const f = await fixture(t, { modelReply: async () => {
     if (sent) return text('Use only the real Skill setup receipt')
@@ -149,14 +148,11 @@ test('Skill setup grants only its three mechanism tools after a second exact app
   targetId = (await f.store.createBot({ name: 'Skill target', requestId: 'skill-target-bot' })).bot.id
   const main = (await f.store.mainSessions()).chief
   await f.store.send(main, 'Add the local declarative review Skill to the target Bot')
-  const first = await f.waitApproval(main)
-  await f.approve(main, first.approvals.activeId)
-  const mechanisms = await f.waitApproval(main, first.approvals.activeId)
-  const item = mechanisms.approvals.items.find(item => item.id === mechanisms.approvals.activeId)
+  const done = await f.idle(main)
+  const item = done.approvals.items.find(item => item.capabilitySetupSpec)
   assert.equal(item.capabilitySetupSpec.scope, 'skill-mechanisms')
   assert.deepEqual(item.capabilitySetupSpec.tools, ['skill_activate', 'skill_deactivate', 'skill_read_resource'])
-  await f.approve(main, item.id)
-  const done = await f.idle(main)
+  assert.equal(done.approvals.items.every(item => item.decision.source === 'policy-rule'), true)
   assert.equal(done.capabilitySetups[0].state, 'ready', JSON.stringify(done.capabilitySetups[0]))
   const target = await f.store.getBotConfiguration(targetId)
   assert.deepEqual([...target.assigned.tools].sort(), ['skill_activate', 'skill_deactivate', 'skill_read_resource'])

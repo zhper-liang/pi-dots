@@ -43,18 +43,11 @@ export async function decide(tx, call, { externalTool } = {}) {
   const action = call.action ?? call.args?.action
   const verdict = (effect, reason, allowAlways = false) => ({ effect, reason, allowAlways,
     ...(effect === 'ask' ? { expiresInMs: ATTENDED_LOCAL_EXPIRY_MS } : {}) })
-  if (externalTool?.name === call.tool) {
-    const rule = pickRule((await tx.doc(PolicyRules)).items, call)
-    return verdict(rule?.effect === 'deny' ? 'deny' : 'ask', rule?.effect === 'deny' ? 'external-rule' : 'external-write-review', false)
-  }
-  if (['mcp_manage', 'skill_manage'].includes(call.tool)) {
-    if (action === 'inspect') return verdict('allow', 'configuration-inspect')
-    const rule = pickRule((await tx.doc(PolicyRules)).items, { ...call, action })
-    return verdict(rule?.effect === 'deny' ? 'deny' : 'ask', rule?.effect === 'deny' ? 'configuration-rule' : 'configuration-intent', false)
-  }
-  if (call.tool === 'bot_manage' && action === 'configure' && call.args?.tools?.some(name => ['mcp_manage', 'skill_manage'].includes(name))) return verdict('ask', 'configuration-authority-grant', false)
-  if (READ_AND_INTERNAL.has(call.tool)) return verdict('allow', 'read-or-internal')
-  if (!WRITE_TOOLS.has(call.tool) || call.tool === 'bot_manage' && !['create', 'configure', 'deactivate'].includes(action) ||
+  // An enabled external MCP tool is the user's grant: it runs directly unless a rule says otherwise.
+  const external = externalTool?.name === call.tool
+  if (!external && ['mcp_manage', 'skill_manage'].includes(call.tool) && action === 'inspect') return verdict('allow', 'configuration-inspect')
+  if (!external && READ_AND_INTERNAL.has(call.tool)) return verdict('allow', 'read-or-internal')
+  if (!external && !WRITE_TOOLS.has(call.tool) || call.tool === 'bot_manage' && !['create', 'configure', 'deactivate'].includes(action) ||
     call.tool === 'workspace.prepare_change' && !['create', 'update', 'delete'].includes(action)) return verdict('deny', 'unregistered')
   const rule = pickRule((await tx.doc(PolicyRules)).items, { ...call, action })
   // Tool groups default to on: an unmatched write, deletion included, runs directly.
