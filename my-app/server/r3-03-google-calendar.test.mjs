@@ -327,7 +327,7 @@ test('R3-03 background sync reuses workspace-sync; state survives a restart; a w
 
 // The chat path resolves a Task's workspace sources in workspace-mcp-host.mjs, which today only admits
 // `local` and the bound Feishu calendar. Not an R3-03 file: wiring is listed in the R3-03 report.
-test('R3-03 chat: a Bot with only a Google calendar creates an event from a model tool call', { todo: 'needs workspaceTaskResolver to admit live Google sources (workspace-mcp-host.mjs)' }, async () => {
+test('R3-03 chat: a Bot with only a Google calendar creates an event from a model tool call', async () => {
   let sourceId = null
   const bots = listBots({ baseUrl: 'https://fixture.invalid/v1', model: 'fixture', apiKey: 'fixture' })
   const modelReply = async (_message, options) => {

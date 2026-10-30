@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `NEXT_STAGE.md`：已交付状态与授权边界。新阶段、新连接器、新依赖需要用户另行授权。
 - 进行中的工作：`plans/active*`，以及本地未入库的 `.planning/<topic>/`、`.scratch/<topic>/`（被 gitignore，记录当前阶段的决策与进度，可能比 `NEXT_STAGE.md` 新）。
-- `docs/project-guide.md`：整体架构图和源码阅读顺序。其中部分旧描述已过时，当前权限以 `server/policy.mjs`、ADR-014、ADR-015 与 ADR-018 为准。
+- `docs/project-guide.md`：整体架构图和源码阅读顺序。其中部分旧描述已过时，当前权限以 `server/policy.mjs`、ADR-014、ADR-015、ADR-018 与 ADR-021 为准。
 - `my-app/README.md`：环境变量、启动方式、API 端点的唯一正文。
 
 ## 命令
@@ -43,6 +43,7 @@ pnpm build                                                 # tsc -b + vite build
 - **Skill**：内置的 `server/skills/<id>/manifest.json` 存在即注册，每次使用时读取；用户导入的 Skill 走 `skill-import.mjs`，存放在数据库同级的 `skills/` 目录，不写进源码目录。Skill 不授予工具权限，正文里的 `allowed-tools` 只是声明。
 - **外部 MCP**：用官方 `@modelcontextprotocol/sdk` 连接远程 Streamable HTTP 或本机已安装的 stdio 程序（`external-mcp*.mjs`），凭据单独存储，不进聊天、日志或工具结果。现有内部 MCP client 不当作通用第三方连接器用。Agent 通过 `capability-management*.mjs` 的管理工具（`mcp_manage`/`skill_manage`，只给 Chief 或宿主明确赋权的配置 Agent）在对话里添加、绑定、停用 MCP 和 Skill，和 UI 走同一服务层。
 - **记忆**：每 Bot 的 `PROFILE.md`、`MEMORY.md` 和共享的 `shared/USER.md` 放在数据库同级的 `bot-workspaces/`，是内容真源；`pidot.bot-memory.*` Document 改作台账（版本、来源、防复活、提取水位）。只有 `memory-files.mjs` 的对账读写这些文件，读之前对账，不用 fs.watch。测试 store 默认只用台账，文件模式用 `openTaskStore({ memoryFiles: { enabled: true } })` 开启（ADR-019）。
+- **Google**：Calendar、Tasks 是 workspace-service 的原生 provider 适配，进 Event/Todo；Gmail、Drive、Docs、Sheets 经 loopback HTTP 上固定版本的 workspace-mcp，Pidot 登录 Google 一次，每次调用把访问令牌传给它。refresh token 只在数据库同级的 `google/credentials.json`。测试只打 `fixtures/fake-google.mjs` 与 `fixtures/fake-workspace-mcp.mjs`，请求真实 Google 主机即失败（ADR-020、ADR-021）。
 - **会话删除**：`session-lifecycle.mjs` 负责持久删除和主会话换新；读取时会过滤已删除的来源，不新增会话库。
 - **前端**：React 19 + React Compiler（babel 插件），没有 UI 框架和路由库，使用 hash 路由。纯逻辑放在 `src/*.mjs` 并配手写的 `*.d.mts` 类型声明，这样 `server/*.test.mjs` 能直接 import 测试。Hermes 风格外壳（T03–T07）已落地；开关用 `Switch.tsx`，弹窗和时间选择复用 `EditorDialog.tsx`、`LocalTimePicker.tsx`。
 

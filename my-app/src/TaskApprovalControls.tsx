@@ -157,7 +157,7 @@ function CapabilityApprovalParameters({ item }: { item: ApprovalItem }) {
   return <>
     {item.externalMcp ? <><dt>连接</dt><dd>{item.externalMcp.connectionName ?? '服务端未提供连接名称'} · {item.externalMcp.connectionId}</dd><dt>原工具</dt><dd>{item.externalMcp.originalName ?? '服务端未提供原工具名称'}</dd>
       {item.externalMcp.description && <><dt>说明</dt><dd>{item.externalMcp.description}</dd></>}
-      <dt>调用规则</dt><dd>本次外部调用逐次确认；连接就绪或已分配给 Bot，不代表外部操作已执行。服务端派发前仍会复核目录和授权。</dd></> : <><dt>配置类型</dt><dd>{item.toolName === 'mcp_manage' ? 'MCP' : 'Skill'}</dd>
+      <dt>调用规则</dt><dd>这次外部调用按当前规则需要确认（工具组开着时默认直接执行）；连接就绪或已分配给 Bot，不代表外部操作已执行。服务端派发前仍会复核目录和授权。</dd></> : <><dt>配置类型</dt><dd>{item.toolName === 'mcp_manage' ? 'MCP' : 'Skill'}</dd>
       <dt>目标 Bot</dt><dd>{target ?? '服务端未提供目标标签，请核对实际参数'}</dd>
       <dt>本次范围</dt><dd>{scope ?? '请核对下列宿主登记参数'}</dd>
       {!!affected.length && <><dt>本次确认覆盖的 Bot</dt><dd>{affected.join('、')}</dd></>}

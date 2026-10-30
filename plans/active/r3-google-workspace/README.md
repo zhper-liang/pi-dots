@@ -1,5 +1,7 @@
 # 第三轮计划：Google Workspace 账号授权与业务适配
 
+> **2026-10-30 实现完成，待用户验收。** R3-01 至 R3-07 与 R3-06 集成完成：test 1531/1531，lint exit 0（11 条既有 warning），build exit 0；1440/375 浏览器检查无溢出、无秘密泄漏。决策记为 ADR-020、ADR-021。真实 Google 账号与真实 workspace-mcp 登录未验，手测步骤见[运行手册](../../../docs/engineering/operations.md#google-连接与-workspace-mcpr3)。
+
 > 状态：**2026-10-30 用户授权开工**（“开”），D1–D13 已答复（§9）。按票派子 agent 实施，主管协调与验收，子 agent 返回后先停下向用户汇报。固定版本 workspace-mcp 的安装已批准（D11）。不连接任何真实 Google 账号。来源：[INT-01](../../backlog/2026-10-29-workspace-experience.md#int-01--p3--未来--google-workspace-mcp-接入调研) 与该文 §5 的三轮顺序。票据格式沿用[第一轮分票](../../done/2026-10-30-workspace-experience-r1/PLAN.md)。
 >
 > 权限按 ADR-015：工具组开 = 组内写入直接执行（含删除）。本文不新增确认关卡（D4 已选直接做）。

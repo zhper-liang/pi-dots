@@ -2471,6 +2471,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       googleConnect: input => googleCall(g => g.start(input)),
       googlePaste: input => googleCall(async g => { const result = await g.paste(input); await reconcileGoogle(); return result }),
       googleDisconnect: input => googleCall(async g => { const result = await g.disconnect(input); await reconcileGoogle(); return result }),
+      googleWorkspaceMcpStatus: () => externalServiceCall(service => service.googleWorkspaceStatus()),
       async readFeishuCalendar(input) {
         const authorize = () => harness.commit(async tx => {
           await feishu.sync(tx)

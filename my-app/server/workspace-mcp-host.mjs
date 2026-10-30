@@ -1,6 +1,7 @@
 import { LOCAL_OWNER, fail, payloadHash } from './workspace-schema.mjs'
 import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { rawWorkspaceRecord, workspaceUsedResources, workspaceUsedTools } from './workspace-grants.mjs'
+import { providerOfSource, externalSourceLive } from './workspace-providers.mjs'
 
 // Runtime dependencies are injected, preserving one Harness and existing guards.
 export function workspaceTaskResolver({ repository: repo, TaskCard, ToolAccess, toolSets, bots, assertActive, assertLive, guard, syncExternal }) {
@@ -17,9 +18,11 @@ export function workspaceTaskResolver({ repository: repo, TaskCard, ToolAccess, 
       const sources = [], actions = new Set(); let readScope = 'full'
       for (const resource of sets.resources.filter(r => r.startsWith('workspace:'))) {
         const sourceId = resource.slice(10)
-        if (sourceId !== 'local' && (!external.binding || sourceId !== `feishu:${payloadHash([external.binding.connectionId, external.binding.calendarId])}`)) continue
+        if (sourceId !== 'local' && providerOfSource(sourceId)?.id === 'feishu' && (!external.binding || sourceId !== `feishu:${payloadHash([external.binding.connectionId, external.binding.calendarId])}`)) continue
         const user = await rawWorkspaceRecord(tx, 'Grant', sourceId, 'user:authenticated-user'), source = await rawWorkspaceRecord(tx, 'Source', sourceId, sourceId), connection = source && await rawWorkspaceRecord(tx, 'Connection', sourceId, source.connectionId)
         if (!source?.capabilities.includes('read') || !user?.actions.includes('read') || connection?.status !== 'active' || !['busy', 'full'].includes(user.readScope)) continue
+        // Google (and any non-Feishu provider) sources must still be live for this account.
+        if (sourceId !== 'local' && providerOfSource(sourceId)?.id !== 'feishu' && !await externalSourceLive(tx, sourceId, connection)) continue
         sources.push(sourceId)
         for (const a of user.actions) if (source.capabilities.includes(a)) actions.add(a)
         if (user.readScope === 'busy') readScope = 'busy'

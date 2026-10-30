@@ -77,6 +77,11 @@ MCP来源独立refs；context/history/产物/协作/digest/记忆走同一来源
 
 文件手改只改内容，不写防复活标记；含密钥照常导入，读取脱敏和注入过滤不变。凭证检查只扫新写入的内容，已存内容里的 key 不挡后续提取和编辑。文件超限或无法解析时整份不用，Agent 只收到一行提示；对账出错时对话照常，用台账内容注入。`PIDOT_MEMORY_FILES=0` 回到只用台账，见[运行手册](../engineering/operations.md#文件式记忆的开关与回滚r2)和 ADR-019。
 
+## Google 连接（R3）
+Calendar、Tasks 是 workspace-service 的两个原生 provider 适配（`workspace-google-calendar.mjs`、`workspace-google-tasks.mjs`），进 Event/Todo 文档，经 `workspace-sync` 后台重扫，日历视图和提醒照常使用；Bot 经 `workspace.*` 工具读写，对话路径由 `workspace-mcp-host.mjs` 按来源是否仍有效放行。Gmail、Drive、Docs、Sheets 经 workspace-mcp：一条凭据来源为“取自 Google 连接”的外部 MCP 连接，每次调用由 `google.accessToken()` 取当前令牌作 bearer，传输层 401 时作废该令牌并重试一次，工具已执行后不重试。令牌只在服务端凭据文件和内存里。
+
+外部来源（飞书、Google）连上即可用，哪个 Bot 能用仍按 Bot 分配；日程写入归“日历与日程”组，事项写入归“待办与事项”组（ADR-021）。见 ADR-020 与[运行手册](../engineering/operations.md#google-连接与-workspace-mcpr3)。
+
 ## 协作、群聊与 Chief
 - Chief普通创建/配置/停用按现有allow/ask规则执行，配置管理权转授始终需要精确确认；可配置自己的工具与来源，不能停用 Chief 自身，已停用 Bot 不自动重新启用。管理仍校验身份、目标、版本、精确参数及幂等回执。
 - 委派记录父子关系、主管、执行者、目标与结果来源；目标 Bot 独立检查能力和授权。

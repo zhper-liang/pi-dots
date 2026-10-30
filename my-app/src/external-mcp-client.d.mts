@@ -1,7 +1,7 @@
 export type McpStatus = 'ready' | 'configured' | 'needs_auth' | 'missing_dependency' | 'error' | 'disabled' | 'removed'
 export type McpCheck = { status?: string; checkedAt?: string; error?: { code: string } }
 export type McpReceipt = { connectionId: string; revision: string; status: McpStatus; saved?: true; removed?: true; toolCount?: number; replayed?: boolean; lastCheck?: McpCheck | null }
-export type McpConnection = McpReceipt & { name: string; description: string; transport: 'streamable-http' | 'stdio'; enabled: boolean; hasCredential: boolean; credentialRequired: boolean; secretEnvKeys?: string[] }
+export type McpConnection = McpReceipt & { credentialSource?: 'google'; name: string; description: string; transport: 'streamable-http' | 'stdio'; enabled: boolean; hasCredential: boolean; credentialRequired: boolean; secretEnvKeys?: string[] }
 export type McpConfig = { connectionId: string; name: string; description: string; transport: 'streamable-http' | 'stdio'; credentialRequired: boolean; url?: string; allowLoopback?: boolean; executable?: string; args?: string[]; envKeys?: string[]; secretEnvKeys?: string[] }
 export type McpConfigForm = { name: string; description: string; transport: 'streamable-http' | 'stdio'; credentialRequired: boolean; url: string; allowLoopback: boolean; executable: string; args: string; envKeys: string[]; secretEnvKeys: string }
 export type McpOperation = 'configure' | 'check' | 'reconnect' | 'disable' | 'remove'

@@ -232,11 +232,11 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
       }
       // R3-02 Google connection. Bodies may carry a client secret or a pasted redirect URL: they are
       // never logged or echoed; responses are the public status projection only.
-      const googleRoute = /^\/api\/google\/(status|client|connect|paste|disconnect)$/.exec(req.url)
+      const googleRoute = /^\/api\/google\/(status|client|connect|paste|disconnect|workspace-mcp)$/.exec(req.url)
       if (tasks && googleRoute) {
-        const method = googleRoute[1] === 'status' ? 'GET' : 'POST'
+        const method = ['status', 'workspace-mcp'].includes(googleRoute[1]) ? 'GET' : 'POST'
         if (req.method !== method) { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: `该接口仅支持 ${method}。` } }, { Allow: method }); return }
-        const handlers = { status: 'googleStatus', client: 'googleSaveClient', connect: 'googleConnect', paste: 'googlePaste', disconnect: 'googleDisconnect' }
+        const handlers = { status: 'googleStatus', client: 'googleSaveClient', connect: 'googleConnect', paste: 'googlePaste', disconnect: 'googleDisconnect', 'workspace-mcp': 'googleWorkspaceMcpStatus' }
         if (method === 'GET') req.resume()
         sendJson(res, 200, { data: await tasks[handlers[googleRoute[1]]](method === 'GET' ? undefined : await readJson(req)) }); return
       }

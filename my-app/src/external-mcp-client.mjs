@@ -47,6 +47,7 @@ function connection(value) {
   if (typeof value.name !== 'string' || typeof value.description !== 'string' || !['streamable-http', 'stdio'].includes(value.transport)) throw new McpRequestError('MCP_INVALID_RESPONSE')
   return { ...projected, name: value.name, description: value.description, transport: value.transport,
     enabled: value.enabled === true, hasCredential: value.hasCredential === true, credentialRequired: value.credentialRequired === true,
+    ...(value.credentialSource === 'google' ? { credentialSource: 'google' } : {}),
     ...(Array.isArray(value.secretEnvKeys) ? { secretEnvKeys: value.secretEnvKeys.filter(key => typeof key === 'string') } : {}) }
 }
 

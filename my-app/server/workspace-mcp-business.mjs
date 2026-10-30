@@ -232,7 +232,7 @@ export function createWorkspaceMcpBusiness({ repository: repo, authority, servic
         if (op.action === 'delete') { delete command.data; command.confirmedDelete = true }
         const receipt = await service.applyLocalConfirmed(tx, actor, command, op.id)
         // "以后直接做" turns the workspace write group on for this Bot.
-        if (input.always) await openGroup(tx, op.actor.subjectId, 'workspace.prepare_change')
+        if (input.always) await openGroup(tx, op.actor.subjectId, 'workspace.prepare_change', op.normalizedArgs?.type)
         return repo.put(tx, 'Operation', { ...op, state: 'succeeded', receipt })
       })
     },

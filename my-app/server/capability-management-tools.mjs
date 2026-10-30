@@ -8,14 +8,14 @@ const sourceSchema = { type: 'object', additionalProperties: false, required: ['
   kind: { type: 'string', enum: ['local', 'repository'] }, path: { type: 'string', maxLength: 4096 }, url: { type: 'string', maxLength: 2048 },
   ref: text, directory: { type: 'string', maxLength: 240 },
 } }
-const configSchema = { type: 'object', additionalProperties: false, required: ['connectionId', 'name', 'transport'], properties: {
-  connectionId: text, name: text, description: { type: 'string', maxLength: 4000 }, transport: { type: 'string', enum: ['streamable-http', 'stdio'] },
+const configSchema = { type: 'object', additionalProperties: false, properties: {
+  template: { type: 'string', enum: ['google-workspace'] }, connectionId: text, name: text, description: { type: 'string', maxLength: 4000 }, transport: { type: 'string', enum: ['streamable-http', 'stdio'] },
   url: { type: 'string', maxLength: 2048 }, allowLoopback: { type: 'boolean' }, executable: { type: 'string', maxLength: 2048 },
   args: { type: 'array', maxItems: 64, items: { type: 'string', maxLength: 2048 } }, envKeys: { type: 'array', maxItems: 16, items: text },
   secretEnvKeys: { type: 'array', maxItems: 16, items: text }, credentialRequired: { type: 'boolean' }, timeoutMs: { type: 'integer', minimum: 1000, maximum: 60000 },
 } }
 export const capabilityManagementTools = [
-  { name: 'mcp_manage', description: '受权配置管理。先inspect目标Bot取得当前revision及登记连接。用户明确请求后，add可登记非秘密config或绑定已有connectionId；update修改已有连接。disable/unbind仅影响指定Bot；remove为全局移除，其他Bot引用须宿主确认。operationId固定，续办只传resume与同一operationId。缺凭据用结果卡的安全入口，不把key、bearer、env值、headers或approved放进参数。只能依据真实登记/发现/绑定/校验回执报告成功，不调用写工具作验证。',
+  { name: 'mcp_manage', description: '受权配置管理。先inspect目标Bot取得当前revision及登记连接。接Google邮件、Drive、Docs、Sheets时config只写{"template":"google-workspace"}，地址和令牌由宿主提供。用户明确请求后，add可登记非秘密config或绑定已有connectionId；update修改已有连接。disable/unbind仅影响指定Bot；remove为全局移除，其他Bot引用须宿主确认。operationId固定，续办只传resume与同一operationId。缺凭据用结果卡的安全入口，不把key、bearer、env值、headers或approved放进参数。只能依据真实登记/发现/绑定/校验回执报告成功，不调用写工具作验证。',
     parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
       action: { type: 'string', enum: actions }, operationId: { ...text, maxLength: 100 }, targetBotId: text, expectedRevision: text, connectionId: text, config: configSchema,
     } } },

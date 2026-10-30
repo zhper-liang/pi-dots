@@ -114,13 +114,13 @@ function ConnectionPanel({ token, client: provided }: Props) {
           {item.lastCheck?.checkedAt && <p className="shell-muted small">最近检查：{new Date(item.lastCheck.checkedAt).toLocaleString()}{item.lastCheck.error?.code ? `（${item.lastCheck.error.code}）` : ''}</p>}
         </div>
         <div className="external-mcp-actions">
-          <button type="button" disabled={locked} onClick={() => edit(item)}>修改配置</button>
+          {item.credentialSource !== 'google' && <button type="button" disabled={locked} onClick={() => edit(item)}>修改配置</button>}
           <button type="button" disabled={locked || !item.enabled} onClick={() => change(item, 'check')}>检查连接</button>
           <button type="button" disabled={locked || !item.enabled} onClick={() => change(item, 'reconnect')}>重新连接</button>
           <button type="button" disabled={locked || !item.enabled} onClick={() => change(item, 'disable')}>停用</button>
           <button type="button" disabled={locked} onClick={() => change(item, 'remove')}>移除</button>
         </div>
-        {(item.transport === 'streamable-http' || !!item.secretEnvKeys?.length) && <details className="external-mcp-credential"><summary>{item.hasCredential ? '替换连接凭据' : '安全输入凭据'}</summary>
+        {item.credentialSource !== 'google' && (item.transport === 'streamable-http' || !!item.secretEnvKeys?.length) && <details className="external-mcp-credential"><summary>{item.hasCredential ? '替换连接凭据' : '安全输入凭据'}</summary>
           <McpCredentialForm connectionId={item.connectionId} expectedRevision={item.revision} transport={item.transport} secretEnvKeys={item.secretEnvKeys} hasCredential={item.hasCredential}
             disabled={busy || pending !== null || credentialPending !== null && credentialPending !== item.connectionId}
             onSave={(input, signal) => client.saveCredential(input, signal)} onVerify={(requestId, signal) => client.requestStatus(requestId, signal)}

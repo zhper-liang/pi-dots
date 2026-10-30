@@ -12,6 +12,7 @@
 
 | 计划 | 更新 | 状态 |
 |---|---|---|
+| [第三轮：Google Workspace](active/r3-google-workspace/README.md) | 2026-10-30 | 实现完成，test 1531/1531、lint/build 通过；待用户验收（真实 Google 账号手测由用户做） |
 
 ## 已完成
 
@@ -37,7 +38,6 @@
 |---|---|
 | [Grok 风格前端布局](backlog/frontend-layout-grok.md) | 草案，未授权开工 |
 | [2026-10-29 使用反馈：会话、卡片任务与可组合 Bot](backlog/2026-10-29-workspace-experience.md) | 11 项需求来源；第一轮、第二轮已完成（见上方已完成），Google 为第三轮候选 |
-| [第三轮：Google Workspace](active/r3-google-workspace/README.md) | 混合路线：日历和任务原生，Gmail、Drive、Docs、Sheets 经 workspace-mcp；D1–D9 已答复，开工需另行授权（workspace-mcp 安装已批准），设计要能迁到服务器 |
 
 ## 约定
 

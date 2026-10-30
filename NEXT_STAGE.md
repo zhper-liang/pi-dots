@@ -4,7 +4,7 @@
 
 ## 一句话状态
 
-已交付的计划全部验收通过，移入 [plans/done](plans/done/)。第三轮 Google Workspace 2026-10-30 授权开工，进行中。
+已交付的计划全部验收通过，移入 [plans/done](plans/done/)。第三轮 Google Workspace 2026-10-30 实现完成，待用户验收。
 
 ## 已验收完成
 
@@ -14,7 +14,7 @@
 
 ## 进行中
 
-[第三轮：Google Workspace](plans/active/r3-google-workspace/README.md)：混合路线，Calendar、Tasks 原生，Gmail、Drive、Docs、Sheets 经 workspace-mcp，由 Pidot 统一授权。2026-10-30 用户授权开工（“开”），按票派子 agent，主管协调与验收；子 agent 返回后先停下向用户汇报。设计要能原样迁到服务器，服务器部署本身不做。
+[第三轮：Google Workspace](plans/active/r3-google-workspace/README.md)：混合路线，Calendar、Tasks 原生，Gmail、Drive、Docs、Sheets 经 workspace-mcp，由 Pidot 统一授权。2026-10-30 用户授权开工（“开”），按票派子 agent，主管协调与验收；子 agent 返回后先停下向用户汇报。2026-10-30 实现完成（ADR-020、ADR-021），待用户验收；真实账号手测步骤见[运行手册](docs/engineering/operations.md#google-连接与-workspace-mcpr3)。设计要能原样迁到服务器，服务器部署本身不做。
 
 ## 授权边界
 

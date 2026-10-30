@@ -1,6 +1,6 @@
 # 技术决策记录
 
-状态：以下记录已采纳决策及其替代关系。当前权限以 ADR-014 及修改其默认值的 ADR-015、ADR-018 为准；ADR-005、ADR-011、ADR-012 中被替代的内容仅供历史追溯。修改部署、存储、身份、权限、副作用保证或协议范围时，应记录新决策并说明替代关系，而不是修改旧验收结论。
+状态：以下记录已采纳决策及其替代关系。当前权限以 ADR-014 及修改其默认值的 ADR-015、ADR-018、ADR-021 为准；ADR-005、ADR-011、ADR-012 中被替代的内容仅供历史追溯。修改部署、存储、身份、权限、副作用保证或协议范围时，应记录新决策并说明替代关系，而不是修改旧验收结论。
 
 | 决策 | 选择 | 原因与代价 | 变更条件 |
 |---|---|---|---|
@@ -114,3 +114,36 @@ Bot 页勾选结果就是所有 Task 的实时能力，默认只有删除先问�
 - 凭证检查只扫新写入的内容：已存的内容里有当前 key（手写导入或 key 轮换后）不再挡住提取和界面编辑，读取与注入照常脱敏、过滤。这一点放宽了 ADR-017。
 
 实现与限制见[运行架构](../architecture/agent-runtime.md#文件式记忆r2)、[HTTP 契约](../interfaces/http-api.md#bot-人格记忆与共享偏好)和[运行手册](../engineering/operations.md#文件式记忆的开关与回滚r2)。
+
+## ADR-020 Google 混合接入：日历与任务原生，其余经 workspace-mcp，Pidot 统一授权
+
+采纳日期：2026-10-30（Asia/Shanghai）。依据第三轮 D1–D13。
+
+- Calendar、Tasks 原生适配，接进 workspace-service 的按 provider 适配表，进 Event/Todo 文档，日历视图、同步、提醒、检测器直接复用。新建日程的事件 id 由 requestId 派生，结果不明时按 id 回查；改/删带 etag，412 为冲突。
+- Gmail、Drive、Docs、Sheets 经固定版本的 workspace-mcp（2.2.1），以第一轮外部 MCP 的 loopback HTTP 接入。Pidot 每次调用带当前访问令牌，workspace-mcp 按外部 OAuth provider 模式经 Google userinfo 校验，不保存 refresh token。权限用 `--permissions gmail:readonly+drafts+send drive:full docs:full sheets:full --tool-tier extended`。它默认监听 0.0.0.0，必须显式设 `WORKSPACE_MCP_HOST=127.0.0.1`。写入结果不明时记 unknown，不自动重试。
+- 授权：单个 Google 账号，用户自建桌面应用 OAuth 客户端；PKCE + state 的一次性 127.0.0.1 回调，5 分钟时限；浏览器与 Pidot 不同机时“粘贴跳转地址”兜底（设备码流程不支持这些 scope）。refresh token 只在数据库同目录 `google/credentials.json`（0600），访问令牌只在内存；不进 SQLite、聊天、模型上下文、日志和响应。断开即撤销令牌、删除本地凭据，并从所有 Bot 撤下 Google 资源。
+- 设计可原样迁到服务器：不假设浏览器与 Pidot 同机，配置不存本机绝对路径。Pidot 自身的服务器部署不在本决定内。
+- 代价：workspace-mcp 是要常驻的另一个进程；它的写入结果无法自动核实，重复发信要用户自己核对。真实 Google 的 Tasks `If-Match`、etag 格式等行为仍待真实账号确认。
+
+实现与操作见[运行架构](../architecture/agent-runtime.md#google-连接r3)、[HTTP 契约](../interfaces/http-api.md#google-连接)和[运行手册](../engineering/operations.md#google-连接与-workspace-mcpr3)。
+
+## ADR-021 外部来源连上即可用，日程与事项写入各归其组
+
+采纳日期：2026-10-30（Asia/Shanghai）。依据第三轮 D14、D15，用户原话“权限权重降级，飞书日历日程降级为普通工具，只是优化更好”。
+
+**替代关系**
+- **ADR-014 第 2 条**：外部来源的“用户 Grant/readScope 须逐个来源授权”改为连接即授权。Grant 与 readScope 仍保留，只用于用户主动收窄（`grantExternal`）和 epoch 失效。
+- **ADR-015 第 2 条**：“一组一个开关”对启停不变；写入确认改为按被改对象裁决：`workspace.prepare_change` 改 Event 归「日历与日程」，改 Todo 归「待办与事项」，用 PolicyRules 已有的 `type` 匹配。
+- **ADR-011** 中“外部来源（飞书）仍按用户 grant + readScope”同样改为连接即授权。
+- 不变：ADR-006（requestId、expectedVersion、unknown 不自动重试、恢复复用原 Operation）、ADR-014 的实时能力、Bot 按资源分配、暂停、无人值守遇 ask 跳过、ADR-018。
+
+**决定**
+1. **连上即可用（D14）**：来源的 Connection 以新 authEpoch 写入（首次连接、重连、换绑）时，同一事务调用 `seedSourceGrant(repo, tx, { sourceId, capabilities })`（`workspace-grants.mjs`）：用户 Grant 设为来源能力的完整读写（只读来源只给 read），epoch +1，旧连接上的待确认意图随之失效。飞书在 `workspace-feishu.mjs` 的 `sync()` 调用；Google 由 R3-03/R3-04 在写 Connection 的同一事务调用，替代 第三轮交接契约 §2.1 的“待定”（D-A 结论：发现即授予，不加步骤）。
+2. **Bot 分配不变**：哪个 Bot 能用仍在 Bot 能力页分配 `workspace:<sourceId>`，新 Bot 仍是空白。飞书断开或换绑另一日历时，所有 Bot 的 `workspace:feishu:*` 资源都被撤下（此前只撤 `feishu:*` 日历工具资源）；同一日历断开后重连，旧分配也不恢复。Google 照旧由 `applyGoogleAccount` 撤 `workspace:google-*`。
+3. **已有授权继续有效**：已有的完整、仅忙闲或已撤销的授权都不改。唯一例外是一次性升级：D14 前已连接、用户从未点过授权（空 Grant 且没有对应 epoch 的授权操作）的飞书来源，启动时补成完整授权；用户明确撤销过的保持撤销。不改 schema，不删数据。
+4. **按对象裁决（D15）**：`decide()` 取对象类型时，外部来源由 provider 定（飞书、Google 日历 = Event，Google 任务 = Todo），调用方传的 `type` 改不了；本地来源用 `change.type`；无法确定时取两类中最严格的结果。「日历与日程」设为先问写入 4 条日历工具 ask 加 `{ tool: 'workspace.prepare_change', type: 'Event' }`；「待办与事项」写入 `routine_propose`、`workspace.prepare_schedule` 两条 ask 加 `type: 'Todo'` 那条。
+5. **旧规则照常生效**：R3-07 之前写入的无类型 `workspace.prepare_change` 规则同时作用于两类对象，所以两个开关都显示它；切换其中一个组时，先把它收窄为另一类对象的带类型副本（`splitFrom` 记原规则 id），另一组的效果不变。
+6. **飞书没有特例**：飞书日历工具走普通写工具的同一条路：组开即直接执行（含删除），组设为先问才确认，暂停时改为先问；requestId、写前比较、unknown 不重发照旧。
+
+**原因与代价**
+用户嫌关卡多；连上来源本身就是用户的明确意图，按 Bot 分配已经限定了谁能用。代价：已分配该来源的 Bot 在连接后立即能读取并直接写入外部日历，对外写入无法撤销；同一日历重连时，在重连与第一次同步之间做的分配会被撤下，需要重新分配（宁可多撤一次，也不让旧分配复活）。旧的无类型规则在两个开关上都显示，切换时会拆成一条带类型的规则。引入多用户、远程访问或改变来源信任边界前，要恢复逐个来源授权，并另记决策。

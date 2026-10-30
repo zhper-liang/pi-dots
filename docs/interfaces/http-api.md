@@ -131,6 +131,19 @@ Todo data 允许title、status、due、timezone；创建必须有标题，status
 
 MCP 来源单独记录，不混入工作区来源。撤销后，历史/摘要/产物/协作/记忆继续走共同来源 gate；用户新输入可退役旧无效来源的派生上下文并清旧 compaction，再消费已重新审阅绑定的新结果。旧审计保留，退役内容不从历史或产物引用恢复。连接重启后保持登记，需重新 check 才能展示 ready/schema；不自动安装 npx/uvx 或其他服务。
 
+## Google 连接
+
+都要本机 bearer token，响应只含公开状态投影，不含令牌、授权码、客户端密钥或粘贴的地址。
+
+| 路由 | 方法 | 数据合同 |
+|---|---|---|
+| `/api/google/status` | GET | 连接状态、账号邮箱、已授权服务 |
+| `/api/google/client` | POST | `{requestId, clientId, clientSecret?}`；留空 secret 保留原值；客户端由环境变量提供时返回 409 `GOOGLE_CLIENT_ENV_LOCKED` |
+| `/api/google/connect` | POST | `{services: ('calendar'|'tasks'|'workspace')[]}`；返回含 `attempt.authorizeUrl` 的状态，由前端打开 |
+| `/api/google/paste` | POST | `{redirectUrl}`；浏览器与 Pidot 不同机时用，按秘密处理，不记日志、不回显 |
+| `/api/google/disconnect` | POST | `{}`；返回 `{disconnected, revoked}`，并从所有 Bot 撤下 Google 资源 |
+| `/api/google/workspace-mcp` | GET | workspace-mcp 是否在运行、是否已连接、工具数；不回显地址和令牌 |
+
 ## Agent 能力配置 Host
 
 管理工具 `mcp_manage`、`skill_manage` 登记在“能力配置”组；只有真实 Chief 或经认证宿主显式分配的配置 Agent 可使用，名字/角色文本不授权。既有 Chief 主会话启用后可取得新工具，无需清空聊天；普通 Bot 原分配不扩张。工具组登记或写入确认开关不自行授予管理能力，实际变更须绑定当前真实用户输入与宿主精确批准，包含目标、动作、来源 fingerprint、scope 和原 native tool turn；模型参数不能提供 approved 标志代替。

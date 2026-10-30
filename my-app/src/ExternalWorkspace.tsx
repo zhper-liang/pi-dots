@@ -19,7 +19,7 @@ export default function ExternalWorkspace({ token }: { token: string }) {
   }, [token])
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current
-    const s = (await api('sources')).sources[0] ?? null, identity = `${s?.id}:${s?.epoch}:${s?.authorized}:${s?.readScope}`
+    const s = (await api('sources')).sources.find((x: Source) => x.id.startsWith('feishu:')) ?? null, identity = `${s?.id}:${s?.epoch}:${s?.authorized}:${s?.readScope}`
     if (sequence !== refreshSequence.current) return null
     queries.current.identity(identity)
     if (sourceIdentity.current !== identity) { setEvents([]); setOp(null); setTarget(null); setForm(initial); setMessage(''); sourceIdentity.current = identity }
@@ -53,8 +53,8 @@ export default function ExternalWorkspace({ token }: { token: string }) {
     {busy && <p role="status">正在处理来源请求；写入是否成功以持久回执为准。</p>}{error && <p role="alert">{error}</p>}
     <button disabled={busy} onClick={() => void run(async () => { await refresh() })}>刷新飞书来源</button>
     {source ? <><WorkspaceIdentity sourceId={source.id} authority="external" scope={source.authorized ? source.readScope : 'none'} epoch={source.epoch} /><p>飞书应用日历账号/容器：{source.calendarId}（服务端绑定；不展示凭证）</p>
-      <button disabled={busy} onClick={() => void run(async () => { if (!globalThis.confirm('确认授予当前用户此来源正文和普通CRUD权限？不会授予Bot权限。')) return; await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: true, readScope: 'full', confirmed: true }); await refresh() })}>明确授权飞书来源</button>
-      <button disabled={busy || !source.authorized} onClick={() => void run(async () => { if (!globalThis.confirm('撤销当前用户此飞书来源权限？历史审计保留。')) return; await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: false, readScope: 'full', confirmed: true }); setEvents([]); setOp(null); setTarget(null); setForm(initial); setMessage(''); await refresh() })}>撤销飞书来源</button>
+      {!source.authorized && <button disabled={busy} onClick={() => void run(async () => { await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: true, readScope: 'full', confirmed: true }); await refresh() })}>恢复使用此来源</button>}
+      <button disabled={busy || !source.authorized} onClick={() => void run(async () => { await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: false, readScope: 'full', confirmed: true }); setEvents([]); setOp(null); setTarget(null); setForm(initial); setMessage(''); await refresh() })}>撤销飞书来源</button>
       {source.authorized && <>
         <ExternalSync token={token} sourceId={source.id} epoch={source.epoch} readScope={source.readScope} />
         <div>{(['start', 'end'] as const).map(k => <label key={k}>查询{k}<input value={window[k]} onChange={e => setWindow({ ...window, [k]: e.target.value })} style={{ maxWidth: '100%' }} /></label>)}<button disabled={busy} onClick={() => void run(query)}>查询飞书日程</button></div>
