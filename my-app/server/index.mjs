@@ -12,6 +12,9 @@ import { createSkillImportService } from './skill-import.mjs'
 let tasks, externalMcp
 try {
   const config = readConfig()
+  // R2 file memory is on by default; PIDOT_MEMORY_FILES=0 is the rollback switch (imports unsynced hand edits once).
+  const memoryFilesFlag = process.env.PIDOT_MEMORY_FILES ?? '1'
+  if (!['0', '1'].includes(memoryFilesFlag)) throw new Error('PIDOT_MEMORY_FILES 只能是 0 或 1。')
   // Stable default independent of the shell cwd; tests may use a temporary DB.
   const file = process.env.PIDOT_DB_PATH
     ? resolve(process.env.PIDOT_DB_PATH)
@@ -21,7 +24,7 @@ try {
   const skillImport = createSkillImportService({ dataDirectory: join(dirname(file), 'skills') })
   const skillDirectory = { builtinDirectory: SKILL_DIRECTORY, userSkills: skillImport }
   externalMcp = await createExternalMcpService({ dataDirectory: join(dirname(file), 'external-mcp') })
-  tasks = await openTaskStore({ file, skillDirectory, externalMcp, capabilityManagementEnabled: true, readCapabilityCatalog: () => skillCapabilityCatalog(skillDirectory), workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, memoryOptions: { enabled: true }, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
+  tasks = await openTaskStore({ file, skillDirectory, externalMcp, capabilityManagementEnabled: true, readCapabilityCatalog: () => skillCapabilityCatalog(skillDirectory), workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, memoryOptions: { enabled: true }, memoryFiles: { enabled: memoryFilesFlag === '1', root: join(dirname(file), 'bot-workspaces') }, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
   const server = createApiServer({
     token: config.token, tasks, onError: console.error,
     staticDir: fileURLToPath(new URL('../dist/', import.meta.url)),
@@ -33,7 +36,10 @@ try {
     await tasks.close()
     process.exitCode = 1
   })
+  // Counts only: no paths or content in logs. Printed after the ready line, which tests treat as readiness.
+  const memoryFileSummary = tasks.memoryFiles?.summary()
   server.listen(config.port, config.host, () => {
+    process.nextTick(() => console.log(memoryFileSummary ? `记忆文件：${memoryFileSummary.targets} 份，已同步 ${memoryFileSummary.synced}，被拒绝 ${memoryFileSummary.rejected}，待写入 ${memoryFileSummary.pending}` : '记忆文件：已关闭（PIDOT_MEMORY_FILES=0），仅使用内部记录。'))
     console.log(`Pidot：http://${config.host}:${config.port}（Task 持久化对话；新会话${modelConfig ? '使用真实模型' : '使用测试模式'}）`)
   })
   function stop() {

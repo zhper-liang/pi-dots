@@ -66,3 +66,43 @@ test('T11 memory conflicts remain explicit and unexpected exceptions never expos
   assert.equal(failure.status, 500)
   assert.equal((await failure.text()).includes('private-provider-details'), false)
 })
+
+// R2-06: the real store behind the real router exposes per-document file status (CONTRACTS §10).
+async function realStore(t, memoryFiles) {
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { openTaskStore } = await import('./tasks.mjs')
+  const dir = await mkdtemp(join(tmpdir(), 'pidot-r2-http-'))
+  const store = await openTaskStore({ file: join(dir, 'isolated.sqlite'), detectorOptions: { enabled: false }, memoryFiles })
+  t.after(async () => { await store.close(); await rm(dir, { recursive: true, force: true }) })
+  return { dir, ...(await fixture(t, store)) }
+}
+const fileShape = value => value === null || (Object.keys(value).join() === 'path,state,code,syncedAt' && typeof value.path === 'string' && !value.path.startsWith('/') &&
+  ['synced', 'rejected', 'pending'].includes(value.state) && (value.code === null || /^MEMORY_FILE_[A-Z_]+$/.test(value.code)) && (value.syncedAt === null || !Number.isNaN(Date.parse(value.syncedAt))))
+
+test('R2-06 GET memory/preferences and edit responses carry file { path, state, code, syncedAt } relative to the data directory', async t => {
+  const { request, dir } = await realStore(t, { enabled: true })
+  const bot = (await (await request('/api/bots/chief/memory')).json()).data
+  for (const kind of ['personality', 'memory', 'preferences']) assert.ok(fileShape(bot[kind].file), `${kind}: ${JSON.stringify(bot[kind].file)}`)
+  assert.deepEqual(bot.personality.file.path, 'bot-workspaces/bots/chief/PROFILE.md')
+  assert.deepEqual(bot.memory.file, { path: 'bot-workspaces/bots/chief/MEMORY.md', state: 'synced', code: null, syncedAt: null })
+  assert.equal(bot.preferences.file.path, 'bot-workspaces/shared/USER.md')
+  const prefs = (await (await request('/api/settings/preferences')).json()).data
+  assert.deepEqual(prefs.file, { path: 'bot-workspaces/shared/USER.md', state: 'synced', code: null, syncedAt: null })
+  const edit = await request('/api/bots/chief/memory', { body: { kind: 'personality', action: 'set', content: 'HTTP 人格', expectedVersion: bot.personality.version, requestId: 'r2-http-edit' } })
+  const saved = (await edit.json()).data
+  assert.ok(fileShape(saved.document.file))
+  assert.equal(saved.document.file.state, 'synced')
+  assert.ok(saved.document.file.syncedAt)
+  assert.equal(JSON.stringify(bot).includes(dir), false, 'no absolute path in the response')
+})
+
+test('R2-06 with file mode off every file field is null and no workspace directory appears', async t => {
+  const { request, dir } = await realStore(t, { enabled: false })
+  const bot = (await (await request('/api/bots/chief/memory')).json()).data
+  for (const kind of ['personality', 'memory', 'preferences']) assert.equal(bot[kind].file, null)
+  assert.equal((await (await request('/api/settings/preferences')).json()).data.file, null)
+  const { readdir } = await import('node:fs/promises')
+  assert.equal((await readdir(dir)).includes('bot-workspaces'), false)
+})

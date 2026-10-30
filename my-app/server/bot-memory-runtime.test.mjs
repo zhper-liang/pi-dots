@@ -217,3 +217,82 @@ test('T11b real model adapter extracts JSON over loopback SSE without extra tool
   assert.equal(preferences.items[0]?.content, '请所有 Bot 使用简短中文回答')
   assert.equal(extractionCalls, 1)
 })
+
+// R2-06: file memory end-to-end through the real store (memoryFiles enabled, files under the temp data directory).
+const r2 = {
+  dir: file => join(file, '..', 'bot-workspaces'),
+  prompt: calls => calls.filter(call => call.purpose !== 'memory-extraction').at(-1).context.systemPrompt,
+}
+const { readFile: r2Read, writeFile: r2Write, mkdir: r2Mkdir } = await import('node:fs/promises')
+
+test('R2-06 hand edit of MEMORY.md reaches the next systemPrompt as hand-written; Bot B never sees Bot A memory', async t => {
+  const { store, calls, file } = await fixture(t, { memoryFiles: { enabled: true } })
+  await r2Mkdir(join(r2.dir(file), 'bots/chief'), { recursive: true, mode: 0o700 })
+  await r2Write(join(r2.dir(file), 'bots/chief/MEMORY.md'), '- R2 手写：我的猫叫豆豆\n')
+  const task = await store.create({ botId: 'chief' })
+  await store.send(task.taskId, '你好'); await settled(store, task.taskId)
+  assert.ok(r2.prompt(calls).includes('Bot记忆：R2 手写：我的猫叫豆豆 [手写]'))
+  const view = await store.getBotMemory('chief')
+  assert.equal(view.history.memory[0].actor, 'file')
+  const other = await store.create({ botId: 'todo' })
+  await store.send(other.taskId, '你好'); await settled(store, other.taskId)
+  assert.equal(r2.prompt(calls).includes('豆豆'), false)
+  assert.deepEqual((await store.getBotMemory('todo')).memory.items, [])
+})
+
+test('R2-06 background extraction lands in shared/USER.md; deleted session sources stop injecting, hand-written lines stay', async t => {
+  const { store, calls, file } = await fixture(t, { memoryFiles: { enabled: true }, memoryOptions: { enabled: true, idleMs: 100000 } })
+  const task = await store.create({ botId: 'chief' })
+  await store.send(task.taskId, entry.data.content); await settled(store, task.taskId)
+  await store.memoryWorker.tick()
+  await store.memoryFiles.settled()
+  const user = join(r2.dir(file), 'shared/USER.md')
+  assert.ok((await r2Read(user, 'utf8')).includes(`- ${entry.data.content}`))
+  await r2Write(user, `${await r2Read(user, 'utf8')}- R2 手写偏好：称呼我小王\n`)
+  const probe = await store.create({ botId: 'todo' })
+  await store.send(probe.taskId, '继续'); await settled(store, probe.taskId)
+  assert.ok(r2.prompt(calls).includes(entry.data.content))
+  assert.ok(r2.prompt(calls).includes('共享偏好：R2 手写偏好：称呼我小王 [手写]'))
+  await store.deleteSession(task.taskId, { requestId: 'r2-delete-source', confirmed: true })
+  await store.send(probe.taskId, '再继续'); await settled(store, probe.taskId)
+  assert.equal(r2.prompt(calls).includes(entry.data.content), false, 'R1-03 source filtering still applies to file-backed items')
+  assert.ok(r2.prompt(calls).includes('R2 手写偏好：称呼我小王'))
+})
+
+test('R2-06 UI edit racing a hand edit returns 409 and keeps the hand edit; edit response carries the file state', async t => {
+  const { store, file } = await fixture(t, { memoryFiles: { enabled: true } })
+  const before = await store.getBotMemory('chief')
+  const saved = await store.editBotMemory('chief', { kind: 'personality', action: 'set', content: '界面写的人格', expectedVersion: before.personality.version, requestId: 'r2-ui-1' })
+  assert.deepEqual(Object.keys(saved.document.file), ['path', 'state', 'code', 'syncedAt'])
+  assert.equal(saved.document.file.state, 'synced')
+  const profile = join(r2.dir(file), 'bots/chief/PROFILE.md')
+  assert.equal(await r2Read(profile, 'utf8'), '界面写的人格\n')
+  await r2Write(profile, '用户在编辑器里改的人格\n')
+  await assert.rejects(store.editBotMemory('chief', { kind: 'personality', action: 'set', content: '界面旧草稿', expectedVersion: saved.version, requestId: 'r2-ui-2' }),
+    error => error.status === 409 && error.code === 'MEMORY_VERSION_CONFLICT')
+  assert.equal((await store.getBotMemory('chief')).personality.content, '用户在编辑器里改的人格')
+  assert.equal(await r2Read(profile, 'utf8'), '用户在编辑器里改的人格\n')
+})
+
+test('R2-06 an over-limit MEMORY.md gives the Agent one notice line and no content; fixing the file recovers on the next call', async t => {
+  const { store, calls, file } = await fixture(t, { memoryFiles: { enabled: true } })
+  const path = join(r2.dir(file), 'bots/chief/MEMORY.md')
+  await r2Mkdir(join(path, '..'), { recursive: true, mode: 0o700 })
+  const tooLong = Array.from({ length: 65 }, (_, i) => `- 超限条目${i}`).join('\n')
+  await r2Write(path, tooLong)
+  const task = await store.create({ botId: 'chief' })
+  await store.send(task.taskId, '你好'); await settled(store, task.taskId)
+  const prompt = r2.prompt(calls)
+  assert.equal(prompt.split('\n').filter(line => line.startsWith('文件提示：')).length, 1)
+  assert.ok(prompt.includes('文件提示：MEMORY.md（Bot 记忆）过长，本次未提供，请让用户精简。'))
+  assert.equal(prompt.includes('超限条目'), false)
+  assert.equal(prompt.includes(path), false, 'no filesystem path reaches the model')
+  const view = await store.getBotMemory('chief')
+  assert.deepEqual({ state: view.memory.file.state, code: view.memory.file.code, path: view.memory.file.path }, { state: 'rejected', code: 'MEMORY_FILE_TOO_LONG', path: 'bot-workspaces/bots/chief/MEMORY.md' })
+  assert.equal(await r2Read(path, 'utf8'), tooLong)
+  await r2Write(path, '- 精简后的一条\n')
+  await store.send(task.taskId, '再来'); await settled(store, task.taskId)
+  assert.ok(r2.prompt(calls).includes('Bot记忆：精简后的一条 [手写]'))
+  assert.equal(r2.prompt(calls).includes('文件提示'), false)
+  assert.equal((await store.getBotMemory('chief')).memory.file.state, 'synced')
+})

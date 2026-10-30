@@ -54,7 +54,7 @@ import { ChatSteering, applySteering, steeringApi } from './steering.mjs'
 import { skillApi, TaskSkills, executeSkillTool, deactivateSkills, skillCatalogForTask, commandSkills, activateCommandSkill, skillCapabilityCatalog, loadSkill } from './skills.mjs'
 import { skillTools } from './skill-tools.mjs'
 import { mkdir, chmod } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { createRegistry, defineDoc, defineTask, Harness } from '@earendil-works/pi-durable'
@@ -70,6 +70,9 @@ import { inferBotRole } from './bot-templates.mjs'
 import { TaskInputError, parseTaskState, currentTaskState, currentTaskStateSources, raisedCallLimits } from './task-config.mjs'
 import { createBotMemoryService, buildMemoryContext } from './bot-memory.mjs'
 import { createBotMemoryRuntime, MemoryExtraction, memorySourceAllowed } from './bot-memory-runtime.mjs'
+import { MemoryFileLedger } from './memory-files.mjs'
+import { createMemoryFileStore } from './memory-file-store.mjs'
+import { openMemoryFiles } from './memory-files-migration.mjs'
 import { buildTaskContext, injectMemoryContext } from './task-context.mjs'
 import { boundToolResult, readToolResult, RESULT_READ_TOOL, ToolResults } from './tool-results.mjs'
 import { ToolAccess, CallUsage, CALENDAR_TOOL, toolSets, toolDefinitions, toolCatalog, checkToolCall,
@@ -1000,7 +1003,7 @@ async function appendToolReceipt(tx, request, result, afterCancellation = false)
 
 /** Test hooks stay in-process; never exposed as HTTP parameters. */
 export async function openTaskStore({ file, bots = listBots(), beforeCommit, reply = createTestReply, modelReply, modelSettings, readModelSettings = modelSettings?.read,
-  toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, memoryOptions = {}, feishuClient = createFeishuClient(), toolGroupsMigration = true, readCapabilityCatalog = async () => [], externalMcp, capabilityManagementEnabled = false } = {}) {
+  toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, memoryOptions = {}, memoryFiles: memoryFileOptions = {}, feishuClient = createFeishuClient(), toolGroupsMigration = true, readCapabilityCatalog = async () => [], externalMcp, capabilityManagementEnabled = false } = {}) {
   if (!file) throw new Error('Task storage file is required')
   if (typeof readCapabilityCatalog !== 'function') throw new Error('Capability catalog reader must be a server-owned function')
   const skillImport = skillDirectory && typeof skillDirectory === 'object' ? skillDirectory.userSkills : null
@@ -1106,11 +1109,14 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         return { ok: true, data: { scheduleId: plan.id, title: plan.title, status: plan.status, rule: plan.rule, nextDueAt: plan.nextDueAt ?? null, notice: '用户已确认，例行任务已创建；在Bot资料页的例行任务区可以测试运行、暂停或取消。' } }
       } catch (error) { if (!error.status) throw error; return { ok: false, error: { code: error.code, message: error.message } } }
     }
-    let memoryService, memoryWorker
+    let memoryService, memoryWorker, memoryFiles = null
     const guardedModelReply = (message, options) => dispatchForBot(options.parametersBotId, options.signal, async signal => { const scheduled = options.taskId && (await harness.snapshot(TaskCard, options.taskId, context))?.scheduledWorkflow; if (scheduled) await workspaceScheduleOptions.boundary?.('model_request', { taskId: options.taskId }); await getMemorySecrets();
       if (options.taskId) {
         const card = await harness.snapshot(TaskCard, options.taskId, context)
         if (options.purpose !== 'context-compaction') await appendLiveCalendar(options.context, card)
+        // R2: the ledger catches up with hand edits of this Bot's PROFILE/MEMORY and USER.md before injection.
+        // A file-system failure must not stop the conversation; injection then uses the last ledger content.
+        await memoryFiles?.reconcileBot(card.bot.id).catch(() => {})
         await harness.commit(async tx => {
           await assertNotCancelled(tx, card.taskId, await tx.task(card.taskId))
           await assertBotActive(tx, card.bot.id)
@@ -1634,6 +1640,19 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     await memoryTransaction(async tx => {
       for (const bot of (await tx.doc(BotDirectory)).items) await ensureMemoryPersonality(tx, bot.id)
     })
+    // R2 memory files: migration/rollback runs before any Task resumes, HTTP listens or extraction starts.
+    const memoryRoot = resolve(memoryFileOptions.root ?? join(dirname(resolve(file)), 'bot-workspaces'))
+    const memoryDisplayRoot = relative(dirname(resolve(file)), memoryRoot).split(sep).join('/')
+    if (!memoryDisplayRoot || memoryDisplayRoot.startsWith('..') || memoryDisplayRoot.startsWith('/')) throw new Error('Memory file root must be inside the data directory')
+    memoryFiles = await openMemoryFiles({ enabled: memoryFileOptions.enabled === true, service: memoryService, displayRoot: memoryDisplayRoot, hooks: memoryFileOptions.hooks,
+      store: createMemoryFileStore({ root: memoryRoot, hooks: memoryFileOptions.hooks }), now: memoryOptions.now,
+      transaction: fn => harness.commit(fn, context), snapshot: key => harness.snapshot(MemoryFileLedger, key, context),
+      listBots: async () => (await harness.snapshot(BotDirectory, context))?.items.map(bot => bot.id) ?? [],
+      subscribe: schedule => harness.subscribeCommits(({ changes }) => {
+        for (const c of changes) if (c.type === 'document' && c.record?.kind === 'pidot.bot-memory.revision' && c.value?.record) schedule({ botId: c.value.record.botId, kind: c.value.record.kind })
+      }) })
+    const reconcileMemory = work => Promise.resolve(work).catch(error => { if (error instanceof TaskInputError) throw error; throw new TaskInputError(500, 'MEMORY_UNAVAILABLE', '记忆服务暂不可用。') })
+    const withFile = (document, botId, kind) => { if (document && typeof document === 'object') document.file = memoryFiles ? memoryFiles.status({ botId, kind }) : null; return document }
     async function liveMemoryContext(tx, botId, maxChars) {
       await ensureMemoryPersonality(tx, botId)
       const documents = await memoryService.get(tx, botId)
@@ -1646,6 +1665,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         }
         documents[kind].items = allowed
       }
+      memoryFiles?.attach(documents, botId)
       return buildMemoryContext(documents, { maxChars, secrets: await getMemorySecrets() })
     }
     async function memoryTransaction(fn) {
@@ -2332,26 +2352,47 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     return {
       memoryWorker,
       registerMemorySecrets(token) { if (typeof token === 'string' && token) memorySecrets.add(token) },
-      getBotMemory: botId => memoryTransaction(async tx => {
-        await assertMemoryBot(tx, botId)
-        await ensureMemoryPersonality(tx, botId)
-        const documents = await memoryService.get(tx, botId)
-        const personality = await memoryService.history(tx, { botId, kind: 'personality' }), memory = await memoryService.history(tx, { botId, kind: 'memory' })
-        return { ...documents, history: { personality: personality.items, memory: memory.items }, historyNextBeforeVersion: { personality: personality.nextBeforeVersion, memory: memory.nextBeforeVersion } }
-      }),
-      editBotMemory: (botId, input) => memoryTransaction(async tx => {
-        await assertMemoryBot(tx, botId, true)
-        if (!input || !['personality', 'memory'].includes(input.kind) || Object.hasOwn(input, 'botId')) throw new TaskInputError(400, 'MEMORY_INPUT', '请选择人格或记忆文档。')
-        return memoryService.edit(tx, { ...input, botId })
-      }).then(finishMemoryEdit),
-      getPreferences: () => memoryTransaction(async tx => {
-        const document = (await memoryService.get(tx, 'chief')).preferences, history = await memoryService.history(tx, { botId: 'chief', kind: 'preferences' })
-        return { ...document, history: history.items, historyNextBeforeVersion: history.nextBeforeVersion }
-      }),
-      editPreferences: input => memoryTransaction(tx => {
-        if (!input || Object.hasOwn(input, 'botId') || Object.hasOwn(input, 'kind')) throw new TaskInputError(400, 'MEMORY_INPUT', '共享偏好文档无效。')
-        return memoryService.edit(tx, { ...input, botId: 'chief', kind: 'preferences' })
-      }).then(finishMemoryEdit),
+      get memoryFiles() { return memoryFiles },
+      // R2: reads/edits first let the ledger catch up with hand edits; successful edits report the written-back file state.
+      getBotMemory: async botId => {
+        await reconcileMemory(memoryFiles?.reconcileBot(botId))
+        return memoryTransaction(async tx => {
+          await assertMemoryBot(tx, botId)
+          await ensureMemoryPersonality(tx, botId)
+          const documents = await memoryService.get(tx, botId)
+          for (const kind of ['personality', 'memory', 'preferences']) withFile(documents[kind], botId, kind)
+          const personality = await memoryService.history(tx, { botId, kind: 'personality' }), memory = await memoryService.history(tx, { botId, kind: 'memory' })
+          return { ...documents, history: { personality: personality.items, memory: memory.items }, historyNextBeforeVersion: { personality: personality.nextBeforeVersion, memory: memory.nextBeforeVersion } }
+        })
+      },
+      editBotMemory: async (botId, input) => {
+        if (['personality', 'memory'].includes(input?.kind)) await reconcileMemory(memoryFiles?.reconcile({ botId, kind: input.kind }))
+        const result = await memoryTransaction(async tx => {
+          await assertMemoryBot(tx, botId, true)
+          if (!input || !['personality', 'memory'].includes(input.kind) || Object.hasOwn(input, 'botId')) throw new TaskInputError(400, 'MEMORY_INPUT', '请选择人格或记忆文档。')
+          return memoryService.edit(tx, { ...input, botId })
+        }).then(finishMemoryEdit)
+        await memoryFiles?.reconcile({ botId, kind: input.kind }).catch(() => {})
+        withFile(result.document, botId, input.kind)
+        return result
+      },
+      getPreferences: async () => {
+        await reconcileMemory(memoryFiles?.reconcile({ botId: 'chief', kind: 'preferences' }))
+        return memoryTransaction(async tx => {
+          const document = (await memoryService.get(tx, 'chief')).preferences, history = await memoryService.history(tx, { botId: 'chief', kind: 'preferences' })
+          return { ...withFile(document, 'chief', 'preferences'), history: history.items, historyNextBeforeVersion: history.nextBeforeVersion }
+        })
+      },
+      editPreferences: async input => {
+        await reconcileMemory(memoryFiles?.reconcile({ botId: 'chief', kind: 'preferences' }))
+        const result = await memoryTransaction(tx => {
+          if (!input || Object.hasOwn(input, 'botId') || Object.hasOwn(input, 'kind')) throw new TaskInputError(400, 'MEMORY_INPUT', '共享偏好文档无效。')
+          return memoryService.edit(tx, { ...input, botId: 'chief', kind: 'preferences' })
+        }).then(finishMemoryEdit)
+        await memoryFiles?.reconcile({ botId: 'chief', kind: 'preferences' }).catch(() => {})
+        withFile(result.document, 'chief', 'preferences')
+        return result
+      },
       getModelSettings: () => modelSettings.get(),
       async saveModelSettings(input) {
         await getMemorySecrets()
@@ -2870,7 +2911,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         harness.resume()
         return entry
       },
-      close: async () => { await externalMcp?.close(); await memoryWorker?.close(); await detectorWorker?.close(); await workspaceScheduler.close(); await workspaceService.closeExternalSync(); for (const e of workspaceMcpSessions.values()) e.session.close(); workspaceMcpSessions.clear(); return harness.close(context) },
+      close: async () => { await externalMcp?.close(); await memoryWorker?.close(); await memoryFiles?.close(); await detectorWorker?.close(); await workspaceScheduler.close(); await workspaceService.closeExternalSync(); for (const e of workspaceMcpSessions.values()) e.session.close(); workspaceMcpSessions.clear(); return harness.close(context) },
     }
   } catch (error) {
     if (harness) await harness.close(context)

@@ -323,8 +323,10 @@ test('T11a get/history/edit/context projections never reveal stored text matchin
   const rejected = await f.candidate({ expectedVersion: 1, patches: [add(f.source, 'another', laterSecret)] })
   assert.equal(rejected.code, 'MEMORY_CREDENTIAL_REJECTED')
   assert.equal(JSON.stringify(rejected).includes(laterSecret), false)
-  const unchanged = await f.candidate({ expectedVersion: 1, patches: [add(f.source, 'safe')] })
-  assert.equal(unchanged.code, 'MEMORY_CREDENTIAL_REJECTED')
+  // Stored text matching the rotated key no longer blocks an unrelated safe write (R2, ADR-019).
+  const unrelated = await f.candidate({ expectedVersion: 1, patches: [add(f.source, 'safe')] })
+  assert.equal(unrelated.ok, true)
+  assert.equal(JSON.stringify(unrelated).includes(laterSecret), false)
   const text = await f.transaction(tx => f.service.memoryContext(tx, 'chief'))
   assert.equal(JSON.stringify(text).includes(laterSecret), false)
   // Redaction is projection-only and never silently rewrites user history.
@@ -357,4 +359,45 @@ test('T11a bounded preference rebase catches add/delete ABA and never resurrects
   const bounded = createBotMemoryService({ getSecrets: () => [], limits: { history: 1 } })
   const disjoint = { ...candidate, patches: [add(f.source, 'different')] }
   assert.equal(await f.transaction(tx => bounded.rebaseCandidate(tx, disjoint)), null)
+})
+
+test('R2 file actor: user rights incl. personality, no credential rejection, tolerant upsert/delete, no tombstones, failures roll back without status or receipt', async t => {
+  const f = await fixture(t)
+  const file = input => f.transaction(tx => f.service.importFile(tx, { botId: 'chief', kind: 'memory', requestId: randomUUID(), expectedVersion: 0, ...input }))
+  await f.candidate({ patches: [add(f.source, 'tone')] })
+  const set = await f.transaction(tx => f.service.importFile(tx, { botId: 'chief', kind: 'personality', requestId: 'file-personality', expectedVersion: 0, action: 'set', content: `文件人格 ${f.secrets[0]}` }))
+  assert.equal(set.ok, true, 'file imports may set personality and keep credential-shaped text (Q7)')
+  const result = await file({ expectedVersion: 1, patches: [{ action: 'update', id: 'tone', content: '文件改写' }, { action: 'add', id: 'hand', content: '手写一条' }, { action: 'delete', id: 'missing' }, { action: 'add', id: 'tone-copy', content: `sk-${'x'.repeat(24)}` }] })
+  assert.equal(result.ok, true)
+  const raw = await f.transaction(tx => f.service.ledger(tx, 'chief', 'memory'))
+  assert.deepEqual(raw.items.map(item => [item.id, item.content, item.sourceEntries.length]), [['tone', '文件改写', 1], ['hand', '手写一条', 0], ['tone-copy', `sk-${'x'.repeat(24)}`, 0]])
+  const [revision] = (await f.transaction(tx => f.service.history(tx, { botId: 'chief', kind: 'memory' }))).items
+  assert.equal(revision.actor, 'file')
+  assert.deepEqual(revision.changes.map(change => change.action), ['update', 'add', 'add'], 'no-op patches are not recorded')
+  await file({ expectedVersion: 2, patches: [{ action: 'delete', id: 'tone' }] })
+  assert.equal((await f.candidate({ expectedVersion: 3, patches: [add(f.source, 'again', '同一来源再次提取')] })).ok, true, 'a stored key no longer blocks candidates, and the file deletion wrote no SuppressedSources (Q5)')
+  await file({ expectedVersion: 4, patches: [{ action: 'delete', id: 'tone-copy' }] })
+  const before = await f.get('chief')
+  await assert.rejects(file({ requestId: 'too-many', expectedVersion: 5, patches: Array.from({ length: 64 }, (_, i) => ({ action: 'add', id: `n${i}`, content: `条${i}` })) }), error => error.code === 'MEMORY_DOCUMENT_LIMIT')
+  await assert.rejects(file({ requestId: 'with-sources', expectedVersion: 5, patches: [{ ...add(f.source, 'x', 'y') }] }), error => error.code === 'MEMORY_PATCH')
+  const after = await f.get('chief')
+  assert.deepEqual(after.memory, before.memory, 'rolled back: no pending status, no new version')
+  const replay = await file({ requestId: 'too-many', expectedVersion: 5, patches: [{ action: 'add', id: 'ok', content: '可以' }] })
+  assert.equal(replay.ok, true, 'a failed file import leaves no receipt behind')
+})
+
+test('R2 hand-written items: UI correction keeps them hand-written; context marks [手写]; rejected files give exactly one notice', async t => {
+  const f = await fixture(t)
+  await f.transaction(tx => f.service.importFile(tx, { botId: 'chief', kind: 'memory', requestId: 'hand', expectedVersion: 0, patches: [{ action: 'add', id: 'hand', content: '手写' }] }))
+  const corrected = await f.edit({ expectedVersion: 1, action: 'update', id: 'hand', content: '手写（改）', sourceEntries: [] })
+  assert.equal(corrected.ok, true)
+  assert.deepEqual(corrected.document.items[0].sourceEntries, [])
+  assert.equal((await f.edit({ expectedVersion: 2, action: 'add', id: 'ui', content: '界面新增', sourceEntries: [] })).code, 'MEMORY_SOURCE_REQUIRED')
+  const docs = await f.get('chief')
+  assert.ok(buildMemoryContext(docs).text.includes('Bot记忆：手写（改） [手写]'))
+  docs.memory.file = { path: 'bot-workspaces/bots/chief/MEMORY.md', state: 'rejected', code: 'MEMORY_FILE_INVALID', syncedAt: null }
+  const text = buildMemoryContext(docs).text
+  assert.deepEqual(text.split('\n').slice(1), ['文件提示：MEMORY.md（Bot 记忆）无法读取，本次未提供，请让用户检查文件。'])
+  docs.memory.file.state = 'pending'
+  assert.ok(buildMemoryContext(docs).text.includes('手写（改）'), 'a pending write-back still injects the ledger')
 })
