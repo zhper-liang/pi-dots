@@ -59,10 +59,30 @@ const ORDER = ['pinned', 'confirm', 'today', 'yesterday', 'week', 'earlier', 'ar
  */
 export function sessionSections(items, { pins = [], query = '', now }) {
   const groups = Object.fromEntries(ORDER.map((id) => [id, []]))
-  for (const item of items.filter((entry) => matchesQuery(entry, query))) {
+  for (const item of items.filter((entry) => !isSessionDeleted(entry) && matchesQuery(entry, query))) {
     const id = item.archived ? 'archived' : pins.includes(item.id) ? 'pinned' : item.confirm ? 'confirm' : timeBucket(item.at, now)
     groups[id].push(item)
   }
   for (const id of ORDER) groups[id].sort(id === 'pinned' ? (a, b) => pins.indexOf(a.id) - pins.indexOf(b.id) : (a, b) => b.at - a.at)
   return ORDER.filter((id) => groups[id].length).map((id) => ({ id, label: SECTION_LABELS[id], items: groups[id] }))
+}
+
+/** Only explicit deletion hides rows; archive remains a separate, reversible section. */
+export function isSessionDeleted(item) {
+  return item.deleted === true || (typeof item.deletedAt === 'string' && item.deletedAt.length > 0)
+}
+export function removeSessionPin(pins, id) {
+  return pins.filter(pin => pin !== id)
+}
+export function sessionDeleteLabel(target) {
+  return target.kind === 'main' ? '清空并开始新会话' : target.running ? '停止并删除' : '删除会话'
+}
+/** Never optimistically hide on HTTP acceptance/unknown; bind receipt to the exact target and request. */
+export function isSessionActionReceipt(result, target, requestId) {
+  return result !== null && typeof result === 'object' && result.deleted === true &&
+    result.taskId === target.taskId && result.botId === target.botId && result.requestId === requestId &&
+    typeof result.deletedAt === 'string' && Number.isFinite(Date.parse(result.deletedAt)) &&
+    result.action === (target.kind === 'main' ? 'clear-main' : 'delete') &&
+    (target.kind === 'main' ? Number.isSafeInteger(result.replacementTaskId) && result.replacementTaskId > 0 &&
+      result.replacementTaskId !== target.taskId : result.replacementTaskId === null)
 }

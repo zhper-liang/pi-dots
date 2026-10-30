@@ -20,7 +20,7 @@ const READ_AND_INTERNAL = new Set(['calendar_read_schedule', 'calendar_read_even
   'collaborators_list', 'bot_inspect', 'shared_read', 'task_status', AUTOMATION_PAUSE_TOOL,
   'report_blocker', 'blocker_resolve', 'blocker_escalate', 'task_assign', 'task_review', 'shared_publish', 'shared_link', 'task_create'])
 export const WRITE_TOOLS = new Set(['calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_feishu_delete_event', 'calendar_reschedule_event',
-  'workspace.prepare_schedule', 'routine_propose', 'workspace.prepare_change', 'bot_manage'])
+  'workspace.prepare_schedule', 'routine_propose', 'workspace.prepare_change', 'bot_manage', 'mcp_manage', 'skill_manage'])
 export const REGISTERED_TOOLS = Object.freeze([...READ_AND_INTERNAL, ...WRITE_TOOLS])
 export const unattended = origin => ['routine', 'detector', 'event'].includes(origin)
 
@@ -37,10 +37,22 @@ export function pickRule(rules, call) {
   return best
 }
 
-export async function decide(tx, call) {
+export const registeredPolicyTool = (name, sets = {}) => REGISTERED_TOOLS.includes(name) || Boolean(sets.externalTools?.some(tool => tool.name === name))
+
+export async function decide(tx, call, { externalTool } = {}) {
   const action = call.action ?? call.args?.action
   const verdict = (effect, reason, allowAlways = false) => ({ effect, reason, allowAlways,
     ...(effect === 'ask' ? { expiresInMs: ATTENDED_LOCAL_EXPIRY_MS } : {}) })
+  if (externalTool?.name === call.tool) {
+    const rule = pickRule((await tx.doc(PolicyRules)).items, call)
+    return verdict(rule?.effect === 'deny' ? 'deny' : 'ask', rule?.effect === 'deny' ? 'external-rule' : 'external-write-review', false)
+  }
+  if (['mcp_manage', 'skill_manage'].includes(call.tool)) {
+    if (action === 'inspect') return verdict('allow', 'configuration-inspect')
+    const rule = pickRule((await tx.doc(PolicyRules)).items, { ...call, action })
+    return verdict(rule?.effect === 'deny' ? 'deny' : 'ask', rule?.effect === 'deny' ? 'configuration-rule' : 'configuration-intent', false)
+  }
+  if (call.tool === 'bot_manage' && action === 'configure' && call.args?.tools?.some(name => ['mcp_manage', 'skill_manage'].includes(name))) return verdict('ask', 'configuration-authority-grant', false)
   if (READ_AND_INTERNAL.has(call.tool)) return verdict('allow', 'read-or-internal')
   if (!WRITE_TOOLS.has(call.tool) || call.tool === 'bot_manage' && !['create', 'configure', 'deactivate'].includes(action) ||
     call.tool === 'workspace.prepare_change' && !['create', 'update', 'delete'].includes(action)) return verdict('deny', 'unregistered')

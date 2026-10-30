@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { openTaskStore } from './fixtures/authorized-task-store.mjs'
+import { TaskCard } from './tasks.mjs'
 import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { listBots } from './bots.mjs'
-import { TaskDigest, MainSessions } from './main-session.mjs'
+import { TaskDigest, MainSessions, markMainChildOver, mirrorToMain } from './main-session.mjs'
 
 // PLAN §8.1 main session (phase 1). IDs follow T1-01..T1-09; D-04/D-05 per PLAN §11.
 const modelConfig = { baseUrl: 'https://fixture.invalid/v1', model: 'main-fixture', apiKey: 'fixture-only' }
@@ -205,4 +206,63 @@ test('S1 main session uses live tool assignment without a permission context flo
   assert.equal(t.messages.filter(m => m.systemKind === 'context-floor').length, floors)
   assert.ok(JSON.stringify(last().context).includes('蓝鲸'))
   assert.equal(t.messages.at(-1).role, 'assistant'); assert.ok(!t.toolSets.authorized.includes('workspace.list'))
+}))
+
+
+test('R1 clearing a main preserves child provenance, routes its later digest once and exposes its status from the current main', () => fixture(async ({ s, state, reopen }) => {
+  const oldId = await mainOf(s, 'calendar')
+  state.gate = gate()
+  const old = await say(s, state, 'calendar', 'old private main discussion', turn(create('clear-digest', 'late independent task')))
+  const childId = created(old)[0].data.taskId, original = await s.get(childId)
+  const clear = await s.clearMainSession(oldId, { requestId: 'clear-late-digest', confirmed: true })
+  const newId = clear.replacementTaskId
+  state.main.add(newId)
+  state.gate.release(); state.gate = null
+  await settle(s, childId)
+  const child = await s.get(childId)
+  assert.deepEqual(child.mainParent, original.mainParent)
+  assert.deepEqual(child.configRef, original.configRef)
+  const digest = await s.harness.snapshot(TaskDigest, undefined, context)
+  assert.equal(digest.byMain[oldId].some(item => item.taskId === childId), false)
+  assert.deepEqual(digest.byMain[newId].map(item => [item.taskId, item.state]), [[childId, 'over']])
+  const mirrorCount = async () => (await s.get(newId)).messages.filter(message => message.mirrorKind === 'finished' && message.childTaskId === childId).length
+  assert.equal(await mirrorCount(), 1)
+  await s.harness.commit(async tx => {
+    const card = await tx.doc(TaskCard, childId)
+    await markMainChildOver(tx, card, 'succeeded', 'duplicate completion')
+    await mirrorToMain(tx, card, { mirrorKind: 'finished', outcome: 'succeeded', summary: `任务「${card.title}」已完成` })
+  }, context)
+  assert.equal(await mirrorCount(), 1)
+  const next = await say(s, state, 'calendar', 'check independent task status', turn(['task_status', { taskId: childId }]))
+  const status = next.messages.find(message => message.toolName === 'task_status').result
+  assert.equal(status.ok, true); assert.equal(status.data.items[0].taskId, childId)
+  const call = state.seen.filter(options => options.taskId === newId)[0]
+  assert.match(call.context.systemPrompt, /late independent task/)
+  assert.equal(JSON.stringify(call.context.messages).includes('old private main discussion'), false)
+  assert.deepEqual((await s.harness.snapshot(TaskDigest, undefined, context)).byMain[newId], [])
+  const reopened = await reopen()
+  assert.equal((await reopened.get(newId)).messages.filter(message => message.mirrorKind === 'finished' && message.childTaskId === childId).length, 1)
+}))
+
+test('R1 a migrated digest respects deleted child sources and current workspace read grants', () => fixture(async ({ s, state }) => {
+  await configure(s)
+  const oldId = await mainOf(s, 'calendar')
+  state.gate = gate()
+  state.derived.push(turn(['workspace.list', { sourceId: 'local', type: 'Todo' }]), text('source read complete'))
+  const old = await say(s, state, 'calendar', 'derive a workspace task', turn(create('clear-source-digest', 'source-filtered task')))
+  const childId = created(old)[0].data.taskId
+  const cleared = await s.clearMainSession(oldId, { requestId: 'clear-source-digest-main', confirmed: true })
+  state.main.add(cleared.replacementTaskId)
+  state.gate.release(); state.gate = null
+  await settle(s, childId)
+  await s.harness.commit(async tx => { for (const item of (await tx.doc(TaskDigest)).byMain[cleared.replacementTaskId]) delete item.source }, context)
+  await s.revokeTool('calendar', 'workspace.get')
+  await say(s, state, 'calendar', 'ordinary new conversation')
+  const first = state.seen.filter(options => options.taskId === cleared.replacementTaskId).at(-1)
+  assert.doesNotMatch(first.context.systemPrompt, /source-filtered task/)
+  await s.deleteSession(childId, { requestId: 'delete-digest-source-child', confirmed: true })
+  const status = await say(s, state, 'calendar', 'ordinary conversation after delete', turn(['task_status', { taskId: childId }]))
+  assert.equal(status.messages.findLast(message => message.toolName === 'task_status').result.error.code, 'MAIN_TASK_NOT_OWNED')
+  const afterDelete = state.seen.filter(options => options.taskId === cleared.replacementTaskId).at(-1)
+  assert.doesNotMatch(afterDelete.context.systemPrompt, /source-filtered task/)
 }))

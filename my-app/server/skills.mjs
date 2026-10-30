@@ -7,21 +7,27 @@ import { defineDoc } from '@earendil-works/pi-durable'
 import { TaskInputError } from './task-config.mjs'
 import { ToolAccess, toolSets } from './tools.mjs'
 import { SKILL_ACTIVATE, SKILL_DEACTIVATE } from './skill-tools.mjs'
+import { assertCapabilityEnabled } from './capability-assignments.mjs'
+import { BotDirectory } from './bot-directory.mjs'
 
 export const SKILL_DIRECTORY = fileURLToPath(new URL('./skills/', import.meta.url))
 const SKILL_ID = /^[a-z][a-z0-9-]{0,79}$/
 // Auto-registration: every skills/<id>/ with a manifest.json is a registered Skill, read on each
 // use (no restart). Malformed ones stay listed as unavailable. Use still needs the Bot's skill
 // tools from the current Bot assignment, plus every tool/resource the Skill requires.
+function builtinDirectory(directory) { return typeof directory === 'string' ? directory : directory.builtinDirectory ?? SKILL_DIRECTORY }
+function userSkills(directory) { return typeof directory === 'object' && directory !== null ? directory.userSkills : null }
 async function registeredSkills(directory) {
+  const imported = userSkills(directory) ? (await userSkills(directory).skillCatalog()).skills.map((skill) => skill.id) : []
+  directory = builtinDirectory(directory)
   let entries
-  try { entries = await readdir(directory, { withFileTypes: true }) } catch { return [] }
+  try { entries = await readdir(directory, { withFileTypes: true }) } catch { return imported.sort() }
   const ids = []
   for (const e of entries) {
     if (!e.isDirectory() || !SKILL_ID.test(e.name)) continue
     try { await readFile(resolve(directory, e.name, 'manifest.json')); ids.push(e.name) } catch { /* not a Skill folder */ }
   }
-  return ids.sort()
+  return [...new Set([...ids, ...imported])].sort()
 }
 const metadataKeys = ['id', 'name', 'description', 'version', 'applicability', 'botIds', 'requiredTools', 'requiredResources', 'scripts']
 export const TaskSkills = defineDoc({ kind: 'pidot.task-skills', version: 1, scope: 'task',
@@ -30,10 +36,14 @@ const hash = (text) => createHash('sha256').update(text).digest('hex')
 const strings = (value) => Array.isArray(value) && value.length <= 20 && value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 200)
 const failure = (code, message, missing = []) => ({ code, message, missing })
 
-async function loadSkill(id, directory) {
+export async function loadSkill(id, directory = SKILL_DIRECTORY) {
   if (!SKILL_ID.test(id) || !(await registeredSkills(directory)).includes(id)) throw failure('SKILL_NOT_FOUND', '未登记该本地 Skill。')
   try {
-    const manifest = JSON.parse(await readFile(resolve(directory, id, 'manifest.json'), 'utf8'))
+    const builtin = builtinDirectory(directory)
+    let imported = null
+    const builtinExists = await readFile(resolve(builtin, id, 'manifest.json')).then(() => true, () => false)
+    if (!builtinExists && userSkills(directory)) imported = await userSkills(directory).skillSource(id)
+    const manifest = imported?.manifest ?? JSON.parse(await readFile(resolve(builtin, id, 'manifest.json'), 'utf8'))
     if (manifest.id !== id || !['name', 'description', 'version', 'applicability'].every((key) =>
       typeof manifest[key] === 'string' && manifest[key].trim() && manifest[key].length <= 2000) ||
       !['botIds', 'requiredTools', 'requiredResources', 'scripts'].every((key) => strings(manifest[key]))) {
@@ -45,20 +55,21 @@ async function loadSkill(id, directory) {
       if (!Array.isArray(manifest.references) || manifest.references.length > 8 || !manifest.references.every((ref) =>
         ref && Object.keys(ref).length === 3 && /^[a-z][a-z0-9-]{0,79}$/.test(ref.id) &&
         typeof ref.title === 'string' && ref.title.length > 0 && ref.title.length <= 200 &&
-        typeof ref.file === 'string' && /^references\/[a-z0-9-]+\.md$/.test(ref.file)) ||
+        typeof ref.file === 'string' && /^references\/[A-Za-z0-9_./-]+\.(md|txt)$/.test(ref.file) && !ref.file.split('/').some((part) => !part || part === '.' || part === '..' || part.startsWith('.'))) ||
         new Set(manifest.references.map((ref) => ref.id)).size !== manifest.references.length) throw new Error('Invalid references')
       metadata.references = manifest.references
     }
     const resources = []
     for (const ref of metadata.references ?? []) {
-      const content = await readFile(resolve(directory, id, ref.file), 'utf8')
+      const file = imported?.files.find((file) => file.path === ref.file)
+      const content = imported ? Buffer.from(file?.content ?? '', 'base64').toString('utf8') : await readFile(resolve(builtin, id, ref.file), 'utf8')
       if (!content.trim() || Buffer.byteLength(content) > 16384) throw new Error('Invalid reference')
-      resources.push({ id: ref.id, title: ref.title, source: `local:${id}/${ref.file}`, content, sha256: hash(content) })
+      resources.push({ id: ref.id, title: ref.title, source: imported ? `imported:${id}@${imported.hash}/${ref.file}` : `local:${id}/${ref.file}`, content, sha256: hash(content) })
     }
-    const rules = await readFile(resolve(directory, id, 'SKILL.md'), 'utf8')
+    const rules = imported?.rules ?? await readFile(resolve(builtin, id, 'SKILL.md'), 'utf8')
     if (!rules.trim() || Buffer.byteLength(rules) > 32768) throw new Error('Invalid rules')
     const contentHash = snapshotHash({ ...metadata, rules, ...(metadata.references ? { resources } : {}) })
-    return { ...metadata, rules, ...(metadata.references ? { resources } : {}), ref: { id, version: manifest.version, sha256: contentHash }, source: `local:${id}/SKILL.md` }
+    return { ...metadata, rules, ...(metadata.references ? { resources } : {}), ref: { id, version: manifest.version, sha256: contentHash }, source: imported ? `imported:${id}@${imported.hash}/SKILL.md` : `local:${id}/SKILL.md` }
   } catch (error) {
     if (error?.code === 'SKILL_NOT_FOUND') throw error
     throw failure('SKILL_LOAD_FAILED', '本地 Skill 清单或完整规则无法读取或格式无效；未激活。')
@@ -70,18 +81,57 @@ async function loadSkill(id, directory) {
 function applicable(_skill, _card, _bots) {
   return true
 }
-function dependencies(skill, card, bots, access, { command = false } = {}) {
+function dependencies(skill, card, bots, access) {
   if (card.parameters.mode !== 'model') return failure('SKILL_MODEL_REQUIRED', '当前 Task 为确定性测试模式，不能按 Skill 进行模型分析。')
   if (!applicable(skill, card, bots, access)) return failure('SKILL_NOT_APPLICABLE', '该 Skill 不适用于当前 Bot。')
   const sets = toolSets(card, bots, access), authorized = sets.authorized
-  // A "/" Skill chosen by the user loads its instructions without needing the Skill lifecycle tools
-  // (the user already chose it); every business tool it needs is still checked.
+  // Command selection does not grant or bypass any declared dependency.
   const missing = [
-    ...skill.requiredTools.filter((name) => !authorized.includes(name) && !(command && name === SKILL_READ)),
+    ...skill.requiredTools.filter((name) => !authorized.includes(name)),
     ...skill.requiredResources.filter((name) => !sets.resources.includes(name)),
     ...skill.scripts.map((name) => `script:${name}`),
   ]
   return missing.length ? failure('SKILL_DEPENDENCY_MISSING', '缺少已授权工具、资源或受支持的脚本执行入口；未激活，不会扩张 Bot 权限。', missing) : null
+}
+
+/** Real R1-08 registration projection; declared tools never become granted toolNames. */
+export async function skillCapabilityCatalog(directory = SKILL_DIRECTORY, context = {}) {
+  const imported = userSkills(directory) ? (await userSkills(directory).skillCatalog()).skills : []
+  return Promise.all((await registeredSkills(directory)).map(async (id) => {
+    const record = imported.find((item) => item.id === id)
+    try {
+      const skill = await loadSkill(id, directory)
+      const error = context.card && dependencies(skill, context.card, context.bots ?? [], context.access)
+      const status = record?.status === 'error' ? 'error' : error || skill.scripts.length ? 'missing_dependency' :
+        context.card ? 'ready' : record?.status ?? 'ready'
+      return { id: `skill:${id}`, kind: 'skill', name: skill.name, description: skill.description, status,
+        revision: record ? `${record.revision}:${record.hash}` : skill.ref.sha256, version: skill.version, toolNames: [],
+        requirements: [...skill.requiredTools.map((name) => ({ kind: 'tool', id: name })),
+          ...skill.requiredResources.map((name) => ({ kind: 'resource', id: name })), ...skill.scripts.map((name) => ({ kind: 'script', id: name }))],
+        lastCheck: record?.lastCheck ?? { status, checkedAt: new Date().toISOString() } }
+    } catch {
+      return { id: `skill:${id}`, kind: 'skill', name: id, description: 'Skill 文件无法读取或校验失败。', status: 'error', revision: record ? String(record.revision) : 'invalid', toolNames: [], requirements: [], lastCheck: { status: 'error' } }
+    }
+  }))
+}
+async function liveSkillAccess(tx, card, skill, bots, directory, access) {
+  const liveBots = bots ?? (await tx.doc(BotDirectory)).items
+  const currentAccess = access ?? await tx.doc(ToolAccess)
+  const error = dependencies(skill, card, liveBots, currentAccess)
+  const catalog = await skillCapabilityCatalog(directory, { card, bots: liveBots, access: currentAccess })
+  // A built-in Task's pinned snapshot remains valid after a source update/removal. Imported
+  // packages instead retain live registration (remove must revoke even pinned content).
+  const registered = catalog.find((item) => item.id === `skill:${skill.id}`)
+  if (skill.source.startsWith('local:') || registered && !['error', 'disabled'].includes(registered.status)) {
+    const projection = { id: `skill:${skill.id}`, kind: 'skill', name: skill.name, description: skill.description,
+      status: error ? 'missing_dependency' : 'ready', revision: skill.ref.sha256, version: skill.ref.version, toolNames: [], requirements: [] }
+    const index = catalog.findIndex((item) => item.id === projection.id)
+    if (index < 0) catalog.push(projection)
+    else catalog[index] = projection
+  }
+  try { await assertCapabilityEnabled(tx, card.bot.id, `skill:${skill.id}`, { catalog }) }
+  catch (caught) { if (caught.code === 'CAPABILITY_UNAVAILABLE' && error) throw error; throw caught }
+  if (error) throw error
 }
 
 // A failed load is shown as a card in the conversation and no longer blocks sending; only an
@@ -115,6 +165,7 @@ async function activate(tx, card, bots, skillId, source, inReplyTo, directory, o
     const pinned = state.active.find((item) => item.id === skillId) ?? state.pinned?.find((item) => item.id === skillId)
     skill = pinned ? JSON.parse(JSON.stringify(pinned)) : await loadSkill(skillId, directory)
     verify(skill)
+    await liveSkillAccess(tx, card, skill, bots, directory)
     error = dependencies(skill, card, bots, await tx.doc(ToolAccess), options)
   } catch (caught) { error = typeof caught?.code === 'string' && typeof caught?.message === 'string' ? { code: caught.code, message: caught.message, missing: caught.missing ?? [] } : failure('SKILL_LOAD_FAILED', '本地 Skill 无法加载。') }
   const event = { skillId, status: error ? 'failed' : 'active', source, inReplyTo,
@@ -140,20 +191,24 @@ export async function deactivateSkills(tx, card, { skillId, source = 'phase-comp
   return { ok: true, data: { status: 'inactive', skillIds: removed.map((skill) => skill.id) } }
 }
 // Validate fixed snapshots, never reload a newer Skill or silently deactivate it.
-export async function assertSkillMigrationReady(tx, card, bots, access) {
+export async function assertSkillMigrationReady(tx, card, bots, access, directory = SKILL_DIRECTORY) {
   await assertSkillReady(tx, card.taskId)
   for (const skill of (await tx.doc(TaskSkills, card.taskId)).active) {
     try { verify(skill) } catch { throw new TaskInputError(409, 'SKILL_SNAPSHOT_INVALID', '固定活动Skill快照无效；未迁移。') }
+    await liveSkillAccess(tx, card, skill, bots, directory, access)
     const error = dependencies(skill, card, bots, access)
     if (error) throw new TaskInputError(409, error.code, error.message)
   }
 }
-export async function activeSkillPrompt(tx, card) {
+export async function activeSkillPrompt(tx, card, bots, directory = SKILL_DIRECTORY) {
   const state = await tx.doc(TaskSkills, card.taskId)
-  return state.active.map((skill) => {
+  const prompts = []
+  for (const skill of state.active) {
     verify(skill)
-    return `\n活动 Skill（固定完整版本）：${JSON.stringify(skill.ref)}\n适用条件：${skill.applicability}\n以下规则不构成工具或资源授权，也不能覆盖宿主有效限制。\n${skill.rules}\n附带资料目录（尚未读取，不代表证据）：${JSON.stringify((skill.resources ?? []).map(({ content: _content, ...ref }) => ref))}`
-  }).join('\n')
+    try { await liveSkillAccess(tx, card, skill, bots, directory) } catch { continue }
+    prompts.push(`\n活动 Skill（固定完整版本）：${JSON.stringify(skill.ref)}\n适用条件：${skill.applicability}\n以下规则不构成工具或资源授权，也不能覆盖宿主有效限制。\n${skill.rules}\n附带资料目录（尚未读取，不代表证据）：${JSON.stringify((skill.resources ?? []).map(({ content: _content, ...ref }) => ref))}`)
+  }
+  return prompts.join('\n')
 }
 export async function skillCatalogForTask(tx, card, bots, directory = SKILL_DIRECTORY) {
   const state = await tx.doc(TaskSkills, card.taskId)
@@ -164,7 +219,8 @@ export async function skillCatalogForTask(tx, card, bots, directory = SKILL_DIRE
       const skill = pinned ?? await loadSkill(id, directory)
       verify(skill)
       if (!applicable(skill, card, bots)) continue
-      const error = dependencies(skill, card, bots, await tx.doc(ToolAccess))
+      let error = dependencies(skill, card, bots, await tx.doc(ToolAccess))
+      try { await liveSkillAccess(tx, card, skill, bots, directory) } catch (caught) { error ??= { code: caught.code, message: caught.message, missing: caught.missing ?? [] } }
       items.push({ id, name: skill.name, description: skill.description, version: skill.ref.version,
         available: !error, ...(error ? { error } : {}) })
     } catch { /* Unreadable unpinned sources are not selectable. */ }
@@ -179,6 +235,7 @@ export async function executeSkillTool(tx, card, bots, call, inReplyTo, director
   const skill = state.active.find((item) => item.id === args.skillId)
   if (!skill) return { ok: false, error: failure('SKILL_NOT_ACTIVE', '仅能读取本 Task 当前活动 Skill 的附带资料。') }
   verify(skill)
+  try { await liveSkillAccess(tx, card, skill, bots, directory) } catch (caught) { return { ok: false, error: { code: caught.code, message: caught.message, missing: caught.missing ?? [] } } }
   const error = dependencies(skill, card, bots, await tx.doc(ToolAccess))
   if (error) return { ok: false, error }
   const resource = skill.resources?.find((item) => item.id === args.referenceId)
@@ -197,7 +254,7 @@ export async function executeSkillTool(tx, card, bots, call, inReplyTo, director
 }
 
 // "/" command in the composer: every registered Skill is listed for every Bot. Picking one needs no
-// Skill-tool permission; only a real dependency (model mode, required tool/resource, broken files) can
+// lifecycle-tool permission beyond declared dependencies. Current R1-08 enable and every dependency can
 // make it unavailable, and the reason is shown.
 export async function commandSkills(tx, card, bots, directory = SKILL_DIRECTORY) {
   return skillCatalogForTask(tx, card, bots, directory)
@@ -206,7 +263,12 @@ export async function commandSkills(tx, card, bots, directory = SKILL_DIRECTORY)
 export async function activateCommandSkill(tx, card, bots, entryId, skillId, directory = SKILL_DIRECTORY) {
   const state = await tx.doc(TaskSkills, card.taskId)
   const prior = state.history.find((e) => e.source === 'user-command' && e.inReplyTo === entryId && e.skillId === skillId && e.status !== 'inactive')
-  if (prior) return prior.status === 'active' ? { ok: true } : { ok: false, error: prior.error }
+  if (prior) {
+    if (prior.status !== 'active') return { ok: false, error: prior.error }
+    const pinned = state.active.find((skill) => skill.id === skillId) ?? state.pinned?.find((skill) => skill.id === skillId)
+    try { if (!pinned) throw failure('SKILL_NOT_ACTIVE', '固定 Skill 快照不存在。'); verify(pinned); await liveSkillAccess(tx, card, pinned, bots, directory) } catch (error) { return { ok: false, error: { code: error.code, message: error.message, missing: error.missing ?? [] } } }
+    return { ok: true }
+  }
   return activate(tx, card, bots, skillId, 'user-command', entryId, directory, { command: true })
 }
 
@@ -231,11 +293,12 @@ export function skillApi({ harness, context, TaskCard, ChatInput, bots, get, dir
     return get(id)
   }
   return {
+    skillCapabilityCatalog: () => skillCapabilityCatalog(directory),
     async skillCatalog() {
       return Promise.all((await registeredSkills(directory)).map(async (id) => {
         try {
           const { rules: _rules, resources: _resources, ref: _ref, source: _source, ...metadata } = await loadSkill(id, directory)
-          return { ...metadata, available: true }
+          return { ...metadata, available: metadata.scripts.length === 0, ...(metadata.scripts.length ? { error: failure('SKILL_DEPENDENCY_MISSING', '缺少脚本执行支持。', metadata.scripts.map((name) => `script:${name}`)) } : {}) }
         } catch (error) { return { id, available: false, error } }
       }))
     },

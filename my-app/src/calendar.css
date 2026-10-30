@@ -104,7 +104,7 @@
 }
 
 /* T08: reuse the existing calendar and local editor in a quiet two-pane workspace. */
-.cal-workspace { display:grid; grid-template-columns:minmax(0, 1fr) minmax(240px, 300px); gap:24px; align-items:start; }
+.cal-workspace { display:grid; grid-template-columns:minmax(0, 1fr); gap:24px; align-items:start; }
 .cal-calendar-pane, .cal-todo-pane { min-width:0; }
 .cal-calendar-pane { display:flex; flex-direction:column; gap:12px; }
 .cal-workspace [hidden] { display:none; }
@@ -152,3 +152,11 @@
 @media (prefers-reduced-motion: reduce) {
   .cal *, .cal *::before, .cal *::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }
 }
+
+/* The shared shell owns focus, layering and scroll locking. Keep calendar styling scoped. */
+.cal-pop-content { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.cal-pop-content form { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.cal-pop-content .cal-dialog-heading { display:none; }
+.cal-time-pickers { display:grid; grid-template-columns:minmax(0, 1fr); gap:16px; }
+.cal-pop-content .cal-btn { min-height:44px; min-width:44px; }
+@media (max-width:719px) { .cal-time-pickers { grid-template-columns:minmax(0, 1fr); } }

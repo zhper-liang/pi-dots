@@ -20,10 +20,11 @@ type Props = {
   onTab: (tab: BotTab) => void; onDirectory: () => void
   onNewTask: () => void; onOpenTask: (taskId: number) => void
   onSaved: (bot: Bot) => void; onDeactivate: () => void
+  active?: boolean; refreshKey?: number
   memoryApi?: MemoryApi; onOpenPreferences?: () => void; onOpenMemorySource?: MemorySourceHandler
 }
 
-export default function BotTemplatePage({ bot, token, tasks, creating, tab, mainTaskId, chat, onTab, onDirectory, onNewTask, onOpenTask, onSaved, onDeactivate, memoryApi, onOpenPreferences, onOpenMemorySource }: Props) {
+export default function BotTemplatePage({ bot, token, tasks, creating, tab, mainTaskId, chat, onTab, onDirectory, onNewTask, onOpenTask, onSaved, onDeactivate, active = true, refreshKey, memoryApi, onOpenPreferences, onOpenMemorySource }: Props) {
   const [look, setLook] = useState<BotLook>(() => loadLook(bot.id))
   const [sourceNotice, setSourceNotice] = useState('')
   const sourceRequest = useRef<AbortController | null>(null)
@@ -61,8 +62,8 @@ export default function BotTemplatePage({ bot, token, tasks, creating, tab, main
     {inactive && <p role="status" className="shell-note">这个 Bot 已停用：不能再发消息或新建任务。历史任务和真实结果都保留。</p>}
     <div className="bot-detail-tabs" role="tablist" aria-label="Bot 详情">{botTabs.map(item => <button key={item.id} ref={el => { tabRefs.current[item.id] = el }} type="button" role="tab" id={`bot-tab-${item.id}`} aria-controls={`bot-panel-${item.id}`} aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => onTab(item.id)} onKeyDown={onTabKey}>{item.label}{item.id === 'tasks' ? ` (${tasks.length})` : ''}</button>)}</div>
     <div {...panelProps('chat')}>{mainTaskId === null ? <p role="status">主会话尚未就绪，请刷新后核对。</p> : chat}</div>
-    <div {...panelProps('rules')}><BotRules key={`rules:${bot.id}:${token}`} token={token} botId={bot.id} readOnly={inactive} /></div>
-    <div {...panelProps('skills')}><BotSkills token={token} mainTaskId={mainTaskId} active={tab === 'skills'} /></div>
+    <div {...panelProps('rules')}><BotRules key={`rules:${bot.id}:${token}`} token={token} botId={bot.id} readOnly={inactive} active={active && tab === 'rules'} refreshKey={refreshKey} /></div>
+    <div {...panelProps('skills')}><BotSkills token={token} botId={bot.id} readOnly={inactive} active={tab === 'skills'} /></div>
     <div {...panelProps('mcp')}><h2>MCP</h2><p className="shell-muted">仅管理这个 Bot 的本机 stdio 凭证。凭证不是模型 key，请勿粘贴进对话。</p><StdioCredentials key={`mcp:${bot.id}:${token}`} token={token} fixedBotId={bot.id} readOnly={inactive} expanded /></div>
     <div {...panelProps('memory')}><BotMemory botId={bot.id} token={token} active={tab === 'memory'} readOnly={inactive} api={memoryApi} onOpenPreferences={onOpenPreferences} onOpenSource={onOpenMemorySource ?? (source => { void openMemorySource(source) })} />{sourceNotice && <p role="status" className="memory-hint">{sourceNotice}</p>}</div>
     <div {...panelProps('settings')}>

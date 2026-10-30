@@ -68,3 +68,54 @@ test('sections put each session in exactly one place, in a fixed order', () => {
   assert.deepEqual(sessionSections(items, { query: '今天', now: NOW }).map((s) => s.id), ['today'])
   assert.deepEqual(sessionSections([], { now: NOW }), [])
 })
+
+test('deleted sessions disappear from pinned/search/archived sections, archive alone is not deletion', async () => {
+  const { isSessionDeleted, removeSessionPin } = await import('./session-list.mjs')
+  const items = [
+    { id: 1, title: 'needle one', botName: 'Chief', at: NOW, confirm: true, archived: false, deleted: true },
+    { id: 2, title: 'needle two', botName: 'Chief', at: NOW, confirm: false, archived: true, deletedAt: '2026-10-29T00:00:00Z' },
+    { id: 3, title: 'needle three', botName: 'Chief', at: NOW, confirm: false, archived: true },
+  ]
+  assert.deepEqual(sessionSections(items, { pins: [1, 2, 3], query: 'needle', now: NOW }).map(section => section.items.map(item => item.id)), [[3]])
+  assert.equal(isSessionDeleted(items[2]), false)
+  assert.deepEqual(removeSessionPin([1, 2, 3], 2), [1, 3])
+})
+
+test('labels distinguish stop/delete and main replacement without calling archive deletion', async () => {
+  const { sessionDeleteLabel } = await import('./session-list.mjs')
+  assert.equal(sessionDeleteLabel({ kind: 'session', running: true }), '停止并删除')
+  assert.equal(sessionDeleteLabel({ kind: 'group', running: true }), '停止并删除')
+  assert.equal(sessionDeleteLabel({ kind: 'session' }), '删除会话')
+  assert.equal(sessionDeleteLabel({ kind: 'main', running: true }), '清空并开始新会话')
+})
+
+test('only exact confirmed deletion receipts may hide rows or switch the main reference', async () => {
+  const { isSessionActionReceipt } = await import('./session-list.mjs')
+  const target = { taskId: 4, botId: 'chief', title: 'x', kind: 'session' }
+  const receipt = { taskId: 4, botId: 'chief', action: 'delete', deleted: true, deletedAt: '2026-10-29T00:00:00Z', replacementTaskId: null, requestId: 'request-one', replayed: false }
+  assert.equal(isSessionActionReceipt(receipt, target, 'request-one'), true)
+  for (const invalid of [null, { ok: true }, { status: 'unknown' }, { ...receipt, deleted: false }, { ...receipt, taskId: 9 },
+    { ...receipt, botId: 'other' }, { ...receipt, requestId: 'other' }, { ...receipt, action: 'archive' }, { ...receipt, deletedAt: 'bad' }, { ...receipt, replacementTaskId: 9 }]) {
+    assert.equal(isSessionActionReceipt(invalid, target, 'request-one'), false)
+  }
+  const main = { ...target, kind: 'main' }, replaced = { ...receipt, action: 'clear-main', replacementTaskId: 9 }
+  assert.equal(isSessionActionReceipt(replaced, main, 'request-one'), true)
+  assert.equal(isSessionActionReceipt({ ...replaced, replacementTaskId: 4 }, main, 'request-one'), false)
+  assert.equal(isSessionActionReceipt({ ...replaced, replacementTaskId: null }, main, 'request-one'), false)
+})
+
+test('sidebar confirmation uses shared EditorDialog, stable retry identity and no implicit send/archive', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(new URL('./SessionActions.tsx', import.meta.url), 'utf8')
+  const sidebar = await readFile(new URL('./ShellSidebar.tsx', import.meta.url), 'utf8')
+  assert.match(source, /<EditorDialog/)
+  assert.match(source, /requestId\.current \?\?= crypto\.randomUUID\(\)/)
+  assert.match(source, /isSessionActionReceipt\(response, target, requestId\.current\)/)
+  assert.match(source, /核实原请求并重试/)
+  assert.match(source, /uncertain && onVerify && !retryOriginal \? await onVerify\(target, input\) : await onAction\(target, input\)/)
+  assert.match(sidebar, /onVerify=\{props.onVerifySessionAction\}/)
+  assert.match(source, /审计记录和已有私有记忆默认保留/)
+  assert.doesNotMatch(source, /fetch\(|\/archive|\.send\(/)
+  assert.match(sidebar, /sessions\.filter\(item => !deletedIds\.includes\(item.id\)\)/)
+  assert.match(sidebar, /removeSessionPin\(previous, result.taskId\)/)
+})

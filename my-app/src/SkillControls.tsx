@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { mergeBotSkills } from './bot-directory.mjs'
+import { useEffect, useRef, useState } from 'react'
+import Switch from './Switch'
 
 // Skills are picked on demand: by the Bot from its catalog, or by the user with "/" in the composer.
 // There is no activation panel; the conversation shows a one-line card per use and the session
@@ -45,34 +45,78 @@ export function SkillHistory({ state }: { state?: SkillState }) {
 }
 
 
-type CatalogSkill = { id: string; name?: string; description?: string; version?: string; available: boolean; requiredTools?: string[]; requiredResources?: string[]; error?: Failure }
-/** All registered Skills are visible; availability comes from this Bot's real main Task. */
-export function BotSkills({ token, mainTaskId, active }: { token: string; mainTaskId: number | null; active: boolean }) {
-  const [skills, setSkills] = useState<CatalogSkill[] | null>(null)
+type SkillCapability = {
+  id: string; kind: string; name: string; description: string; version?: string; revision: string
+  enabledForBot: boolean; available: boolean; status: string
+  requirements: { kind: string; id: string }[]
+}
+type CapabilityView = { botId: string; revision: string; items: SkillCapability[] }
+export type BotSkillsProps = { token: string; botId: string; readOnly: boolean; active: boolean }
+const STATUS: Record<string, string> = { ready: '已就绪', configured: '需核对依赖', missing_dependency: '缺少依赖', needs_auth: '需要授权', error: '校验失败', disabled: '已停用' }
+
+/** Bot-scoped assignment intent only; never uses a main Task as a permission proxy. */
+export function BotSkills(props: BotSkillsProps) {
+  return <BotSkillsPanel key={`${props.botId}:${props.active}:${props.token}`} {...props} />
+}
+function BotSkillsPanel({ token, botId, readOnly, active }: BotSkillsProps) {
+  const [view, setView] = useState<CapabilityView | null>(null)
   const [error, setError] = useState('')
+  const [pending, setPending] = useState<string | null>(null)
+  const retry = useRef<{ botId: string; capabilityId: string; input: { requestId: string; expectedRevision: string; expectedCatalogRevision: string; capabilityId: string; enabled: boolean } } | null>(null)
+  const scope = useRef('')
+  const scopeKey = `${token}:${botId}:${active}`
+  async function request(path: string, input?: unknown, signal?: AbortSignal) {
+    const response = await fetch(path, { method: input === undefined ? 'GET' : 'POST', signal,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(input === undefined ? {} : { body: JSON.stringify(input) }) })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) throw Object.assign(new Error(body.error?.message ?? '无法读取或调整 Skill。'), { code: body.error?.code, definitive: true })
+    return body
+  }
   useEffect(() => {
+    scope.current = `${token}:${botId}:${active}`
     if (!active) return
     const controller = new AbortController()
-    async function read(path: string) {
-      const response = await fetch(path, { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } })
-      const body = await response.json()
-      if (!response.ok) throw new Error(body.error?.message ?? '无法读取 Skill 目录。')
-      return body.skills as CatalogSkill[]
-    }
-    Promise.all([read('/api/skills'), mainTaskId === null ? Promise.resolve([]) : read(`/api/tasks/${mainTaskId}/skills`)]).then(([catalog, available]) => {
-      if (controller.signal.aborted) return
-      setSkills(mergeBotSkills(catalog, available, mainTaskId !== null))
-      setError('')
-    }).catch(caught => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : '无法读取 Skill 目录。') })
+    fetch(`/api/bots/${encodeURIComponent(botId)}/capabilities`, { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } })
+      .then(async response => { const body = await response.json(); if (!response.ok) throw new Error(body.error?.message ?? '无法读取 Skill。'); return body as CapabilityView })
+      .then(body => { if (!controller.signal.aborted && body.botId === botId) setView(body) })
+      .catch(caught => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : '无法读取 Skill。') })
     return () => controller.abort()
-  }, [token, mainTaskId, active])
-  return <section aria-label="Skill 目录"><h2>Skills</h2><p className="shell-muted">所有已注册 Skill 都在这里。对话中输入 / 选择；Skill 不授予工具权限。</p>
-    {error ? <p role="alert" className="shell-note">{error}</p> : skills === null ? <p role="status">正在读取 Skill 目录…</p> : skills.length === 0 ? <p>没有已注册的 Skill。</p> : <ul className="bot-skill-list">{skills.map(skill => <li key={skill.id}>
-      <h3>{skill.name ?? skill.id}{skill.version ? ` · v${skill.version}` : ''}</h3>{skill.description && <p>{skill.description}</p>}
-      <p>{skill.available ? '可使用 · 在对话中输入 / 选择' : `暂不可用：${skill.error?.message ?? '本地 Skill 无法读取。'}`}</p>
-      {!!skill.error?.missing?.length && <p>缺少依赖：{skill.error.missing.join('、')}</p>}
-      {!!skill.requiredTools?.length && <p className="shell-muted small">所需工具：{skill.requiredTools.join('、')}</p>}
-      {!!skill.requiredResources?.length && <p className="shell-muted small">所需资源：{skill.requiredResources.join('、')}</p>}
+  }, [token, botId, active])
+  async function toggle(skill: SkillCapability) {
+    if (readOnly || pending || !view || !active) return
+    const targetScope = scopeKey
+    const previous = retry.current
+    const input = previous?.botId === botId && previous.capabilityId === skill.id ? previous.input : {
+      requestId: crypto.randomUUID(), expectedRevision: view.revision, expectedCatalogRevision: skill.revision,
+      capabilityId: skill.id, enabled: !skill.enabledForBot,
+    }
+    retry.current = { botId, capabilityId: skill.id, input }
+    setPending(skill.id); setError('')
+    try {
+      await request(`/api/bots/${encodeURIComponent(botId)}/capabilities`, input)
+      retry.current = null
+      const fresh = await request(`/api/bots/${encodeURIComponent(botId)}/capabilities`) as CapabilityView
+      if (scope.current === targetScope && fresh.botId === botId) setView(fresh)
+    } catch (caught) {
+      const failure = caught as Error & { definitive?: boolean; code?: string }
+      if (failure.definitive) retry.current = null
+      if (scope.current !== targetScope) return
+      setError(`${failure.message}${failure.definitive ? ' 请重新核对当前目录后操作。' : ' 再点同一开关将用原 requestId 核对，不会重复授权。'}`)
+      if (failure.definitive) {
+        try { const fresh = await request(`/api/bots/${encodeURIComponent(botId)}/capabilities`) as CapabilityView; if (scope.current === targetScope && fresh.botId === botId) setView(fresh) } catch { /* Keep existing view and explicit failure. */ }
+      }
+    } finally { if (scope.current === targetScope) setPending(null) }
+  }
+  const skills = view?.items.filter(item => item.kind === 'skill') ?? []
+  return <section aria-label="Skill 目录"><h2>Skills</h2><p className="shell-muted">开关只选择本 Bot 可用的 Skill，不授予依赖工具或来源。对话中输入 / 按需使用；旧版本审计保留。</p>
+    {readOnly && <p className="shell-muted">此 Bot 为只读，不能调整 Skill 分配。</p>}
+    {error && <p role="alert" className="shell-note">{error}</p>}
+    {view === null ? !error && <p role="status">正在读取 Skill 目录…</p> : skills.length === 0 ? <p>没有已注册的 Skill。</p> : <ul className="bot-skill-list">{skills.map(skill => <li key={skill.id}>
+      <div className="shell-inline"><h3>{skill.name}{skill.version ? ` · v${skill.version}` : ''}</h3><Switch label={`为本 Bot 启用 ${skill.name}`} checked={skill.enabledForBot}
+        disabled={readOnly || pending !== null || !active || (!skill.enabledForBot && skill.status === 'disabled')} onChange={() => { void toggle(skill) }} /></div>
+      {skill.description && <p>{skill.description}</p>}
+      <p>{skill.enabledForBot ? skill.available ? '已选择 · 可在对话中按需使用' : `已选择 · ${STATUS[skill.status] ?? '暂不可用'}` : `未选择 · ${STATUS[skill.status] ?? '状态未知'}`}</p>
+      {!!skill.requirements.length && <p className="shell-muted small">依赖（需单独授权）：{skill.requirements.map(item => `${item.kind}:${item.id}`).join('、')}</p>}
     </li>)}</ul>}
   </section>
 }

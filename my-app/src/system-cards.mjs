@@ -9,6 +9,7 @@ export const CARD_KINDS = {
   summary: { label: '昨日遗留', tone: 'attention' },
   'routine-proposal': { label: '例行任务提议', tone: 'attention' },
   'bot-management': { label: 'Bot 管理提议', tone: 'attention' },
+  'capability-setup': { label: '能力配置', tone: 'attention' },
 }
 export const DETECTOR_LABELS = { conflict: '日程冲突', overdue: '待办逾期', unprepared: '会前未准备', followup: '话题跟进', summary: '昨日遗留' }
 const STATE_LABELS = {
@@ -17,11 +18,13 @@ const STATE_LABELS = {
   resolved: '已补充', closed: '任务已结束', unavailable: '无法读取', failed: '失败', applied: '可撤销', undone: '已撤销',
   open: '', deferred: '已并入下次汇总', dismissed: '已忽略', muted: '这类已不再提醒', handled: '已派出任务',
 }
+const SETUP_STATES = { pending: '配置待处理', needs_auth: '等待安全输入凭据', needs_confirmation: '等待对应操作确认', missing_dependency: '依赖尚未满足', ready: '已启用并通过校验', disabled: '此 Bot 能力已停用', unbound: '已解除此 Bot 绑定', removed: '已移除来源', error: '配置未完成', unknown: '结果未知，需核查原操作' }
 const FINDING_STATES = { resolved: '已处理或已过时' }
 const FINISHED = { succeeded: '已完成', failed: '失败', cancelled: '已取消' }
 const WAITING = ['pending', 'awaiting_confirmation', 'open', 'deferred']
 
 export function stateLabel(kind, state) {
+  if (kind === 'capability-setup') return SETUP_STATES[state] ?? STATE_LABELS[state] ?? state ?? ''
   if (kind === 'finding' || kind === 'summary') return FINDING_STATES[state] ?? STATE_LABELS[state] ?? state ?? ''
   if (kind === 'mirror') return FINISHED[state] ?? STATE_LABELS[state] ?? state ?? ''
   return STATE_LABELS[state] ?? state ?? ''
@@ -47,7 +50,7 @@ export function cardActions(card) {
 
 export function cardView(card) {
   const kind = CARD_KINDS[card.kind] ? card.kind : 'mirror', base = CARD_KINDS[kind]
-  const waiting = WAITING.includes(card.state)
+  const waiting = WAITING.includes(card.state) || kind === 'capability-setup' && ['needs_auth', 'needs_confirmation', 'missing_dependency', 'unknown'].includes(card.state)
   const label = (kind === 'finding' || kind === 'summary') && DETECTOR_LABELS[card.detector] ? DETECTOR_LABELS[card.detector] : base.label
   return { kind, label, tone: waiting ? base.tone : kind === 'auto-applied' && card.state === 'applied' ? 'busy' : 'muted', state: stateLabel(kind, card.state), waiting, actions: cardActions({ ...card, kind }) }
 }

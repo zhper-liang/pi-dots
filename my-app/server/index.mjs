@@ -1,12 +1,15 @@
+import { createExternalMcpService } from './external-mcp.mjs'
 import { fileURLToPath } from 'node:url'
-import { resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { createApiServer } from './app.mjs'
 import { readConfig, readExecutionDefaults } from './config.mjs'
 import { openTaskStore } from './tasks.mjs'
 import { listBots } from './bots.mjs'
 import { createModelSettings } from './model-settings.mjs'
+import { SKILL_DIRECTORY, skillCapabilityCatalog } from './skills.mjs'
+import { createSkillImportService } from './skill-import.mjs'
 
-let tasks
+let tasks, externalMcp
 try {
   const config = readConfig()
   // Stable default independent of the shell cwd; tests may use a temporary DB.
@@ -15,7 +18,10 @@ try {
     : fileURLToPath(new URL('../data/pidot.sqlite', import.meta.url))
   const modelSettings = createModelSettings({ file })
   const modelConfig = await modelSettings.read()
-  tasks = await openTaskStore({ file, workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, memoryOptions: { enabled: true }, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
+  const skillImport = createSkillImportService({ dataDirectory: join(dirname(file), 'skills') })
+  const skillDirectory = { builtinDirectory: SKILL_DIRECTORY, userSkills: skillImport }
+  externalMcp = await createExternalMcpService({ dataDirectory: join(dirname(file), 'external-mcp') })
+  tasks = await openTaskStore({ file, skillDirectory, externalMcp, capabilityManagementEnabled: true, readCapabilityCatalog: () => skillCapabilityCatalog(skillDirectory), workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, memoryOptions: { enabled: true }, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
   const server = createApiServer({
     token: config.token, tasks, onError: console.error,
     staticDir: fileURLToPath(new URL('../dist/', import.meta.url)),
@@ -43,6 +49,7 @@ try {
   process.once('SIGTERM', stop)
 } catch (error) {
   if (tasks) await tasks.close()
+  else await externalMcp?.close()
   // Do not expose provider configuration, filesystem paths, or SQL diagnostics.
   console.error(error.message?.startsWith('PIDOT_') ? `配置错误：${error.message}` : 'Pidot 启动失败，请检查本地数据库及配置。')
   process.exitCode = 1

@@ -1,19 +1,18 @@
 import { FeishuCalendar } from './feishu-calendar.mjs'
 import { MANAGEMENT_TOOLS } from './management-tools.mjs'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { assertBotActive, BotDirectory, createDirectoryBot } from './bot-directory.mjs'
 import { ToolAccess, toolCatalog } from './tools.mjs'
 import { TaskInputError, taskParameters } from './task-config.mjs'
-import { PolicyRules, WRITE_TOOLS, groupRule } from './policy.mjs'
+import { PolicyRules } from './policy.mjs'
 import { describeGroups, toolLabel } from './tool-group-settings.mjs'
-import { TOOL_GROUPS } from './tool-groups.mjs'
 
 const copy = (x) => JSON.parse(JSON.stringify(x))
 const canonical = (x) => Array.isArray(x) ? x.map(canonical) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, canonical(x[k])])) : x
 const hash = (x) => createHash('sha256').update(JSON.stringify(canonical(x))).digest('hex')
 const fail = (status, code, message) => { throw new TaskInputError(status, code, message) }
 const object = (x) => x && typeof x === 'object' && !Array.isArray(x)
-const names = () => toolCatalog().map((t) => t.name).filter(n => !MANAGEMENT_TOOLS.includes(n))
+const names = (access) => toolCatalog({ externalTools: access?.externalMcp?.tools ?? [] }).map((t) => t.name).filter(n => !MANAGEMENT_TOOLS.includes(n))
 export const supportedResources = ['mock:personal', 'workspace:local']
 export function initializeConfiguration(directory, access) {
   directory.configurations ??= {}
@@ -21,38 +20,24 @@ export function initializeConfiguration(directory, access) {
   directory.managementAudit ??= []
   // S1: no pool. Assignment defaults to bot.defaults (no filtering).
   access.assignments ??= {}
+  access.revoked ??= {}
   for (const bot of directory.items) {
     access.assignments[bot.id] ??= { tools: [...(bot.defaults.tools ?? [])], resources: [...(bot.defaults.toolResources ?? [])] }
     directory.configurations[bot.id] ??= [{ ...copy(bot), source: bot.source === 'legacy-task' ? 'legacy-task' : bot.createdAt ? 'authenticated-user-creation' : 'legacy-persisted-config', savedAt: bot.createdAt ?? new Date().toISOString() }]
   }
 }
-// Every assignable tool (catalog minus management and main-session tools); all Bots get all groups.
+// Compatibility export for callers that enumerate the static installed tools, not a grant.
 export const allGroupTools = () => names()
-// 2026-10-28: tool groups default to on. One-time move from per-tool assignment and narrowed rules:
-// every Bot gets every assignable tool and no revocations; a group with any ask/deny rule becomes 关
-// (one tool-level ask per write), other rules there are dropped. What was replaced stays on ToolAccess.
-export const TOOL_GROUPS_VERSION = 1
-export function migrateToolGroups(directory, access, rules) {
+export const TOOL_GROUPS_VERSION = 2
+// R1-08 migration is marker-only. Persisted per-tool grants, revocations, resources and
+// narrowed rules are already authoritative. Do not replay the v1 grant-all migration,
+// restore its archived pre-state, or reinterpret an old ask/deny rule as enabled=false.
+export function migrateToolGroups(directory, access, _rules) {
   if ((access.groupsVersion ?? 0) >= TOOL_GROUPS_VERSION) return false
-  const all = names(), record = {}, migratedAt = new Date().toISOString()
+  initializeConfiguration(directory, access)
   access.revoked ??= {}
-  for (const bot of directory.items) {
-    const assigned = access.assignments[bot.id] ??= { tools: [], resources: [] }
-    const before = { tools: [...assigned.tools], revoked: [...(access.revoked[bot.id] ?? [])], rules: [] }
-    assigned.tools = [...new Set([...assigned.tools, ...all])]
-    delete access.revoked[bot.id]
-    for (const group of TOOL_GROUPS) {
-      const writes = group.tools.filter((t) => WRITE_TOOLS.has(t))
-      const owned = rules.items.filter((r) => groupRule(r, bot.id, writes))
-      if (!owned.length) continue
-      before.rules.push(...copy(owned))
-      rules.items = rules.items.filter((r) => !groupRule(r, bot.id, writes))
-      if (owned.some((r) => r.effect !== 'allow')) for (const tool of writes) rules.items.push({ id: randomUUID(), botId: bot.id, match: { tool }, effect: 'ask', origin: 'group', createdAt: migratedAt })
-    }
-    if (before.revoked.length || before.rules.length || assigned.tools.length !== before.tools.length) record[bot.id] = before
-  }
   access.groupsVersion = TOOL_GROUPS_VERSION
-  access.groupsMigration = { version: TOOL_GROUPS_VERSION, migratedAt, bots: record }
+  access.capabilityMigration = { version: TOOL_GROUPS_VERSION, migratedAt: new Date().toISOString(), strategy: 'preserve-live-access' }
   return true
 }
 function shape(input, fields) {
@@ -80,8 +65,8 @@ export async function changeConfiguration(tx, botId, input, { models }) {
       await assertBotActive(tx, botId)
       if (typeof input.expectedVersion !== 'string' || input.expectedVersion !== bot.configRef.version) fail(409, 'CONFIG_VERSION_CONFLICT', '配置已更新；请重新加载并比较后再保存。')
       // S1: available tools = installed tools; available resources = supportedResources + feishu binding.
-      const availableTools = names(), availableResources = [...supportedResources, ...((await tx.doc(FeishuCalendar)).binding ? [(await tx.doc(FeishuCalendar)).binding.resource, `workspace:feishu:${hash([(await tx.doc(FeishuCalendar)).binding.connectionId, (await tx.doc(FeishuCalendar)).binding.calendarId])}`] : [])]
-      if (typeof input.description !== 'string' || !input.description.trim() || input.description.length > 2000 || !subset(input.tools, availableTools) || !subset(input.resources, availableResources)) fail(400, 'CAPABILITY_NOT_GRANTED', '职责无效或工具/资源不可用。')
+      const availableTools = names(a), availableResources = [...supportedResources, ...((await tx.doc(FeishuCalendar)).binding ? [(await tx.doc(FeishuCalendar)).binding.resource, `workspace:feishu:${hash([(await tx.doc(FeishuCalendar)).binding.connectionId, (await tx.doc(FeishuCalendar)).binding.calendarId])}`] : [])]
+      if (typeof input.description !== 'string' || input.description.length > 2000 || !subset(input.tools, availableTools) || !subset(input.resources, availableResources)) fail(400, 'CAPABILITY_NOT_GRANTED', '职责无效或工具/资源不可用。')
       const defaults = taskParameters(input.parameters, copy(bot.defaults))
       if (defaults.mode === 'model' && !models.some((m) => m.id === defaults.model.id)) fail(400, 'MODEL_NOT_CONFIGURED', '仅可选择服务端已配置的模型。')
       defaults.tools = [...input.tools]; defaults.toolResources = [...input.resources]
@@ -117,7 +102,7 @@ export function configurationApi({ harness, context, catalog, models, refreshMod
       const bot = d.items.find((b) => b.id === botId)
       if (!bot) fail(404, 'BOT_NOT_FOUND', '指定的Bot不存在。')
       const rules = (await tx.doc(PolicyRules)).items, assigned = a.assignments[botId], revoked = a.revoked[botId] ?? []
-      return copy({ bot, versions: d.configurations[botId], installed: names(), toolLabels: Object.fromEntries(names().map((n) => [n, toolLabel(n)])),
+      return copy({ bot, versions: d.configurations[botId], installed: names(a), toolLabels: Object.fromEntries(names(a).map((n) => [n, toolLabel(n)])),
         toolGroups: describeGroups({ rules, botId, assigned: assigned.tools, revoked, mainSession: botId !== 'group' }),
         assigned, revoked,
         models: models.map((m) => ({ id: m.id, provider: m.provider })), resources: [...supportedResources, ...((await tx.doc(FeishuCalendar)).binding ? [(await tx.doc(FeishuCalendar)).binding.resource, `workspace:feishu:${hash([(await tx.doc(FeishuCalendar)).binding.connectionId, (await tx.doc(FeishuCalendar)).binding.calendarId])}`] : [])],
@@ -144,9 +129,7 @@ export async function createConfiguredBot(tx, parsed, configuredModels) {
   const created = createDirectoryBot(directory, parsed)
   if (created.created && created.bot.defaults.mode === 'model' && !configuredModels.some((m) => m.id === created.bot.defaults.model.id)) throw new TaskInputError(400, 'MODEL_NOT_CONFIGURED', '仅可选择已配置模型。')
   if (created.created) {
-    // A new Bot starts with every tool group and the local workspace source.
-    created.bot.defaults.tools = [...new Set([...created.bot.defaults.tools, ...names()])]
-    if (!created.bot.defaults.toolResources.includes('workspace:local')) created.bot.defaults.toolResources.push('workspace:local')
+    // Creation is blank; subsequent authenticated capability assignments are explicit.
     directory.items[directory.items.findIndex((b) => b.id === created.bot.id)] = JSON.parse(JSON.stringify(created.bot))
     directory.requests[parsed.requestId].bot = JSON.parse(JSON.stringify(created.bot))
     initializeConfiguration(directory, access)

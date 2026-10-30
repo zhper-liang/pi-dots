@@ -123,10 +123,13 @@ test('08 frozen scheduled task cannot receive messages, steer or migrate tools',
  await assert.rejects(s.steer(id,{message:'new scope'}),{code:'WORKSPACE_WORKFLOW_INPUT_IMMUTABLE'})
 }))
 
-test('08 failed repeating workflow waits on original Task, later due cannot auto-retry',()=>modelFixture(async({s,setTime})=>{
+test('08 failed repeating workflow pauses for user review and creates no later Task',()=>modelFixture(async({s,setTime})=>{
  const p=(await s.workspaceSchedules.manage({...command('failure-interval'),rule:{type:'interval',seconds:60,anchor:new Date(start+60000).toISOString()}})).receipt.schedule
  setTime(start+60000);await s.workspaceScheduler.tick();const id=(await s.workspaceSchedules.list({scheduleId:p.id})).items[0].taskId;await settled(s,id);await s.workspaceScheduler.tick()
- setTime(start+600000);await s.workspaceScheduler.tick();assert.equal((await s.list()).length,1);assert.equal((await s.workspaceSchedules.list({scheduleId:p.id})).items[0].state,'waiting')
+ let schedule=(await s.workspaceSchedules.list({})).items.find(item=>item.id===p.id);assert.equal(schedule.status,'paused')
+ setTime(start+600000);await s.workspaceScheduler.tick();assert.equal((await s.list()).length,1);assert.equal((await s.workspaceSchedules.list({scheduleId:p.id})).items[0].state,'failed')
+ await s.workspaceSchedules.manage({requestId:'resume-after-failure',command:'resume',id:p.id,expectedRevision:schedule.revision,confirmed:true})
+ schedule=(await s.workspaceSchedules.list({})).items.find(item=>item.id===p.id);assert.equal(schedule.status,'active')
 },async()=>{throw Error('failed repeating model')}))
 test('08 MCP schedule tool returns non-executable bounded draft, cannot self-confirm or create a plan',()=>fixture(async({s})=>{
  const {MCP_VERSION}=await import('./workspace-mcp-protocol.mjs')

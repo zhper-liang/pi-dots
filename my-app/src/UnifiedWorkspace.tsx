@@ -1,6 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
-import { useRef, useState } from 'react'
-import LocalWorkspace from './LocalWorkspace'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import ScheduleWorkspace from './ScheduleWorkspace'
 import BotRoutines from './BotRoutines'
 import CalendarBoard from './CalendarBoard'
@@ -8,11 +7,11 @@ import SettingsPage from './SettingsPage'
 import { AutomationBanner } from './AutomationControls'
 import { MenuIcon } from './Icons'
 import { useDrawer, useMediaQuery } from './useDrawer'
-import { workspaceViews, itemTabs, nextItemTab } from './workspace-navigation.mjs'
+import { workspaceViews, itemTabs, nextItemTab, resolveItemTab, isLegacyTodoHash } from './workspace-navigation.mjs'
 import type { ItemTab, WorkspaceView } from './workspace-navigation.mjs'
 
 type Props = {
-  bots: { id: string; name: string; status?: string }[]; onOpenTask: (taskId: number, botId: string) => void
+  bots: { id: string; name: string; status?: string; active?: boolean }[]; onOpenTask: (taskId: number, botId: string) => void
   token: string; view: WorkspaceView; itemTab: ItemTab; onItemTab: (tab: ItemTab) => void; onView: (view: WorkspaceView) => void
   sidebar: (shell: { collapsed: boolean; onToggleCollapsed: () => void; onClose: () => void }) => ReactNode
   title: string; home: ReactNode; inboxSummary?: ReactNode; footer?: ReactNode; children: ReactNode
@@ -23,9 +22,24 @@ type Props = {
  * (hidden attribute) so switching views never erases a draft or an unconfirmed request.
  */
 export default function UnifiedWorkspace({ bots, onOpenTask, token, view, itemTab, onItemTab, onView, sidebar, title, home, inboxSummary, footer, children }: Props) {
+  const [legacyTodoHash, setLegacyTodoHash] = useState(() => isLegacyTodoHash(window.location.hash))
+  const restoreLegacyTodo = useEffectEvent(() => {
+    const legacy = isLegacyTodoHash(window.location.hash)
+    setLegacyTodoHash(legacy)
+    if (legacy) { onItemTab('calendar'); onView('items') }
+  })
+  useEffect(() => {
+    restoreLegacyTodo()
+    window.addEventListener('hashchange', restoreLegacyTodo)
+    return () => window.removeEventListener('hashchange', restoreLegacyTodo)
+  }, [])
+  const visibleItemTab = resolveItemTab(itemTab)
   const [collapsed, setCollapsed] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [routineBot, setRoutineBot] = useState('chief')
+  const [refreshKey, setRefreshKey] = useState(0)
+  const onChanged = () => setRefreshKey(value => value + 1)
+  const routineChoices = bots.map(bot => ({ id: bot.id, name: bot.name, status: bot.status === 'inactive' ? 'inactive' as const : 'active' as const }))
   const [automation, setAutomation] = useState<'schedules' | 'runs'>('schedules')
   const tabRefs = useRef<Partial<Record<ItemTab, HTMLButtonElement | null>>>({})
   const sidebarRef = useRef<HTMLElement>(null)
@@ -37,8 +51,8 @@ export default function UnifiedWorkspace({ bots, onOpenTask, token, view, itemTa
   const drawer = phone && drawerOpen
   useDrawer(sidebarRef, { open: drawer, modal: true, onClose: () => setDrawerOpen(false), initialFocus: '[aria-current="page"]', returnFocus: menuRef })
   function onTabKey(event: ReactKeyboardEvent) {
-    const next = nextItemTab(itemTab, event.key)
-    if (next === itemTab) return
+    const next = nextItemTab(visibleItemTab, event.key)
+    if (next === visibleItemTab) return
     event.preventDefault(); onItemTab(next); tabRefs.current[next]?.focus()
   }
   const page = workspaceViews.find((item) => item.id === view)!
@@ -60,12 +74,12 @@ export default function UnifiedWorkspace({ bots, onOpenTask, token, view, itemTa
       <div id="workspace-active-panel" aria-live="polite">
         <section id="workspace-panel-home" hidden={view !== 'home'} className="shell-chat-page">{home}</section>
         <section id="workspace-panel-items" hidden={view !== 'items'} className="pd-items">
+          {(itemTab === 'todos' || (legacyTodoHash && visibleItemTab === 'calendar')) && <p role="status" className="shell-muted">独立待办入口已收起，现显示日历；原待办数据与关联保持不变。</p>}
           <div className="pd-subtabs" role="tablist" aria-label="事项">
-            {itemTabs.map((tab) => <button key={tab.id} ref={(el) => { tabRefs.current[tab.id] = el }} type="button" role="tab" id={`items-tab-${tab.id}`} aria-selected={itemTab === tab.id} aria-controls={`items-panel-${tab.id}`} tabIndex={itemTab === tab.id ? 0 : -1} onKeyDown={onTabKey} onClick={() => onItemTab(tab.id)}>{tab.label}</button>)}
+            {itemTabs.map((tab) => <button key={tab.id} ref={(el) => { tabRefs.current[tab.id] = el }} type="button" role="tab" id={`items-tab-${tab.id}`} aria-selected={visibleItemTab === tab.id} aria-controls={`items-panel-${tab.id}`} tabIndex={visibleItemTab === tab.id ? 0 : -1} onKeyDown={onTabKey} onClick={() => onItemTab(tab.id)}>{tab.label}</button>)}
           </div>
-          <div id="items-panel-calendar" role="tabpanel" aria-labelledby="items-tab-calendar" hidden={itemTab !== 'calendar'} className="workspace-page"><CalendarBoard token={token} initialMode="day" active={view === 'items' && itemTab === 'calendar'} /></div>
-          <div id="items-panel-todos" role="tabpanel" aria-labelledby="items-tab-todos" hidden={itemTab !== 'todos'} className="workspace-page"><LocalWorkspace token={token} view="todos" /></div>
-          <div id="items-panel-automation" role="tabpanel" aria-labelledby="items-tab-automation" hidden={itemTab !== 'automation'} className="workspace-page">
+          <div id="items-panel-calendar" role="tabpanel" aria-labelledby="items-tab-calendar" hidden={visibleItemTab !== 'calendar'} className="workspace-page"><CalendarBoard token={token} refreshKey={refreshKey} onChanged={onChanged} initialMode="day" active={view === 'items' && visibleItemTab === 'calendar'} /></div>
+          <div id="items-panel-automation" role="tabpanel" aria-labelledby="items-tab-automation" hidden={visibleItemTab !== 'automation'} className="workspace-page">
             <div className="shell-filter" role="group" aria-label="自动化视图">
               <button type="button" aria-pressed={automation === 'schedules'} onClick={() => setAutomation('schedules')}>定时任务</button>
               <button type="button" aria-pressed={automation === 'runs'} onClick={() => setAutomation('runs')}>执行记录</button>
@@ -73,7 +87,7 @@ export default function UnifiedWorkspace({ bots, onOpenTask, token, view, itemTa
             <div hidden={automation !== 'schedules'} className="items-routines">
               <h2>例行任务</h2>
               <label>执行 Bot<select aria-label="事项例行任务 Bot" value={routineBot} onChange={event => setRoutineBot(event.target.value)}>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}{bot.status === 'inactive' ? '（已停用）' : ''}</option>)}</select></label>
-              {bots.map(bot => <div key={bot.id} hidden={routineBot !== bot.id}><BotRoutines token={token} botId={bot.id} botName={bot.name} readOnly={bot.status === 'inactive'} onOpenTask={id => onOpenTask(id, bot.id)} /></div>)}
+              {bots.map(bot => <div key={bot.id} hidden={routineBot !== bot.id}><BotRoutines bots={routineChoices} refreshKey={refreshKey} onChanged={onChanged} token={token} botId={bot.id} botName={bot.name} readOnly={bot.status === 'inactive'} onOpenTask={id => onOpenTask(id, bot.id)} /></div>)}
             </div>
             <details className="shell-more" open={automation === 'runs'}><summary>{automation === 'runs' ? '全部计划执行记录' : '全部计划与只读简报'}</summary><ScheduleWorkspace token={token} view={automation} /></details>
           </div>

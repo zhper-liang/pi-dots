@@ -6,7 +6,8 @@ import { normalizeScheduleRule } from './workspace-schedule-rules.mjs'
 import { taskParameters } from './task-config.mjs'
 import { DetectorDirty, dirtyKey } from './detector-state.mjs'
 import { dueInstant } from './detectors.mjs'
-import { mainSessionFor } from './main-session.mjs'
+import { createRoutineDelivery } from './routine-delivery.mjs'
+import { isDeleted, resolveCurrentMain } from './session-lifecycle.mjs'
 
 export const AGENT_WORKFLOW = 'agent_readonly_workflow'
 const READ_TOOLS = ['workspace.list', 'workspace.get']
@@ -70,6 +71,31 @@ export function createAgentWorkflows({ repository: repo, authority, createTask, 
     await repo.put(tx, 'Occurrence', { ...o, taskId: id, state: 'waiting', attempts: o.attempts + 1, startedAt: new Date(now()).toISOString() })
     return { taskId: id, occurrenceId: o.id }
   }
+  async function deliver(tx, o, s, card, state) {
+    if (state === 'unknown') return { delivered: false, state: 'suppressed', reason: 'unknown_outcome' }
+    const readCard = async (readTx, taskId) => {
+      const record = await readTx.task(taskId), archive = record?.state.status === 'terminal' ? await readCancelledArchive(readTx, taskId) : null
+      return archive ? archive.documents[TaskCard.definition.kind] ?? null : record ? await readTx.doc(TaskCard, taskId) : null
+    }
+    const delivery = createRoutineDelivery({
+      readCard,
+      canDeliver: async (readTx, { occurrence }) => !occurrence.test && s.actionSpec.notification === 'inbox' && await authorized(readTx, s),
+      readReceipt: async (readTx, key) => {
+        const row = await get(readTx, 'Delivery', key)
+        return row?.result?.routineDelivery ?? null
+      },
+      writeReceipt: async (writeTx, key, receipt) => {
+        const common = { schemaVersion: 1, ownerId: LOCAL_OWNER, sourceId: 'local', id: key, dedupeKey: key, itemVersion: 1, status: 'recorded', channel: 'inbox', occurrenceId: o.id, scheduleId: s.id, taskId: o.taskId, sourceIds: copy(s.actionSpec.sourceIds), recordedAt: receipt.recordedAt }
+        await repo.put(writeTx, 'Delivery', { ...common, attempts: 1, notificationId: key, result: { userReceived: 'unknown', routineDelivery: receipt } })
+        await repo.put(writeTx, 'Notification', { ...common, deliveryId: key, status: 'unread' })
+      },
+      appendMirror: (writeTx, conversationId, data) => writeTx.appendEntry(conversationId, { kind: 'pidot.mirror', data }),
+      currentMain: resolveCurrentMain,
+      deleted: isDeleted,
+      now: () => new Date(now()).toISOString(),
+    })
+    return delivery.deliver(tx, { botId: s.actionSpec.botId, occurrence: o, result: { state, taskId: o.taskId } })
+  }
   async function reconcile(tx, o, s) {
     const record = await tx.task(o.taskId), archive = record?.state.status === 'terminal' ? await readCancelledArchive(tx, o.taskId) : null
     if (record?.state.status === 'terminal' && !archive) { await repo.put(tx, 'Occurrence', { ...o, state: 'unknown', reason: 'terminal_task_archive_unavailable_original_link_preserved' }); return }
@@ -79,40 +105,26 @@ export function createAgentWorkflows({ repository: repo, authority, createTask, 
     const cp = record?.state.checkpoint, finished = record?.state.status === 'terminal' || cp?.phase === 'awaitInput' && cp.lastOutcome && (await tx.doc(ChatInput, o.taskId)).entryId === null
     if (!finished) {
       if (cp?.phase === 'workflowUnknown' && o.state !== 'unknown') {
-        await repo.put(tx, 'Occurrence', { ...o, state: 'unknown', reason: 'model_outcome_unknown_original_task_preserved', result: { taskId: o.taskId, usage, notificationDelivered: false } })
-        const operation = await get(tx, 'Operation', o.operationId, 'operations'); if (operation) await repo.put(tx, 'Operation', { ...operation, state: 'unknown', receipt: { ...operation.receipt, usage } })
+        const result = { taskId: o.taskId, usage, outcome: 'unknown', notificationDelivered: false }
+        const receipt = await deliver(tx, o, s, card, 'unknown')
+        await repo.put(tx, 'Occurrence', { ...o, state: 'unknown', reason: 'model_outcome_unknown_original_task_preserved', ...(receipt.delivered ? { deliveryId: receipt.key, result: { ...result, deliveryId: receipt.key } } : { result }) })
+        const operation = await get(tx, 'Operation', o.operationId, 'operations'); if (operation) await repo.put(tx, 'Operation', { ...operation, state: 'unknown', receipt: { ...operation.receipt, usage, deliveryId: receipt.key ?? undefined } })
       }
       return
     }
-    const state = record?.state.status === 'terminal' ? record.state.outcome?.status === 'aborted' ? 'cancelled' : 'failed' : cp.lastOutcome === 'completed' ? 'succeeded' : ['limited', 'failed'].includes(cp.lastOutcome) ? 'waiting' : 'failed'
+    const state = record?.state.status === 'terminal' ? record.state.outcome?.status === 'aborted' ? 'cancelled' : 'failed' : cp.lastOutcome === 'completed' ? 'succeeded' : cp.lastOutcome === 'limited' ? 'waiting' : 'failed'
     const result = { taskId: o.taskId, usage, outcome: cp?.lastOutcome ?? record.state.outcome?.status, notificationDelivered: false }
     if (o.result && payloadHash(o.result) === payloadHash(result) && o.state === state) return
-    const time = new Date(now()).toISOString(), allowed = await authorized(tx, s), id = payloadHash(['workflow-notification', o.id])
-    let deliveryId = o.deliveryId
-    if (!o.test && s.actionSpec.notification === 'inbox' && allowed && !deliveryId) {
-      deliveryId = id
-      const common = { schemaVersion: 1, ownerId: LOCAL_OWNER, sourceId: 'local', id, dedupeKey: id, itemVersion: 1, status: 'recorded', channel: 'inbox', occurrenceId: o.id, scheduleId: s.id, taskId: o.taskId, sourceIds: s.actionSpec.sourceIds, recordedAt: time }
-      await repo.put(tx, 'Delivery', { ...common, attempts: 1, notificationId: id, result: { userReceived: 'unknown' } })
-      await repo.put(tx, 'Notification', { ...common, deliveryId: id })
-      // Same commit/dedupe boundary as the inbox: no model wake, no second Task, no
-      // copied source result (the linked original Task keeps live permission filtering).
-      // notification=none and test runs intentionally keep only their run record.
-      const mainId = await mainSessionFor(tx, s.actionSpec.botId)
-      const mainRecord = mainId && await tx.task(mainId)
-      if (mainRecord && mainRecord.state.status !== 'terminal') {
-        const mainCard = await tx.doc(TaskCard, mainId)
-        if (mainCard.kind === 'main' && mainCard.bot.id === s.actionSpec.botId) {
-          const label = { succeeded: '已完成', failed: '失败', cancelled: '已取消', waiting: '需要处理' }[state]
-          await tx.appendEntry(mainCard.conversationId, { kind: 'pidot.mirror', data: { mirrorKind: 'finished', childTaskId: o.taskId, childTitle: card.title, botId: s.actionSpec.botId, summary: `例行任务${label}，结果请查看原任务。`, outcome: state === 'waiting' ? 'limited' : state, createdAt: time } })
-        }
-      }
-    }
-    const operation = await get(tx, 'Operation', o.operationId, 'operations'); if (operation) await repo.put(tx, 'Operation', { ...operation, state: state === 'waiting' ? 'dispatching' : state, receipt: result })
-    await repo.put(tx, 'Occurrence', { ...o, state, result, ...(deliveryId ? { deliveryId } : {}), ...(state !== 'waiting' ? { finishedAt: time } : {}) })
+    const time = new Date(now()).toISOString(), receipt = await deliver(tx, o, s, card, state), deliveryId = receipt.key
+    const operation = await get(tx, 'Operation', o.operationId, 'operations'); if (operation) await repo.put(tx, 'Operation', { ...operation, state: state === 'waiting' ? 'dispatching' : state, receipt: { ...result, ...(deliveryId ? { deliveryId } : {}) } })
+    await repo.put(tx, 'Occurrence', { ...o, state, result: { ...result, ...(deliveryId ? { deliveryId } : {}) }, ...(deliveryId ? { deliveryId } : {}), ...(state !== 'waiting' ? { finishedAt: time } : {}) })
     if (state === 'waiting') return
     if (o.test) await repo.put(tx, 'Schedule', { ...s, testOccurrenceId: null })
     // D-14: changes made while a "日程变更" routine ran (its own included) never re-trigger it.
-    else await repo.put(tx, 'Schedule', { ...s, activeOccurrenceId: null, ...(s.rule.type === 'at' && s.enabled ? { enabled: false, status: 'completed' } : {}), ...(s.rule.type === 'event' && s.rule.event === 'event_changed' ? { eventCursor: { ...s.eventCursor, ...await eventCount(tx, s), at: iso(now()) } } : {}) })
+    else await repo.put(tx, 'Schedule', { ...s, activeOccurrenceId: null,
+      ...(s.rule.type === 'at' && s.enabled ? { enabled: false, status: 'completed' } : {}),
+      ...(state === 'failed' && s.rule.type !== 'at' && s.enabled ? { enabled: false, status: 'paused' } : {}),
+      ...(s.rule.type === 'event' && s.rule.event === 'event_changed' ? { eventCursor: { ...s.eventCursor, ...await eventCount(tx, s), at: iso(now()) } } : {}) })
   }
   // ----- PLAN §8.5 event triggers. Counters come from DetectorDirty, written in the data-change commit.
   async function eventCount(tx, s) {

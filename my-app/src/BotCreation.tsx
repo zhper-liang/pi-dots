@@ -20,14 +20,14 @@ const templates: { name: string; role: string; description: string; color: strin
 ]
 export type BotCreationProps = { token: string; onCreated: (bot: CreatedBot, mainTaskId: number | null) => void; onCancel?: () => void }
 
-// PLAN §8.6: only the name is needed. Duties come from the server's name template when left empty;
-// everything else sits under "高级".
+// Only the name is required. Optional templates prefill text and appearance, never capabilities.
 export default function BotCreation({ token, onCreated, onCancel }: BotCreationProps) {
   const [pending] = useState(savedPending)
   const [name, setName] = useState(pending?.name ?? '')
   const [role, setRole] = useState('')
   const [description, setDescription] = useState(pending?.description ?? '')
-  const [profile, setProfile] = useState(pending?.profile ?? 'general')
+  // Preserve the original request shape when replaying a legacy pending creation.
+  const profile = pending?.profile ?? 'general'
   const [color, setColor] = useState<string>(avatarColors[0])
   const [shape, setShape] = useState<AvatarShape>('circle')
   const [busy, setBusy] = useState(false)
@@ -54,33 +54,32 @@ export default function BotCreation({ token, onCreated, onCancel }: BotCreationP
       if (!response.ok) throw new Error(body.error?.message ?? '创建失败。')
       if (abort.signal.aborted) return
       try { sessionStorage.removeItem(pendingKey) } catch { /* optional */ }
-      saveLook(body.bot.id, { color, shape, role: role.trim() || body.inferred?.role || undefined })
+      saveLook(body.bot.id, { color, shape, role: role.trim() || undefined })
       request.current = null; setName(''); setDescription(''); setRole(''); onCreated(body.bot, typeof body.mainTaskId === 'number' ? body.mainTaskId : null)
     } catch (error) {
       if (!abort.signal.aborted) setError(error instanceof Error && error.name !== 'TypeError' ? error.message : '创建结果未确认；可重试相同内容（不会重复创建），或刷新列表核对。')
     } finally { if (!abort.signal.aborted) { submitting.current = false; setBusy(false) } }
   }
   return <div className="bot-page">
-    <header className="bot-page-head"><h1>新建 Bot</h1><p className="shell-muted">起个名字就能建。它负责什么会按名字自动写好，建完直接进入和它的对话。</p></header>
+    <header className="bot-page-head"><h1>新建 Bot</h1><p className="shell-muted">起个名字就能创建空白 Bot，建完进入对话。人格与能力可以按需配置。</p></header>
     <form onSubmit={e => void create(e)} className="bot-form">
-      <div className="bot-preview"><BotAvatar name={name || 'B'} look={{ color, shape }} size={96} /><div><strong>{name || '未命名 Bot'}</strong><p className="shell-muted">{role || '角色按名字自动生成'}</p></div></div>
+      <div className="bot-preview"><BotAvatar name={name || 'B'} look={{ color, shape }} size={96} /><div><strong>{name || '未命名 Bot'}</strong><p className="shell-muted">{role || '可选的显示角色'}</p></div></div>
       <label htmlFor="bot-name">名字</label><input id="bot-name" required maxLength={60} value={name} onChange={e => setName(e.target.value)} disabled={busy} placeholder="例如：日程助理" />
-      <p className="shell-muted small">默认拥有全部可分配工具组，组内写入（含删除）直接做；可在详情「规则」中切换为先问，资源在「设置」中调整。</p>
+      <p className="shell-muted small">新 Bot 默认不分配工具、来源、MCP 或 Skill；需要时可在 Bot 详情中配置。</p>
       <details className="bot-advanced"><summary>高级</summary>
-        <label htmlFor="bot-description">负责什么</label><textarea id="bot-description" rows={4} maxLength={2000} value={description} onChange={e => setDescription(e.target.value)} disabled={busy} placeholder="不填就按名字自动生成" />
-        <label htmlFor="bot-role">角色</label><input id="bot-role" maxLength={40} value={role} onChange={e => setRole(e.target.value)} disabled={busy} placeholder="不填就按名字自动生成" />
+        <label htmlFor="bot-description">负责什么</label><textarea id="bot-description" rows={4} maxLength={2000} value={description} onChange={e => setDescription(e.target.value)} disabled={busy} placeholder="可选，填写它的任务范围或人格说明" />
+        <label htmlFor="bot-role">角色</label><input id="bot-role" maxLength={40} value={role} onChange={e => setRole(e.target.value)} disabled={busy} placeholder="可选，仅用于界面显示" />
         <fieldset className="bot-picker" disabled={busy}><legend>颜色</legend>
           {avatarColors.map(c => <label key={c} className="swatch" style={{ background: c }}><input type="radio" name="bot-color" checked={color === c} onChange={() => setColor(c)} aria-label={`颜色 ${avatarColors.indexOf(c) + 1}`} /></label>)}
         </fieldset>
         <fieldset className="bot-picker" disabled={busy}><legend>形状</legend>
           {avatarShapes.map(s => <label key={s} className="shape-option" title={shapeLabels[s]}><input type="radio" name="bot-shape" checked={shape === s} onChange={() => setShape(s)} aria-label={shapeLabels[s]} /><ShapeIcon shape={s} color={shape === s ? color : '#a1a1aa'} size={28} /></label>)}
         </fieldset>
-        <label htmlFor="bot-profile">基础能力</label><select id="bot-profile" value={profile} onChange={e => setProfile(e.target.value)} disabled={busy}><option value="general">通用对话与问题登记</option><option value="mock-calendar">模拟日历</option></select>
       </details>
       {error && <p role="alert" className="shell-alert-card">{error}</p>}
       <div className="bot-actions">{onCancel && <button type="button" onClick={onCancel} disabled={busy}>取消</button>}<button className="primary" disabled={busy || !name.trim()}>{busy ? '正在创建…' : '创建 Bot'}</button></div>
     </form>
-    <section aria-labelledby="bot-templates" className="bot-templates"><h2 id="bot-templates">从模板开始</h2><p className="shell-muted small">可以直接填名字，也可以选择模板预填；建好后在详情调整工具和规则。</p>
+    <section aria-labelledby="bot-templates" className="bot-templates"><h2 id="bot-templates">从模板开始</h2><p className="shell-muted small">模板只预填名称、说明和外观，不会授予工具或数据访问能力。</p>
       <div className="bot-template-grid">{templates.map(t => <button type="button" key={t.name} className="bot-template" disabled={busy} onClick={() => applyTemplate(t)}><BotAvatar name={t.name} look={t} size={36} /><span><strong>{t.name}</strong><small>{t.description}</small></span></button>)}</div>
     </section>
   </div>

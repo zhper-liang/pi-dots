@@ -2,7 +2,7 @@ import { defineDoc } from '@earendil-works/pi-durable'
 import { createHash } from 'node:crypto'
 import { TaskInputError, taskParameters } from './task-config.mjs'
 import { BotDirectory } from './bot-directory.mjs'
-import { workspaceShareAllowed, workspaceHistoryAllowed } from './workspace-grants.mjs'
+import { workspaceShareAllowed, workspaceHistoryAllowed, workspaceUsedTools, workspaceUsedResources } from './workspace-grants.mjs'
 import { TaskApprovals } from './approvals.mjs'
 import { TaskBlockers } from './blockers.mjs'
 import { CallUsage, ToolAccess, toolSets } from './tools.mjs'
@@ -20,6 +20,11 @@ const canonical = x => Array.isArray(x) ? x.map(canonical) : x && typeof x === '
 const hash = x => createHash('sha256').update(JSON.stringify(canonical(x))).digest('hex')
 const fail = (status, code, message) => { throw new TaskInputError(status, code, message) }
 const OUTCOME = { succeeded: '已完成', failed: '失败', cancelled: '已取消' }
+const belongsToMain = (doc, child, main) => child.botId === main.bot.id &&
+  (child.mainTaskId === main.taskId || doc.byBot[main.bot.id] === main.taskId)
+const digestSource = card => ({ bot: { id: card.bot.id }, kind: card.kind,
+  workspaceUsedTools: workspaceUsedTools(card), workspaceUsedResources: workspaceUsedResources(card),
+  workspaceUsedReadScopes: copy(card.workspaceUsedReadScopes ?? {}), externalMcpUsedRefs: copy(card.externalMcpUsedRefs ?? []) })
 
 export const MAIN_SYSTEM_PROMPT = '\n这是你的主会话：可直接使用当前Bot已分配的工具完成工作。较长执行或需要等待的工作，用task_create派给自己的独立任务，不要在这里等待结果；进度用task_status查看。用户想定期或在某事发生时自动做某事，用routine_propose为自己创建例行任务；默认直接执行，规则或全局暂停可能要求确认。没有工具回执不得声称已执行。'
 
@@ -28,10 +33,9 @@ export const MAIN_DELEGATION_PROMPT = '\n要把工作交给另一个Bot（包括
 
 export async function mainSessionFor(tx, botId) { return (await tx.doc(MainSessions)).byBot[botId] ?? null }
 
-/** Idempotent: exactly one main session per active Bot, created with the Bot's live configuration. */
-export async function ensureMainSession(tx, botId, { createTask, TaskCard, rootConversationId }) {
+/** Create a fresh main session for an active Bot in the caller's transaction. */
+export async function createMainSession(tx, botId, { createTask, TaskCard, rootConversationId }) {
   const doc = await tx.doc(MainSessions)
-  if (doc.byBot[botId]) return doc.byBot[botId]
   const bot = (await tx.doc(BotDirectory)).items.find(b => b.id === botId)
   if (!bot || (bot.status ?? 'active') === 'inactive') return null
   const taskId = await createTask(tx, { botId, title: bot.name }, rootConversationId)
@@ -39,8 +43,34 @@ export async function ensureMainSession(tx, botId, { createTask, TaskCard, rootC
   card.kind = 'main'; card.origin = 'user'
   if (botId === 'chief') card.managementTools = [...MAIN_CHIEF_TOOLS]
   doc.byBot[botId] = taskId
-  ;(await tx.doc(TaskDigest)).byMain[taskId] = []
+  doc.conversations ??= {}
+  doc.conversations[taskId] = card.conversationId
+  const digest = await tx.doc(TaskDigest)
+  digest.byMain[taskId] = []
+  // Results committed while the clear request was between its stop and swap commits
+  // are delivery records, not old chat history. Hand only those pending records over.
+  for (const [key, pending] of Object.entries(doc.pendingMirrors ?? {})) {
+    if ((pending.card.mainParent.botId ?? pending.card.bot.id) !== botId) continue
+    if (pending.data.mirrorKind === 'finished') {
+      const origin = pending.card.mainParent.mainTaskId
+      const item = (digest.byMain[origin] ?? []).find(item => item.taskId === pending.card.taskId)
+      if (item) {
+        const transferred = copy(item)
+        delete transferred.consumingEntryId
+        if (!digest.byMain[taskId].some(item => item.taskId === transferred.taskId)) digest.byMain[taskId].push(transferred)
+        digest.byMain[origin] = digest.byMain[origin].filter(item => item.taskId !== transferred.taskId)
+      }
+    }
+    await mirrorToMain(tx, pending.card, pending.data)
+    delete doc.pendingMirrors[key]
+  }
   return taskId
+}
+
+/** Idempotent: exactly one main session per active Bot, created with the Bot's live configuration. */
+export async function ensureMainSession(tx, botId, deps) {
+  const existing = (await tx.doc(MainSessions)).byBot[botId]
+  return existing ?? createMainSession(tx, botId, deps)
 }
 
 export function mainSessionService({ TaskCard, ChatInput, createTask }) {
@@ -55,7 +85,7 @@ export function mainSessionService({ TaskCard, ChatInput, createTask }) {
     if (!bot || (bot.status ?? 'active') === 'inactive') fail(409, 'BOT_INACTIVE', 'Bot 已停用，不能派新任务。')
     // Reads only (no append before createTask): a terminally faulted child no longer counts.
     let running = 0
-    for (const [id, c] of Object.entries(doc.children)) if (c.mainTaskId === card.taskId && c.state === 'running') { const r = await tx.task(Number(id)); if (r && r.state.status !== 'terminal') running++ }
+    for (const [id, c] of Object.entries(doc.children)) if (belongsToMain(doc, c, card) && c.state === 'running') { const r = await tx.task(Number(id)); if (r && r.state.status !== 'terminal') running++ }
     if (running >= MAIN_TASK_LIMIT) fail(409, 'MAIN_CONCURRENCY_LIMIT', `已有 ${running} 个任务在进行，先等其中一个结束或取消，再派新任务。`)
     const parent = await tx.task(card.taskId)
     const childTaskId = await createTask(tx, { botId: card.bot.id, title: (a.title ?? a.goal).trim().slice(0, 100), taskState: { goal: a.goal, completionCriteria: a.completionCriteria } }, parent.conversationId)
@@ -74,7 +104,10 @@ export function mainSessionService({ TaskCard, ChatInput, createTask }) {
   }
   async function status(tx, card, call) {
     const doc = await tx.doc(MainSessions), want = call.arguments.taskId
-    const rows = Object.entries(doc.children).filter(([id, c]) => c.mainTaskId === card.taskId && (want === undefined || Number(id) === want))
+    const rows = [], { isDeleted } = await import('./session-lifecycle.mjs')
+    for (const [id, child] of Object.entries(doc.children)) {
+      if (belongsToMain(doc, child, card) && (want === undefined || Number(id) === want) && !await isDeleted(tx, Number(id))) rows.push([id, child])
+    }
     if (want !== undefined && !rows.length) fail(404, 'MAIN_TASK_NOT_OWNED', '只能查看本主会话派出的任务。')
     const items = []
     for (const [id, c] of rows) {
@@ -87,7 +120,7 @@ export function mainSessionService({ TaskCard, ChatInput, createTask }) {
         pendingApprovals = (await tx.doc(TaskApprovals, taskId)).items.filter(i => i.status === 'pending').length
         pendingBlockers = (await tx.doc(TaskBlockers, taskId)).items.filter(i => i.status === 'pending').length
         const childCard = await tx.doc(TaskCard, taskId), access = await tx.doc(ToolAccess)
-        shared = c.result !== null && workspaceShareAllowed(childCard, card, access) && await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, (await tx.doc(BotDirectory)).items, access))
+        shared = c.result !== null && workspaceShareAllowed(childCard, card, access) && await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, (await tx.doc(BotDirectory)).items, access)) && (!c.source || workspaceShareAllowed(c.source, card, access) && await workspaceHistoryAllowed(tx, c.source, toolSets(c.source, (await tx.doc(BotDirectory)).items, access)))
       }
       items.push({ taskId, title: c.title, state: view.state, outcome: view.outcome, createdAt: c.createdAt, overAt: c.overAt, pendingApprovals, pendingBlockers, ...(shared ? { resultExcerpt: c.result } : {}) })
     }
@@ -110,9 +143,18 @@ export async function markMainChildOver(tx, childCard, outcome, content = null) 
   const doc = await tx.doc(MainSessions), row = doc.children[childCard.taskId]
   if (!row || row.state === 'over') return
   const overAt = new Date().toISOString()
-  Object.assign(row, { state: 'over', outcome, overAt, result: typeof content === 'string' ? content.slice(0, 500) : null })
-  const item = ((await tx.doc(TaskDigest)).byMain[parent.mainTaskId] ?? []).find(i => i.taskId === childCard.taskId)
-  if (item) Object.assign(item, { state: 'over', outcome, overAt })
+  Object.assign(row, { state: 'over', outcome, overAt, source: digestSource(childCard), result: typeof content === 'string' ? content.slice(0, 500) : null })
+  const digest = await tx.doc(TaskDigest), currentMainId = doc.byBot[childCard.bot.id] ?? parent.mainTaskId
+  const sourceItems = digest.byMain[parent.mainTaskId] ?? []
+  const item = sourceItems.find(i => i.taskId === childCard.taskId)
+  if (item) {
+    Object.assign(item, { state: 'over', outcome, overAt, source: digestSource(childCard) })
+    if (currentMainId !== parent.mainTaskId) {
+      const targetItems = digest.byMain[currentMainId] ??= []
+      if (!targetItems.some(i => i.taskId === childCard.taskId)) targetItems.push(copy(item))
+      digest.byMain[parent.mainTaskId] = sourceItems.filter(i => i.taskId !== childCard.taskId)
+    }
+  }
   // D-20: a "帮我想办法" card shows its conclusion (user-facing system card only; never model context, I-08).
   const result = childCard.findingAssist && outcome === 'succeeded' && typeof content === 'string' && content.trim() ? { result: content.length > 500 ? `${content.slice(0, 500)}…` : content } : {}
   await mirrorToMain(tx, childCard, { mirrorKind: 'finished', outcome, summary: `任务「${childCard.title}」${OUTCOME[outcome] ?? outcome}`, ...result })
@@ -123,24 +165,53 @@ export async function markMainChildOver(tx, childCard, outcome, content = null) 
 /** A derived Task that faulted terminally never reaches finishReply or cancel: settle it as failed. */
 export async function reconcileMainChildren(tx, mainCard) {
   const doc = await tx.doc(MainSessions), dead = []
-  for (const [id, c] of Object.entries(doc.children)) if (c.mainTaskId === mainCard.taskId && c.state === 'running') {
+  for (const [id, c] of Object.entries(doc.children)) if (belongsToMain(doc, c, mainCard) && c.state === 'running') {
     const record = await tx.task(Number(id))
     if (!record || record.state.status === 'terminal') dead.push([Number(id), c, record?.state.outcome?.status === 'aborted' ? 'cancelled' : 'failed'])
   }
   // All table reads happen above; only document writes and appends follow.
-  for (const [taskId, c, outcome] of dead) await markMainChildOver(tx, { taskId, title: c.title, bot: { id: c.botId }, mainParent: { mainTaskId: mainCard.taskId, mainConversationId: mainCard.conversationId } }, outcome)
+  for (const [taskId, c, outcome] of dead) await markMainChildOver(tx, { taskId, title: c.title, bot: { id: c.botId }, mainParent: { mainTaskId: c.mainTaskId, mainConversationId: mainCard.conversationId } }, outcome)
 }
 
 /** Mirror card in the main session (I-08): a system entry; never wakes the model, never counted. */
 export async function mirrorToMain(tx, childCard, data) {
   const parent = childCard.mainParent
-  if (!parent?.mainConversationId) return
-  await tx.appendEntry(parent.mainConversationId, { kind: 'pidot.mirror', data: { ...copy(data), childTaskId: childCard.taskId, childTitle: childCard.title, botId: childCard.bot.id, createdAt: new Date().toISOString() } })
+  if (!parent?.mainTaskId) return
+  const doc = await tx.doc(MainSessions), botId = parent.botId ?? childCard.bot.id
+  const targetId = doc.byBot[botId] ?? parent.mainTaskId
+  const { isDeleted, SessionLifecycle } = await import('./session-lifecycle.mjs')
+  if (await isDeleted(tx, targetId)) return
+  const key = hash([childCard.taskId, data])
+  doc.mirrorReceipts ??= {}
+  if (Object.hasOwn(doc.mirrorReceipts, key)) return copy(doc.mirrorReceipts[key])
+  const clearing = Object.values((await tx.doc(SessionLifecycle)).requests).some(request => request.taskId === targetId && request.action === 'clear-main' && request.state !== 'succeeded')
+  if (clearing) {
+    doc.pendingMirrors ??= {}
+    doc.pendingMirrors[key] = { card: { ...digestSource(childCard), taskId: childCard.taskId, title: childCard.title, mainParent: copy(parent) }, data: copy(data) }
+    return { pending: true }
+  }
+  let conversationId = parent.mainConversationId
+  if (targetId !== parent.mainTaskId || !conversationId) {
+    conversationId = doc.conversations?.[targetId]
+    if (!conversationId) return
+    const access = await tx.doc(ToolAccess), bots = (await tx.doc(BotDirectory)).items
+    if (!workspaceShareAllowed(childCard, { bot: { id: botId } }, access) || !await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, bots, access))) return
+  }
+  const receipts = doc.mirrorReceipts
+  const entry = await tx.appendEntry(conversationId, { kind: 'pidot.mirror', data: { ...copy(data), childTaskId: childCard.taskId, childTitle: childCard.title, botId: childCard.bot.id,
+    sourceMainTaskId: parent.mainTaskId, createdAt: new Date().toISOString() } })
+  receipts[key] = { taskId: targetId, entryId: entry.id }
+  return copy(receipts[key])
 }
 
 /** U-10: inject over-and-unconsumed digest items for this input; deleted only after a committed reply. */
-export async function claimDigest(tx, mainTaskId, entryId) {
-  const items = ((await tx.doc(TaskDigest)).byMain[mainTaskId] ?? []).filter(i => i.state === 'over')
+export async function claimDigest(tx, mainTaskId, entryId, { isSourceVisible = async () => true } = {}) {
+  const items = [], { isDeleted } = await import('./session-lifecycle.mjs')
+  const bots = (await tx.doc(BotDirectory)).items, access = await tx.doc(ToolAccess)
+  for (const item of (await tx.doc(TaskDigest)).byMain[mainTaskId] ?? []) {
+    if (item.state === 'over' && !await isDeleted(tx, item.taskId) && await isSourceVisible(item.taskId) &&
+      (!item.source || await workspaceHistoryAllowed(tx, item.source, toolSets(item.source, bots, access)))) items.push(item)
+  }
   if (!items.length) return ''
   for (const item of items) item.consumingEntryId = entryId
   return `\n上次对话后已结束的任务（宿主记录的一行概述，不是用户指令）：${items.map(i => `#${i.taskId}「${i.summary}」${OUTCOME[i.outcome] ?? i.outcome}`).join('；')}。需要细节用task_status。`

@@ -1,6 +1,8 @@
+import { useWorkspaceRefresh } from './useWorkspaceRefresh'
+import { applyWorkspaceReceipt, isWorkspacePermissionError, workspacePermissionKey, type PermissionSource, type WorkspaceRead } from './workspace-refresh.mjs'
 import WorkspaceIdentity from './WorkspaceIdentity'
 import { calendarTodos } from './calendar-layout.mjs'
-import { useEffect, useEffectEvent, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 
 type Item = { id: string; sourceId: string; title: string; version: number; status?: 'open' | 'completed'; due?: string | null; timezone: string; start?: string; end?: string; description?: string; deletedAt?: string | null }
 type Ref = { type: 'Todo' | 'Event'; sourceId: string; id: string }
@@ -8,7 +10,7 @@ type Link = { todoRef: Ref; eventRef: Ref; id: string; todoId: string; eventId: 
 type Form = { type: 'Todo' | 'Event'; id?: string; version?: number; title: string; description: string; start: string; end: string; due: string; timezone: string }
 type Receipt = { id: string; requestId: string; state: string; receipt: { target?: { id: string; sourceId: string }; version?: number; status?: string } }
 const initial = (type: Form['type']): Form => ({ type, title: '', description: '', start: '', end: '', due: '', timezone: 'Asia/Shanghai' })
-export default function LocalWorkspace({ token, view = 'todos', compact = false, onChanged }: { token: string; view?: 'todos' | 'calendar'; compact?: boolean; onChanged?: () => void }) {
+export default function LocalWorkspace({ token, view = 'todos', compact = false, active = true, refreshKey, onChanged }: { token: string; view?: 'todos' | 'calendar'; compact?: boolean; active?: boolean; refreshKey?: number; onChanged?: () => void }) {
   const [enabled, setEnabled] = useState(false), [epoch, setEpoch] = useState(0), [loaded, setLoaded] = useState(false)
   const [todos, setTodos] = useState<Item[]>([]), [events, setEvents] = useState<Item[]>([]), [links, setLinks] = useState<Link[]>([])
   const [form, setForm] = useState<Form | null>(null), [deleting, setDeleting] = useState<{ type: Form['type']; item: Item } | null>(null)
@@ -19,62 +21,69 @@ export default function LocalWorkspace({ token, view = 'todos', compact = false,
   const [externalEvents, setExternalEvents] = useState<Item[]>([])
   const [linkConfirm, setLinkConfirm] = useState<{ todo: Item; event: Item } | null>(null)
   const [linkWindow, setLinkWindow] = useState(() => ({ start: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), end: new Date(Date.now() + 7 * 86400000).toISOString().replace(/\.\d{3}Z$/, 'Z') }))
-  const visibility = useRef(0)
+  const visibility = useRef(0), permission = useRef(''), identityToken = useRef(token), latestToken = useRef(token)
+  latestToken.current = token
+  const [refreshError, setRefreshError] = useState('')
   const running = useRef(false)
   const pending = useRef<{ key: string; requestId: string } | null>(null)
-  async function api<T>(path: string, input?: object): Promise<T> {
-    const response = await fetch(`/api/workspace/${path}`, { method: input ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, ...(input ? { 'Content-Type': 'application/json' } : {}) }, ...(input ? { body: JSON.stringify(input) } : {}) }).catch(() => { throw new Error('连接中断，结果未确认。请查询原请求回执，不要改参数重建请求。') })
+  async function api<T>(path: string, input?: object, signal?: AbortSignal): Promise<T> {
+    const response = await fetch(`/api/workspace/${path}`, { signal, method: input ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, ...(input ? { 'Content-Type': 'application/json' } : {}) }, ...(input ? { body: JSON.stringify(input) } : {}) }).catch(() => { throw new Error('连接中断，结果未确认。请查询原请求回执，不要改参数重建请求。') })
     const body = await response.json()
-    if (!response.ok) { const error = new Error(body.error?.message ?? '业务操作失败，请重试。'); error.name = response.status >= 500 ? 'NetworkError' : body.error?.code ?? String(response.status); throw error }
+    if (!response.ok) { const error = new Error(body.error?.message ?? '业务操作失败，请重试。'); error.name = response.status >= 500 ? 'NetworkError' : body.error?.code ?? String(response.status); if (isWorkspacePermissionError(Object.assign(error, { status: response.status })) && latestToken.current === token && !signal?.aborted) { clearProjection(true); setRefreshError('权限已失效，已隐藏旧数据。') }; throw error }
     return body.data
   }
-  async function page<T>(type: string): Promise<T[]> {
+  async function page<T>(type: string, read: WorkspaceRead): Promise<T[]> {
     const result: T[] = []; let cursor: number | undefined = 0
-    while (cursor !== undefined) { const p: { items: T[]; next?: number } = await api('query', { type, sourceId: 'local', cursor, limit: 100 }); result.push(...p.items); cursor = p.next }
+    while (cursor !== undefined) { if (!read.isCurrent()) return result; const p: { items: T[]; next?: number } = await api('query', { type, sourceId: 'local', cursor, limit: 100 }, read.signal); result.push(...p.items); cursor = p.next }
     return result
   }
-  async function refresh() {
-    // Discard stale authorized projection before every refresh or permission change.
-    const generation = ++visibility.current; setExternalEvents([]); setLinkConfirm(null); setTodoId(''); setEventId(''); setReceipt(null); setTodos([]); setEvents([]); setLinks([]); setLoaded(false); setForm(null); setDeleting(null)
-    const status = await api<{ sources: { id: string; authorized: boolean; grantEpoch: number }[] }>('status')
-    if (generation !== visibility.current) return
-    const source = status.sources.find(s => s.id === 'local'); setEnabled(source?.authorized ?? true); setEpoch(source?.grantEpoch ?? 0)
-    {
-      const [t, e, l] = await Promise.all([page<Item>('Todo'), page<Item>('Event'), page<Link>('ItemLink')])
-      if (generation !== visibility.current) return
-      setTodos(t); setEvents(e); setLinks(l)
+  function clearProjection(sensitive = false) {
+    setTodos([]); setEvents([]); setLinks([]); setExternalEvents([]); setReceipt(null); setLoaded(false); setEnabled(false)
+    if (sensitive) {
+      visibility.current++; permission.current = ''; setForm(null); setDeleting(null); setConflict(null); setLinkConfirm(null); setTodoId(''); setEventId(''); running.current = false; setBusy(false)
     }
-    setLoaded(true)
-    return true
   }
-  const initialize = useEffectEvent(() => { if (compact) void act(refresh) })
-  // A stale authorized projection is not retained after source revocation/change.
-  useEffect(() => {
-    let active = true, checking = false, identity: string | undefined
-    const check = async () => {
-      if (checking) return
-      checking = true
-      try {
-        const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-        const responses = await Promise.all([fetch('/api/workspace/status', { headers }), fetch('/api/workspace/external-sources', { method: 'POST', headers, body: '{}' })])
-        if (responses.some(r => !r.ok)) throw Error('来源权限检查失败')
-        const bodies = await Promise.all(responses.map(r => r.json()))
-        const next = JSON.stringify(bodies.map(b => b.data.sources))
-        if (active && identity !== undefined && next !== identity) {
-          visibility.current++; setTodos([]); setEvents([]); setLinks([]); setExternalEvents([]); setLinkConfirm(null); setReceipt(null); setLoaded(false); setForm(null); setDeleting(null)
-          setError('来源许可已变化，已隐藏旧数据，请刷新后重新确认。')
-        }
-        identity = next
-      } catch {
-        if (active) { visibility.current++; setTodos([]); setEvents([]); setLinks([]); setExternalEvents([]); setLinkConfirm(null); setReceipt(null); setForm(null); setDeleting(null); setLoaded(false); setError('无法核验当前来源权限，已隐藏关联数据。') }
-      } finally { checking = false }
-    }
-    initialize()
-    void check(); const timer = setInterval(() => void check(), 3000)
-    return () => { active = false; clearInterval(timer) }
-  }, [token, compact])
-  async function loadExternalEvents() {
+  const load = async (read: WorkspaceRead) => {
     const generation = visibility.current
+    const current = () => read.isCurrent() && generation === visibility.current
+    const permissions = async () => {
+      const [local, external] = await Promise.all([
+        api<{ sources: PermissionSource[] }>('status', undefined, read.signal),
+        api<{ sources: PermissionSource[] }>('external-sources', {}, read.signal)
+      ])
+      return { local: local.sources, key: workspacePermissionKey(local.sources, external.sources) }
+    }
+    try {
+      const before = await permissions()
+      if (!current()) return
+      if (permission.current && permission.current !== before.key) { clearProjection(true); permission.current = before.key; void refresh(); return }
+      permission.current = before.key
+      const source = before.local.find(source => source.id === 'local')
+      if (source?.authorized === false) { clearProjection(true); setRefreshError('当前来源权限已失效，已隐藏旧数据。'); return }
+      const [todos, events, links] = await Promise.all([page<Item>('Todo', read), page<Item>('Event', read), page<Link>('ItemLink', read)])
+      const after = await permissions()
+      if (!current()) return
+      if (after.key !== before.key) { clearProjection(true); permission.current = after.key; void refresh(); return }
+      setTodos(todos); setEvents(events); setLinks(links); setEnabled(true); setEpoch(source?.grantEpoch ?? 0); setLoaded(true); setRefreshError('')
+    } catch (error) {
+      if (!current()) return
+      clearProjection(isWorkspacePermissionError(error))
+      setRefreshError(isWorkspacePermissionError(error) ? '权限已失效，已隐藏旧数据。' : '暂时无法核验工作区，已隐藏旧数据；连接恢复后自动重试。')
+    }
+  }
+  const { refresh } = useWorkspaceRefresh({
+    scopeKey: JSON.stringify([token, 'local+external-full', view, linkWindow.start, linkWindow.end]), active, refreshKey, load,
+    onInvalidate: () => {
+      const tokenChanged = identityToken.current !== token
+      identityToken.current = token
+      visibility.current++
+      clearProjection(tokenChanged); setRefreshError('')
+      if (tokenChanged) { pending.current = null; setHasPending(false); setError('') }
+    },
+    onError: () => { clearProjection(); setRefreshError('工作区读取超时，已隐藏旧数据；稍后自动重试。') }
+  })
+  async function loadExternalEvents() {
+    const generation = visibility.current, operationToken = token
     setExternalEvents([]); setLinkConfirm(null); setEventId('')
     const { sources } = await api<{ sources: { id: string; authorized: boolean; readScope: string }[] }>('external-sources', {})
     const result: Item[] = []
@@ -83,7 +92,7 @@ export default function LocalWorkspace({ token, view = 'todos', compact = false,
       if (!page.complete || page.stale) throw Error('外部窗口不完整或缓存过期，请缩小时间范围后重试。')
       result.push(...page.items.filter(item => item.id && item.version && !item.deletedAt).map(item => ({ ...item, sourceId: source.id })))
     }
-    if (generation !== visibility.current) throw Error('查询期间来源权限已变化，请刷新。')
+    if (generation !== visibility.current || latestToken.current !== operationToken) throw Error('查询期间来源权限已变化，请刷新。')
     setExternalEvents(result)
     if (!result.length) throw Error('窗口内没有可关联的外部日程，或未授予当前用户完整读取权限。')
   }
@@ -98,29 +107,37 @@ export default function LocalWorkspace({ token, view = 'todos', compact = false,
     if (pending.current && pending.current.key !== key) throw Error('上次请求结果未确认，请先查询原请求回执。')
     if (!pending.current) pending.current = { key, requestId: crypto.randomUUID() }
     setHasPending(true)
-    const generation = visibility.current
+    const generation = visibility.current, operationToken = token
     let result: Receipt
     try { result = await api<Receipt>(path, { ...input, requestId: pending.current.requestId }) }
     catch (error) {
+      if (generation !== visibility.current || latestToken.current !== operationToken) return
       if ((error as Error).name.startsWith('WORKSPACE_')) { pending.current = null; setHasPending(false) }
       if ((error as Error).name === 'WORKSPACE_VERSION_CONFLICT') {
         pending.current = null; setHasPending(false)
         const target = input as { type: Form['type']; id: string }
         const detail = await api<{ items: Item[] }>('get', { sourceId: 'local', type: target.type, id: target.id })
+        if (generation !== visibility.current || latestToken.current !== operationToken) return
         setConflict(detail.items[0] ? { type: target.type, item: detail.items[0] } : null)
         setForm(null); setDeleting(null)
       }
       throw error
     }
-    if (generation !== visibility.current) throw Error('操作期间权限已变化；请查询原请求回执，不要重建请求。')
+    if (generation !== visibility.current || latestToken.current !== operationToken) return
+    if (result.state !== 'succeeded') { setReceipt(result); throw Error('请求尚未确认完成，请查询原请求回执。') }
     setReceipt(result); pending.current = null; setHasPending(false); setForm(null); setDeleting(null)
     setConflict(null)
-    if (await refresh()) setReceipt(result)
-    onChanged?.()
+    const change = input as { type?: string }
+    if (change.type === 'Todo') setTodos(items => applyWorkspaceReceipt(items, input, result))
+    if (change.type === 'Event') setEvents(items => applyWorkspaceReceipt(items, input, result))
+    if (change.type === 'ItemLink') setLinks(items => applyWorkspaceReceipt(items, input, result))
+    onChanged?.(); void refresh(true)
   }
   async function edit(type: Form['type'], item: Item) {
     // Detail uses the same service and permission projection as list.
+    const generation = visibility.current, operationToken = token
     const detail = await api<{ items: Item[] }>('get', { type, sourceId: item.sourceId, id: item.id })
+    if (generation !== visibility.current || latestToken.current !== operationToken) return
     const latest = detail.items[0]
     if (!latest || latest.deletedAt) throw new Error('对象已删除，请刷新列表。')
     setForm({ ...initial(type), id: latest.id, version: latest.version, title: latest.title, description: latest.description ?? '', start: latest.start ?? '', end: latest.end ?? '', due: latest.due ?? '', timezone: latest.timezone })
@@ -128,9 +145,9 @@ export default function LocalWorkspace({ token, view = 'todos', compact = false,
   function renderItems(type: Form['type'], items: Item[]) {
     return <ul className={compact ? 'cal-todo-list' : undefined}>{items.map(item => <li key={item.id} style={{ overflowWrap: 'anywhere' }}><strong>{item.title}</strong>{!compact && <p>source: {item.sourceId} · version: {item.version} · {item.deletedAt ? `已删除 ${item.deletedAt}` : item.status ?? 'active'} · ID: {item.id}</p>}<p>{type === 'Todo' ? `截止：${item.due ?? '无'} · ${item.timezone}` : `${item.start} — ${item.end} · ${item.timezone}`}</p>{!item.deletedAt && <><button disabled={busy} onClick={() => void act(() => edit(type, item))}>编辑{type === 'Todo' ? '待办' : '日程'}</button>{type === 'Todo' && <button disabled={busy} onClick={() => void act(() => command({ sourceId: 'local', type, action: 'update', id: item.id, expectedVersion: item.version, data: { status: item.status === 'completed' ? 'open' : 'completed' } }))}>{item.status === 'completed' ? '重开待办' : '完成待办'}</button>}<button disabled={busy} onClick={() => { setDeleting({ type, item }); setForm(null) }}>删除{type === 'Todo' ? '待办' : '日程'}</button></>}</li>)}</ul>
   }
-  return <section className={compact ? 'cal-todos-workspace' : 'feishu-panel'} aria-label={compact ? '日历旁待办清单' : undefined}><h2>{compact ? '待办清单' : view === 'calendar' ? '本地日程' : '本地待办与事项关联'}</h2>{!compact && <p>本地用户操作无需聊天Task，不调用模型。你对本地日程与待办始终拥有完整权限；Bot 权限在 Bot 设置中单独选择。</p>}<button disabled={busy} onClick={() => void act(refresh)}>{busy ? '正在处理…' : '刷新本地工作区'}</button>
+  return <section className={compact ? 'cal-todos-workspace' : 'feishu-panel'} aria-label={compact ? '日历旁待办清单' : undefined}><h2>{compact ? '待办清单' : view === 'calendar' ? '本地日程' : '本地待办与事项关联'}</h2>{!compact && <p>本地用户操作无需聊天Task，不调用模型。你对本地日程与待办始终拥有完整权限；Bot 权限在 Bot 设置中单独选择。</p>}<p role="status">{refreshError || (!loaded ? '正在自动读取工作区…' : '内容自动更新')}</p>
     {busy && <p role="status">正在读取或保存本地事项…</p>}{!loaded && !busy && <p>正在读取本地事项；如未显示请刷新。</p>}{error && <p role="alert">{error}</p>}{receipt && <p role="status" style={{ overflowWrap: 'anywhere' }}>持久回执：{receipt.state} · 请求 {receipt.requestId} · 对象 {receipt.receipt.target?.id ?? '用户来源许可'} · 版本 {receipt.receipt.version ?? '—'}</p>}
-    {hasPending && <button disabled={busy} onClick={() => void act(async () => { const op = await api<Receipt | null>('operation', { requestId: pending.current!.requestId, sourceId: 'local' }); if (!op) throw new Error('未查询到回执；保留原请求标识，仅原参数可重试。'); if (op.state !== 'succeeded') throw new Error(`原请求状态：${op.state}，请继续查询，不要新建请求。`); pending.current = null; setHasPending(false); if (await refresh()) setReceipt(op); onChanged?.() })}>查询上次请求回执</button>}
+    {hasPending && <button disabled={busy} onClick={() => void act(async () => { const op = await api<Receipt | null>('operation', { requestId: pending.current!.requestId, sourceId: 'local' }); if (!op) throw new Error('未查询到回执；保留原请求标识，仅原参数可重试。'); if (op.state !== 'succeeded') throw new Error(`原请求状态：${op.state}，请继续查询，不要新建请求。`); pending.current = null; setHasPending(false); await refresh(true); setReceipt(op); onChanged?.() })}>查询上次请求回执</button>}
     {loaded && !compact && <><WorkspaceIdentity sourceId="local" authority="local" scope={enabled ? 'full' : 'none'} epoch={epoch} /></>}
     {loaded && <><button disabled={busy} onClick={() => { setForm(initial('Todo')); setDeleting(null) }}>新建待办</button>{!compact && <button disabled={busy} onClick={() => { setForm(initial('Event')); setDeleting(null) }}>新建日程</button>}
       {conflict && <section className="cal-conflict" role="alert"><h3>当前版本 {conflict.item.version}</h3><p>{conflict.item.title} · {conflict.item.deletedAt ? '已删除' : conflict.item.due ?? conflict.item.start ?? '无截止日期'}</p><p>未覆盖当前内容。请重新读取并确认后保存。</p>{!conflict.item.deletedAt && <button disabled={busy} onClick={() => void act(async () => { await edit(conflict.type, conflict.item); setConflict(null) })}>按当前版本重新编辑</button>}</section>}

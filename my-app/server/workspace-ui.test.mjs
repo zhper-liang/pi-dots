@@ -1,15 +1,22 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { workspaceViews, itemTabs, nextItemTab, nextTab } from '../src/workspace-navigation.mjs'
+import { workspaceViews, itemTabs, nextItemTab, nextTab, resolveItemTab, isLegacyTodoHash } from '../src/workspace-navigation.mjs'
 import { createWorkspaceRequestGuard } from '../src/workspace-request-guard.mjs'
 
-test('10 shell has distinct destinations; 事项 sub-tabs wrap keyboard focus without effects (T03)', () => {
+test('R1 shell has distinct destinations and two 事项 tabs with keyboard focus and legacy Todo routing', () => {
   assert.deepEqual(workspaceViews.map(v => v.id), ['home', 'chats', 'items', 'inbox', 'settings'])
   assert.equal(new Set(workspaceViews.map(v => v.label)).size, workspaceViews.length)
-  assert.deepEqual(itemTabs.map(t => t.id), ['calendar', 'todos', 'automation'])
+  assert.deepEqual(itemTabs.map(t => t.id), ['calendar', 'automation'])
+  assert.equal(nextItemTab('calendar', 'ArrowRight'), 'automation')
+  assert.equal(nextItemTab('automation', 'ArrowLeft'), 'calendar')
   assert.equal(nextItemTab('calendar', 'ArrowLeft'), 'automation')
   assert.equal(nextItemTab('automation', 'ArrowRight'), 'calendar')
   assert.equal(nextItemTab('todos', 'Home'), 'calendar')
+  assert.equal(nextItemTab('todos', 'ArrowRight'), 'automation')
+  assert.equal(resolveItemTab('todos'), 'calendar')
+  assert.equal(resolveItemTab('automation'), 'automation')
+  for (const hash of ['#todos', '#items/todos', '#view=todos']) assert.equal(isLegacyTodoHash(hash), true)
+  for (const hash of ['#bot=calendar&view=todos', '#task=42&todos=1', '#view=calendar']) assert.equal(isLegacyTodoHash(hash), false)
   assert.equal(nextItemTab('calendar', 'End'), 'automation')
   assert.equal(nextItemTab('calendar', 'Enter'), 'calendar')
   assert.equal(nextTab(['a', 'b'], 'missing', 'ArrowRight'), 'b')
@@ -39,14 +46,19 @@ test('10 late operation/preview is rejected on identity change but concurrent qu
   const next = guard.capture(); guard.invalidate(); assert.equal(guard.sameIdentity(next), false)
 })
 
-test('T07 shell defaults to today calendar, keeps mounted drafts, and exposes routines and history', async () => {
+test('R1 shell defaults to today calendar, keeps calendar and automation mounted, and retires standalone Todo UI', async () => {
   const { readFile } = await import('node:fs/promises')
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
   const shell = await readFile(new URL('../src/UnifiedWorkspace.tsx', import.meta.url), 'utf8')
   assert.match(app, /useState<ItemTab>\('calendar'\)/)
   assert.doesNotMatch(app + shell, /TodaySummary|TodayPage|items-panel-today/)
   assert.match(shell, /initialMode="day"/)
-  for (const panel of ['calendar', 'todos', 'automation']) assert.ok(shell.includes(`id="items-panel-${panel}"`))
+  for (const panel of ['calendar', 'automation']) assert.ok(shell.includes(`id="items-panel-${panel}"`))
+  assert.doesNotMatch(shell, /items-panel-todos|<TodoPanel|<DueTodos|<LocalWorkspace/)
+  assert.match(shell, /resolveItemTab\(itemTab\)/)
+  assert.match(shell, /独立待办入口已收起，现显示日历/)
+  assert.match(shell, /hidden=\{visibleItemTab !== 'calendar'\}/)
+  assert.match(shell, /hidden=\{visibleItemTab !== 'automation'\}/)
   assert.match(shell, /<BotRoutines/)
   assert.match(shell, /view=\{automation\}/)
 })

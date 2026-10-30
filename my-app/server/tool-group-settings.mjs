@@ -12,8 +12,8 @@ const copy = (value) => JSON.parse(JSON.stringify(value))
 const writesOf = (group) => group.tools.filter((tool) => WRITE_TOOLS.has(tool))
 
 /**
- * 开 unless the Bot has an ask/deny rule on any write in the group. The switch owns every such rule
- * (any specificity), so the switch shown is the verdict policy.decide() returns.
+ * Write confirmation only: ask if a covered write has an ask/deny rule.
+ * Capability enabled/disabled is projected independently from ToolAccess.
  */
 export function groupMode(rules, botId, group) {
   return rules.some((rule) => groupRule(rule, botId, writesOf(group)) && rule.effect !== 'allow') ? 'ask' : 'allow'
@@ -33,9 +33,13 @@ function toolStatus(name, { assigned, revoked, mainSession, chief }) {
 export function describeGroups({ rules, botId, assigned, revoked, mainSession }) {
   const chief = botId === 'chief'
   return TOOL_GROUPS.map((group) => {
-    const tools = group.tools.map((name) => ({ name, label: toolLabel(name), write: WRITE_TOOLS.has(name), status: toolStatus(name, { assigned, revoked, mainSession, chief }) }))
-    // Only a group with a write this Bot can use has a meaningful switch; read-only groups are always on.
-    return copy({ id: group.id, label: group.label, description: group.description, mode: groupMode(rules, botId, group), tools,
+    const tools = group.tools.map((name) => ({ name, label: toolLabel(name), write: WRITE_TOOLS.has(name),
+      enabled: assigned.includes(name) && !revoked.includes(name), status: toolStatus(name, { assigned, revoked, mainSession, chief }) }))
+    const enabledCount = tools.filter((tool) => tool.enabled).length
+    // enabled includes read tools; switchable remains the legacy write-confirmation projection.
+    return copy({ id: group.id, label: group.label, description: group.description,
+      enabled: enabledCount > 0, partiallyEnabled: enabledCount > 0 && enabledCount < tools.length,
+      mode: groupMode(rules, botId, group), tools,
       available: tools.some((tool) => tool.status === 'available'),
       switchable: tools.some((tool) => tool.write && tool.status === 'available') })
   })

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -8,11 +8,16 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { TaskCard } from './tasks.mjs'
 import { openTaskStore } from './fixtures/authorized-task-store.mjs'
 import { listBots } from './bots.mjs'
-import { SKILL_DIRECTORY, TaskSkills, executeSkillTool } from './skills.mjs'
+import { SKILL_DIRECTORY, TaskSkills, executeSkillTool, activeSkillPrompt, activateCommandSkill, skillCapabilityCatalog, skillCatalogForTask, loadSkill } from './skills.mjs'
 import { skillTools } from './skill-tools.mjs'
 import { checkToolCall, toolSets } from './tools.mjs'
+import { createSkillImportService } from './skill-import.mjs'
+import { listBotCapabilities, setCapabilityAssignment } from './capability-assignments.mjs'
+import { ToolAccess } from './tools.mjs'
+import { BotDirectory } from './bot-directory.mjs'
 import { MAX_TOOL_RESULT_BYTES } from './tool-results.mjs'
 
+const copy = value => JSON.parse(JSON.stringify(value))
 const skillId = 'calendar-conflict-analysis'
 const referenceId = 'adjustment-checklist'
 const config = { baseUrl: 'https://fixture.invalid/v1', model: 'lifecycle-fixture', apiKey: 'never-persist' }
@@ -250,4 +255,138 @@ test('authenticated DELETE deactivates only idle Task state and persists audit, 
   assert.equal(done.skillState.active.length, 0)
   assert.equal(done.skillState.history.at(-1).source, 'user-request')
   assert.equal(done.skillState.history.at(-1).status, 'inactive')
+})
+
+let assignmentRequest = 0
+async function assignment(store, botId, capabilityId, enabled, directory = SKILL_DIRECTORY) {
+  return store.harness.commit(async (tx) => {
+    const catalog = await skillCapabilityCatalog(directory)
+    const view = await listBotCapabilities(tx, botId, { catalog })
+    return setCapabilityAssignment(tx, botId, { requestId: `r1-10-assignment-${++assignmentRequest}`, expectedRevision: view.revision,
+      capabilityId, enabled, expectedCatalogRevision: view.items.find((item) => item.id === capabilityId)?.revision ?? '' }, { catalog })
+  }, context)
+}
+
+test('R1-10 actual R1-08 disable blocks prompt, command replay, activation and resource read while preserving history', async (t) => {
+  const { store, task, directory } = await fixture(t)
+  await store.activateSkill(task.taskId, { skillId })
+  let fixed
+  await store.harness.commit(async (tx) => {
+    const card = await tx.doc(TaskCard, task.taskId)
+    assert.equal((await activateCommandSkill(tx, card, listBots(config), 987, skillId, directory)).ok, true)
+    fixed = copy(await tx.doc(TaskSkills, task.taskId))
+    assert.match(await activeSkillPrompt(tx, card, listBots(config), directory), /必须执行的步骤/)
+  }, context)
+  await assignment(store, 'calendar', `skill:${skillId}`, false, directory)
+  await store.harness.commit(async (tx) => {
+    const card = await tx.doc(TaskCard, task.taskId)
+    assert.equal(await activeSkillPrompt(tx, card, listBots(config), directory), '')
+    const read = await executeSkillTool(tx, card, listBots(config), call('skill_read_resource', { skillId, referenceId }), 1, directory)
+    assert.equal(read.error.code, 'CAPABILITY_NOT_ENABLED')
+    const replay = await activateCommandSkill(tx, card, listBots(config), 987, skillId, directory)
+    assert.equal(replay.error.code, 'CAPABILITY_NOT_ENABLED')
+    const choice = (await skillCatalogForTask(tx, card, listBots(config), directory)).find(item => item.id === skillId)
+    assert.equal(choice.available, false)
+    const after = await tx.doc(TaskSkills, task.taskId)
+    assert.deepEqual(after.pinned, fixed.pinned)
+    assert.deepEqual(after.history, fixed.history)
+    assert.deepEqual(after.active, fixed.active)
+  }, context)
+  const denied = await store.activateSkill(task.taskId, { skillId })
+  assert.equal(denied.skillState.history.at(-1).error.code, 'CAPABILITY_NOT_ENABLED')
+  await assignment(store, 'calendar', `skill:${skillId}`, true, directory)
+  await store.harness.commit(async (tx) => {
+    const card = await tx.doc(TaskCard, task.taskId)
+    assert.match(await activeSkillPrompt(tx, card, listBots(config), directory), /必须执行的步骤/)
+    assert.deepEqual((await tx.doc(TaskSkills, task.taskId)).pinned, fixed.pinned)
+  }, context)
+})
+
+test('R1-10 revoked tool/resource dependencies stop every new prompt injection and /skill has no dependency bypass', async (t) => {
+  const { store, task, directory } = await fixture(t)
+  await store.activateSkill(task.taskId, { skillId })
+  await store.revokeTool('calendar', 'skill_read_resource')
+  await store.harness.commit(async (tx) => {
+    const card = await tx.doc(TaskCard, task.taskId)
+    assert.equal(await activeSkillPrompt(tx, card, listBots(config), directory), '')
+    const command = await activateCommandSkill(tx, card, listBots(config), 111, skillId, directory)
+    assert.equal(command.error.code, 'SKILL_DEPENDENCY_MISSING')
+    assert.ok(command.error.missing.includes('skill_read_resource'))
+    const access = await tx.doc(ToolAccess)
+    access.revoked.calendar = access.revoked.calendar.filter(name => name !== 'skill_read_resource')
+    access.assignments.calendar.resources = []
+    assert.equal(await activeSkillPrompt(tx, card, listBots(config), directory), '')
+    const read = await executeSkillTool(tx, card, listBots(config), call('skill_read_resource', { skillId, referenceId }), 1, directory)
+    assert.ok(read.error.missing.includes('mock:personal'))
+  }, context)
+})
+
+test('R1-10 imported versions consume real assignment service; update/rollback/remove never mutate pinned Task history', async (t) => {
+  const { store, task, directory } = await fixture(t)
+  const dir = await mkdtemp(join(tmpdir(), 'pidot-r1-10-integration-'))
+  t.after(() => rm(dir, { force: true, recursive: true }))
+  const source = join(dir, 'source')
+  await mkdir(join(source, 'references'), { recursive: true })
+  const document = version => `---\nname: imported-review\ndescription: Imported review\nversion: "${version}"\nallowed-tools: [calendar_read_schedule]\nrequired-resources: [mock:personal]\n---\nPinned imported rules ${version}`
+  await writeFile(join(source, 'SKILL.md'), document('1.0'))
+  await writeFile(join(source, 'references', 'Data.txt'), 'Pinned reference evidence')
+  const service = createSkillImportService({ dataDirectory: join(dir, 'controlled') })
+  const selected = { builtinDirectory: directory, userSkills: service }
+  const prepared = await service.prepareSkillImport({ kind: 'local', path: source })
+  const first = await service.importSkill({ requestId: 'import-pinned', preparedId: prepared.preparedId, expectedRevision: 0 })
+  const cap = 'skill:imported-review'
+  await store.harness.commit(async tx => {
+    const card = await tx.doc(TaskCard, task.taskId)
+    const denied = await activateCommandSkill(tx, card, listBots(config), 200, first.id, selected)
+    assert.equal(denied.error.code, 'CAPABILITY_NOT_ENABLED')
+  }, context)
+  let before
+  await store.harness.commit(async tx => { before = copy(await tx.doc(ToolAccess)) }, context)
+  await assignment(store, 'calendar', cap, true, selected)
+  let pinned
+  await store.harness.commit(async tx => {
+    assert.deepEqual(await tx.doc(ToolAccess), before)
+    const card = await tx.doc(TaskCard, task.taskId)
+    assert.equal((await activateCommandSkill(tx, card, listBots(config), 201, first.id, selected)).ok, true)
+    pinned = copy((await tx.doc(TaskSkills, task.taskId)).pinned)
+    assert.match(await activeSkillPrompt(tx, card, listBots(config), selected), /Pinned imported rules 1\.0/)
+    assert.deepEqual((await skillCapabilityCatalog(selected)).find(item => item.id === cap).toolNames, [])
+  }, context)
+  await writeFile(join(source, 'SKILL.md'), document('2.0'))
+  const second = await service.prepareSkillImport({ kind: 'local', path: source })
+  await service.updateSkill({ requestId: 'update-pinned', skillId: first.id, preparedId: second.preparedId, expectedRevision: 1 })
+  assert.equal((await loadSkill(first.id, selected)).version, '2.0')
+  await store.harness.commit(async tx => {
+    const card = await tx.doc(TaskCard, task.taskId)
+    assert.match(await activeSkillPrompt(tx, card, listBots(config), selected), /Pinned imported rules 1\.0/)
+    const read = await executeSkillTool(tx, card, listBots(config), call('skill_read_resource', { skillId: first.id, referenceId: pinned[0].resources[0].id }), 201, selected)
+    assert.equal(read.data.content, 'Pinned reference evidence')
+  }, context)
+  await service.rollbackSkill({ requestId: 'rollback-pinned', skillId: first.id, hash: first.hash, expectedRevision: 2 })
+  assert.equal((await loadSkill(first.id, selected)).version, '1.0')
+  await service.removeSkill({ requestId: 'remove-pinned', skillId: first.id, expectedRevision: 3, affectedBotIds: ['calendar'], confirmGlobal: true })
+  await store.harness.commit(async tx => {
+    const card = await tx.doc(TaskCard, task.taskId)
+    assert.equal(await activeSkillPrompt(tx, card, listBots(config), selected), '')
+    assert.equal((await executeSkillTool(tx, card, listBots(config), call('skill_read_resource', { skillId: first.id, referenceId: pinned[0].resources[0].id }), 201, selected)).ok, false)
+    assert.deepEqual((await tx.doc(TaskSkills, task.taskId)).pinned, pinned)
+  }, context)
+})
+
+test('R1-10 new blank Bot does not inherit registered Skill selections; enabling a missing tool does not grant it', async (t) => {
+  const { store, directory } = await fixture(t)
+  await store.harness.commit(async tx => {
+    const botDirectory = await tx.doc(BotDirectory)
+    const old = botDirectory.items.find(item => item.id === 'calendar')
+    botDirectory.items.push({ ...copy(old), id: 'r1-10-blank', capabilityDefaultsVersion: 2, configRef: { botId: 'r1-10-blank', version: '1' } })
+    const access = await tx.doc(ToolAccess)
+    access.assignments['r1-10-blank'] = { tools: [], resources: [] }
+    const catalog = await skillCapabilityCatalog(directory)
+    const view = await listBotCapabilities(tx, 'r1-10-blank', { catalog })
+    assert.equal(view.items.find(item => item.id === `skill:${skillId}`).enabledForBot, false)
+    const before = copy(access)
+    await setCapabilityAssignment(tx, 'r1-10-blank', { requestId: 'r1-10-blank-enable', expectedRevision: view.revision,
+      expectedCatalogRevision: catalog[0].revision, capabilityId: `skill:${skillId}`, enabled: true }, { catalog })
+    assert.deepEqual(await tx.doc(ToolAccess), before)
+  }, context)
 })

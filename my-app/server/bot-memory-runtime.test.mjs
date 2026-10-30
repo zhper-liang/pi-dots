@@ -163,6 +163,7 @@ test('T11b cancellation or deactivation between extraction and commit never appl
 test('T11b a live local calendar is re-read per call, filtered by current source grants and never stored as memory', async t => {
   const at = Date.parse('2026-10-29T00:00:00Z')
   const bots = listBots(config)
+  bots[0].defaults.tools = [...bots[0].defaults.tools, 'workspace.list', 'workspace.get']
   bots[0].defaults.toolResources = ['workspace:local']
   const { store, calls } = await fixture(t, { bots, memoryOptions: { now: () => at } })
   const created = await store.workspace.executeLocal({ sourceId: 'local', type: 'Event', action: 'create', requestId: 'runtime-calendar-create', data: {

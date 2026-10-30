@@ -4,6 +4,8 @@ import { botTabs, readBotTab, botDetailHash, tasksForBot, directoryBots } from '
 
 test('Bot detail has the seven required tabs; old hashes still open its conversation', () => {
   assert.deepEqual(botTabs.map(tab => tab.id), ['chat', 'rules', 'skills', 'mcp', 'memory', 'settings', 'tasks'])
+  assert.equal(botTabs.find(tab => tab.id === 'rules').label, '工具')
+  assert.equal(readBotTab('#bot=chief&tab=rules'), 'rules')
   for (const hash of ['#bot=chief', '#bot=chief&tab=unknown', '']) assert.equal(readBotTab(hash), 'chat')
   for (const tab of botTabs) assert.equal(readBotTab(botDetailHash('bot:a & b', tab.id)), tab.id)
   assert.equal(new URLSearchParams(botDetailHash('bot:a & b').slice(1)).get('bot'), 'bot:a & b')

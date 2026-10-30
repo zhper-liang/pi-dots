@@ -14,6 +14,7 @@
 |---|---|---|
 | [权限简化](active/permission-simplify/README.md) | 2026-10-24 | S1–S5 已实现并自测通过，等待用户验收 |
 | [Bot 工作区与 Hermes 风格统一](active-hermes-workspace-deepseek.md) | 2026-10-29 | T01–T11 已实现，T12 集成回归 1104/1104、lint/build 与临时库双宽度操作通过；真实外部供应商未验，等待用户最终验收 |
+| [第一轮：交互收口与 Agent 能力配置](active/workspace-experience-r1/README.md) | 2026-10-30 | 代码/受控本地核心验收/材料完成：最终1395/1395、lint13既有warning、build651.41kB提示；1440/375、Skill、目标MCP使用/停用及同库API重启通过，QA已清理；[逐票材料](active/workspace-experience-r1/ACCEPTANCE.md)，待用户验收、不移done |
 
 ## 已完成
 
@@ -34,6 +35,7 @@
 | 计划 | 状态 |
 |---|---|
 | [Grok 风格前端布局](backlog/frontend-layout-grok.md) | 草案，未授权开工 |
+| [2026-10-29 使用反馈：会话、卡片任务与可组合 Bot](backlog/2026-10-29-workspace-experience.md) | 11 项需求来源；第一轮由 active/workspace-experience-r1 承接，记忆/Google 分别留第二/三轮 |
 
 ## 约定
 

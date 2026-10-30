@@ -1,0 +1,16 @@
+[
+  {
+    "command": "node --test server/r1-group-targets.test.mjs server/groups.test.mjs server/group-public-replies.test.mjs",
+    "startedAt": "2026-10-29T15:15:17.130650+08:00",
+    "finishedAt": "2026-10-29T15:15:17.877648+08:00",
+    "exitCode": 0,
+    "log": "/home/zhper/code/pidot/plans/active/workspace-experience-r1/execution/r1-01-baseline/group-targets-followup.log"
+  },
+  {
+    "command": "pnpm exec oxlint server/groups.mjs server/r1-group-targets.test.mjs",
+    "startedAt": "2026-10-29T15:15:17.877767+08:00",
+    "finishedAt": "2026-10-29T15:15:18.830108+08:00",
+    "exitCode": 0,
+    "log": "/home/zhper/code/pidot/plans/active/workspace-experience-r1/execution/r1-01-baseline/group-targets-lint.log"
+  }
+]

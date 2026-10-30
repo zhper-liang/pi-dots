@@ -12,7 +12,7 @@ export const ROUTINE_CALL_LIMITS = Object.freeze({ modelCalls: 10, toolCalls: 20
 export const MAIN_READ_TOOLS = ['calendar_read_schedule', 'calendar_read_event', 'calendar_feishu_read_schedule', 'calendar_feishu_read_event', 'calendar_feishu_freebusy',
   'tool_result_read', 'task_history_read', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'workspace.list', 'workspace.get', 'workspace.operation_status',
   'collaborators_list', 'shared_read']
-export const MAIN_CHIEF_TOOLS = ['bot_inspect', 'bot_manage']
+export const MAIN_CHIEF_TOOLS = ['bot_inspect', 'bot_manage', 'mcp_manage', 'skill_manage']
 // PLAN §8.7 "帮我想办法" (P-16): limits per click; the read tools Chief may be given for it (D-19).
 export const FINDING_ASSIST_LIMITS = Object.freeze({ modelCalls: 5, toolCalls: 10 })
 export const ASSIST_READ_TOOLS = ['workspace.list', 'workspace.get']

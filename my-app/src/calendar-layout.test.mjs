@@ -66,3 +66,78 @@ test('T08 same-screen todos include overdue and undated items without completed/
   assert.deepEqual(calendarTodos(items).map(item => item.id), ['overdue', 'today', 'future', 'undated', 'invalid'])
   assert.deepEqual(items, original)
 })
+
+test('R1-06 local display and geometry use the supplied device zone without changing legacy defaults', async () => {
+  const { hm } = await import('./calendar-layout.mjs')
+  const instant = Date.parse('2026-10-29T01:15:00Z')
+  assert.equal(dayKey(instant, 'America/New_York'), '2026-10-28')
+  assert.equal(hm(instant, 'America/New_York'), '21:15')
+  assert.equal(dayKey(instant), '2026-10-29')
+  const start = dayStart('2026-10-28', 'America/New_York')
+  assert.equal(start, Date.parse('2026-10-28T04:00:00Z'))
+  const placed = layoutDay([{ key: 'local', start: instant, end: instant + 3600000 }], '2026-10-28', 20, 'America/New_York')
+  assert.equal(placed[0].top, 21 * 60 + 15)
+  assert.equal(placed[0].height, 60)
+  assert.deepEqual(eventDays(instant, instant + 3600000, 'America/New_York'), ['2026-10-28'])
+  assert.equal(dueDay('2026-10-29T01:15:00Z', 'America/New_York'), '2026-10-28')
+})
+
+test('R1-06 editing in another device zone preserves saved timezone and event instants', async () => {
+  const { eventTimeDraft, eventTimeData } = await import('./calendar-layout.mjs')
+  const start = at('2026-10-29', '09:17'), end = at('2026-10-29', '10:59')
+  const draft = eventTimeDraft(start, end, 'Asia/Shanghai', 'America/New_York')
+  assert.deepEqual(draft.start, { date: '2026-10-28', time: '21:17', timezone: 'America/New_York' })
+  assert.equal(draft.timezone, 'Asia/Shanghai')
+  const data = eventTimeData(draft)
+  assert.equal(data.timezone, 'Asia/Shanghai')
+  assert.equal(Date.parse(data.start), start)
+  assert.equal(Date.parse(data.end), end)
+  assert.equal(data.start, '2026-10-29T09:17:00+08:00')
+})
+
+test('R1-06 new cards capture local zone and accept cross-day full minute values', async () => {
+  const { eventTimeDraft, eventTimeData } = await import('./calendar-layout.mjs')
+  const start = Date.parse('2026-10-29T23:59:00-04:00'), end = Date.parse('2026-10-30T00:07:00-04:00')
+  const draft = eventTimeDraft(start, end, 'America/New_York', 'America/New_York')
+  assert.equal(draft.start.time, '23:59')
+  assert.equal(draft.end.time, '00:07')
+  const data = eventTimeData(draft)
+  assert.equal(data.timezone, 'America/New_York')
+  assert.equal(data.start, '2026-10-29T23:59:00-04:00')
+  assert.equal(Date.parse(data.end), end)
+})
+
+test('R1-06 invalid, backwards and DST-gap drafts reject before mutation; overlap uses shared first UTC', async () => {
+  const { eventTimeData } = await import('./calendar-layout.mjs')
+  const value = (date, time) => ({ date, time, timezone: 'America/New_York' })
+  const start = value('2026-03-08', '01:30')
+  assert.ok(eventTimeData({ start, end: start, timezone: start.timezone }).error)
+  assert.ok(eventTimeData({ start, end: value('2026-03-08', '00:30'), timezone: start.timezone }).error)
+  assert.ok(eventTimeData({ start: value('2026-03-08', '02:30'), end: value('2026-03-08', '03:30'), timezone: start.timezone }).error)
+  assert.ok(eventTimeData({ start: value('2026-02-30', '09:00'), end: value('2026-03-01', '09:00'), timezone: start.timezone }).error)
+  const overlap = eventTimeData({ start: value('2026-11-01', '01:30'), end: value('2026-11-01', '02:30'), timezone: start.timezone })
+  assert.equal(overlap.start, '2026-11-01T01:30:00-04:00')
+  assert.equal(overlap.end, '2026-11-01T02:30:00-05:00')
+})
+
+test('R1-06 geometry on DST dates follows wall-clock rows while day bounds use real local midnights', () => {
+  const start = Date.parse('2026-03-08T09:00:00-04:00')
+  const placed = layoutDay([{ key: 'dst', start, end: start + 3600000 }], '2026-03-08', 20, 'America/New_York')
+  assert.equal(placed[0].top, 540)
+  assert.equal(placed[0].height, 60)
+  assert.deepEqual(eventDays(Date.parse('2026-03-08T23:00:00-04:00'), Date.parse('2026-03-09T00:00:00-04:00'), 'America/New_York'), ['2026-03-08'])
+})
+
+
+test('R1-06 title-only edits preserve saved seconds and the second repeated DST instant', async () => {
+  const { eventTimeDraft, eventTimeData } = await import('./calendar-layout.mjs')
+  for (const [start, end] of [
+    ['2026-10-29T09:17:21+08:00', '2026-10-29T09:17:59+08:00'],
+    ['2026-11-01T01:30:17-05:00', '2026-11-01T02:00:17-05:00']
+  ]) {
+    const draft = eventTimeDraft(Date.parse(start), Date.parse(end), 'America/New_York', 'America/New_York')
+    const data = eventTimeData(draft)
+    assert.equal(Date.parse(data.start), Date.parse(start))
+    assert.equal(Date.parse(data.end), Date.parse(end))
+  }
+})

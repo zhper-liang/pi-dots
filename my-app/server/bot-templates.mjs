@@ -15,8 +15,14 @@ const TEMPLATES = [
 const FALLBACK = { role: '通用助手', description: '按我的要求处理交代的事；需要我的日程或待办时先查看，信息不够时先问我。' }
 
 /** Deterministic role and duties for a Bot name (NFKC, case-insensitive substring match). */
-export function inferBotRole(name) {
+export function inferLegacyBotRole(name) {
   const key = String(name ?? '').normalize('NFKC').trim().toLowerCase()
   const hit = TEMPLATES.find(t => t.keys.some(k => key.includes(k)))
   return { role: (hit ?? FALLBACK).role, description: (hit ?? FALLBACK).description, template: hit ? hit.keys[0] : 'fallback' }
+}
+
+// Names identify new Bots; they are not a personality or a business capability grant.
+// The old deterministic templates remain solely for validating persisted creation receipts.
+export function inferBotRole() {
+  return { role: '', description: '', template: 'blank' }
 }

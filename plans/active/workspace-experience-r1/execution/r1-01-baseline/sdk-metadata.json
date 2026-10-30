@@ -1,0 +1,81 @@
+[
+  {
+    "source": "https://registry.npmjs.org/%40modelcontextprotocol%2Fsdk/1.32.2",
+    "checkedAt": "2026-10-29T07:10:05.224Z",
+    "name": "@modelcontextprotocol/sdk",
+    "version": "1.32.2",
+    "license": "MIT",
+    "engines": {
+      "node": ">=18"
+    },
+    "dependencies": {
+      "ajv": "^8.17.1",
+      "zod": "^3.25 || ^4.0",
+      "cors": "^2.8.5",
+      "hono": "^4.11.4",
+      "jose": "^6.1.3",
+      "express": "^5.2.1",
+      "raw-body": "^3.0.0",
+      "ajv-formats": "^3.0.1",
+      "cross-spawn": "^7.0.5",
+      "eventsource": "^3.0.2",
+      "content-type": "^1.0.5",
+      "pkce-challenge": "^5.0.0",
+      "@hono/node-server": "^1.19.9 || ^2.0.5",
+      "json-schema-typed": "^8.0.2",
+      "eventsource-parser": "^3.0.0",
+      "express-rate-limit": "^8.2.1",
+      "zod-to-json-schema": "^3.25.1"
+    },
+    "peerDependencies": {
+      "zod": "^3.25 || ^4.0",
+      "@cfworker/json-schema": "^4.1.1"
+    },
+    "peerDependenciesMeta": {
+      "zod": {
+        "optional": false
+      },
+      "@cfworker/json-schema": {
+        "optional": true
+      }
+    },
+    "dist": {
+      "integrity": "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==",
+      "unpackedSize": 4492221
+    }
+  },
+  {
+    "source": "https://registry.npmjs.org/zod/4.6.7",
+    "checkedAt": "2026-10-29T07:10:05.410Z",
+    "name": "zod",
+    "version": "4.6.7",
+    "license": "MIT",
+    "dist": {
+      "integrity": "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==",
+      "unpackedSize": 6148944
+    }
+  },
+  {
+    "source": "https://registry.npmjs.org/%40modelcontextprotocol%2Fclient/2.4.0",
+    "checkedAt": "2026-10-29T07:10:05.813Z",
+    "name": "@modelcontextprotocol/client",
+    "version": "2.4.0",
+    "license": "Apache-2.0",
+    "engines": {
+      "node": ">=20"
+    },
+    "dependencies": {
+      "zod": "^4.2.0",
+      "jose": "^6.1.3",
+      "cross-spawn": "^7.0.5",
+      "eventsource": "^3.0.2",
+      "pkce-challenge": "^5.0.0",
+      "eventsource-parser": "^3.0.8",
+      "@modelcontextprotocol/core": "2.4.0"
+    },
+    "dist": {
+      "integrity": "sha512-LgrD2OphHuG12vfKFKz6SOnq7bKHQmhGJIAYdD+MZBn2npHEyry6uD8zvktodtl5CQM85MO0anUyD9JwmUmxww==",
+      "unpackedSize": 7311863
+    }
+  }
+]

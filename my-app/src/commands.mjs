@@ -18,10 +18,27 @@ export function buildCommands({ skills = [], group = false, paused = false }) {
 /** Only a draft that is "/" plus one word opens the menu; the word filters label, keywords and hint,
  *  ranked in that order so "/详情" puts 会话详情 before a Skill whose description mentions 详情. */
 export function matchCommands(commands, draft) {
-  const m = /^\/(\S*)$/.exec(draft ?? '')
+  const m = isCommandDraft(draft) ? /^\/(\S*)$/.exec(draft) : null
   if (!m) return []
   const q = m[1].toLowerCase(), has = t => String(t ?? '').toLowerCase().includes(q)
   if (!q) return commands
   const rank = c => has(c.label) ? 0 : (c.keywords ?? []).some(has) ? 1 : has(c.hint) ? 2 : 3
   return commands.map((c, i) => [rank(c), i, c]).filter(([r]) => r < 3).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , c]) => c)
+}
+
+/** Keep the existing whole-draft slash trigger separate from caret-local mentions. */
+export function isCommandDraft(draft) {
+  return typeof draft === 'string' && /^\/\S*$/.test(draft)
+}
+
+/** Shared keyboard decisions. Composition and modified keys belong to the textarea. */
+export function suggestionKeyAction(event, index, count) {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey) return null
+  if (event.key === 'Escape') return { type: 'dismiss' }
+  if (!count || event.shiftKey) return null
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    return { type: 'move', index: (index + (event.key === 'ArrowDown' ? 1 : count - 1)) % count }
+  }
+  if (event.key === 'Enter' || event.key === 'Tab') return { type: 'pick', index }
+  return null
 }

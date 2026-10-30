@@ -1,3 +1,6 @@
+import { capabilityManagementTools, CAPABILITY_MANAGEMENT_TOOLS, validCapabilityManagementArgs } from './capability-management-tools.mjs'
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv'
+import { boundedMcpJson } from './external-mcp-config.mjs'
 import { workspaceTools, WORKSPACE_TOOLS, validWorkspaceArgs } from './workspace-tools.mjs'
 import { FEISHU_MUTATION_TOOLS, feishuMutationTools, normalizeFeishuMutation } from './feishu-mutation.mjs'
 import { FEISHU_CREATE_TOOL, feishuCreateTool, normalizeFeishuCreate } from './feishu-write.mjs'
@@ -56,20 +59,31 @@ export const calendarEventTool = Object.freeze({
       } },
   } },
 })
-const installed = [...managementTools, calendarTool, calendarEventTool, resultReadTool, historyTool, ...skillTools, blockerTool, calendarWriteTool, ...collaborationTools, reviewTool, ...sharedTools, ...blockerActions, ...feishuTools, feishuCreateTool, ...feishuMutationTools, ...workspaceTools, automationPauseTool, ...mainTools]
+const installed = [...managementTools, calendarTool, calendarEventTool, resultReadTool, historyTool, ...skillTools, blockerTool, calendarWriteTool, ...collaborationTools, reviewTool, ...sharedTools, ...blockerActions, ...feishuTools, feishuCreateTool, ...feishuMutationTools, ...workspaceTools, automationPauseTool, ...mainTools, ...capabilityManagementTools]
 const copy = (value) => JSON.parse(JSON.stringify(value))
 export function toolSets(card, bots, access) {
   const bot = bots.find((item) => item.id === card.bot.id)
-  const names = installed.map((tool) => tool.name).filter(name => (!MANAGEMENT_TOOLS.includes(name) || card.bot.id === 'chief' && card.managementTools?.includes(name)) && (!MAIN_TOOLS.includes(name) || card.kind === 'main'))
+  // This metadata is a per-store cache, never a grant; live assignments and provider checks still win.
+  const externalTools = copy(access.externalMcp?.tools ?? [])
+  const names = [...installed, ...externalTools].map((tool) => tool.name).filter(name => (!CAPABILITY_MANAGEMENT_TOOLS.includes(name) || access.capabilityManagementReady === true) && (!MANAGEMENT_TOOLS.includes(name) || card.bot.id === 'chief' && card.managementTools?.includes(name)) && (!MAIN_TOOLS.includes(name) || card.kind === 'main'))
   const assigned = access.assignments?.[card.bot.id] ?? { tools: bot?.defaults.tools ?? [], resources: bot?.defaults.toolResources ?? [] }
+  const intrinsic = card.kind === 'main' && access.mainAssignments?.bots?.includes(card.bot.id)
+    ? [...MAIN_TOOLS, AUTOMATION_PAUSE_TOOL]
+    : []
+  const effectiveTools = new Set([...assigned.tools, ...intrinsic])
   // S1: authorized = installed ∩ current assignment − revoked. No pool, no snapshot, no epoch.
-  const authorized = names.filter((name) => assigned.tools.includes(name) && !access.revoked[card.bot.id]?.includes(name))
+  const authorized = names.filter((name) => effectiveTools.has(name) && !access.revoked[card.bot.id]?.includes(name) &&
+    (!externalTools.some(tool => tool.name === name) || externalTools.find(tool => tool.name === name).enabledBotIds.includes(card.bot.id)))
   if (card.bot.id === 'chief') for (const name of [...MANAGEMENT_TOOLS, BLOCKER_TOOL]) {
     if (card.managementTools?.includes(name) && !access.revoked.chief?.includes(name) && !authorized.includes(name)) authorized.push(name)
   }
+  // Existing persisted Chief cards receive host configuration capabilities without replacing chats.
+  if (access.capabilityManagementReady === true && card.bot.id === 'chief' && (card.kind === 'main' || card.managementTools?.includes('bot_manage'))) {
+    for (const name of CAPABILITY_MANAGEMENT_TOOLS) if (!access.revoked.chief?.includes(name) && !authorized.includes(name)) authorized.push(name)
+  }
   // Tools only offered inside a Bot's main session (Chief hands work out, pauses automation).
   authorized.splice(0, authorized.length, ...authorized.filter((name) => !TOOL_GROUPS.some((g) => g.requiresMainSession && g.tools.includes(name)) || card.kind === 'main'))
-  let resources = [...assigned.resources]
+  let resources = [...assigned.resources, ...externalTools.filter(tool => authorized.includes(tool.name)).map(tool => `mcp:${tool.connectionId}`)]
   // Routine runs keep to workspace tools (D-12). Only writes=true routines (never test runs or
   // legacy read-only briefs, D-13) may propose changes, and decide() still arbitrates each one.
   if (card.scheduledWorkflow) {
@@ -82,11 +96,9 @@ export function toolSets(card, bots, access) {
     authorized.splice(0, authorized.length, ...authorized.filter(n => MAIN_READ_TOOLS.includes(n)))
     resources = resources.filter(r => (card.findingAssist.resources ?? card.parameters.toolResources ?? []).includes(r))
   }
-  // S1: main session gets all assigned tools (not just read-only). Main tools added unconditionally.
-  if (card.kind === 'main') {
-    authorized.splice(0, authorized.length, ...new Set([...authorized, ...MAIN_TOOLS, AUTOMATION_PAUSE_TOOL]))
-  }
-  return { installed: names, assigned: [...assigned.tools], authorized, displayed: [...authorized], resources }
+  // Main-session business tools obey the same live assignment/revocation as every other tool.
+  // Stopping work remains an authenticated host action; it never grants a model business tool.
+  return { installed: names, assigned: [...assigned.tools], authorized, displayed: [...authorized], resources: [...new Set(resources)], ...(externalTools.length ? { externalTools } : {}) }
 }
 const MOCK_TOOLS = [CALENDAR_TOOL, CALENDAR_EVENT_TOOL, CALENDAR_WRITE_TOOL]
 const FEISHU_ALL = [...FEISHU_TOOLS, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS]
@@ -102,6 +114,7 @@ function resourceReady(name, resources) {
 // Chinese labels for model tool descriptions and Bot settings. Kept here (not in tool-groups.mjs) so the
 // pure toolSets() module graph stays free of policy/rule storage imports.
 export const TOOL_LABELS = Object.freeze({
+  mcp_manage: '配置 MCP 能力', skill_manage: '配置 Skill 能力',
   skill_activate: '按需加载 Skill', skill_deactivate: '结束 Skill', skill_read_resource: '读取 Skill 资料',
   calendar_read_schedule: '读取模拟日程', calendar_read_event: '读取模拟日程详情', calendar_reschedule_event: '调整模拟日程',
   calendar_feishu_read_schedule: '读取飞书日程', calendar_feishu_read_event: '读取飞书日程详情', calendar_feishu_freebusy: '查看飞书忙闲',
@@ -114,14 +127,14 @@ export const TOOL_LABELS = Object.freeze({
 })
 export const toolLabel = (name) => TOOL_LABELS[name] ?? name
 
-export function toolDefinitions(names) {
+export function toolDefinitions(names, { externalTools = [] } = {}) {
   // The model sees the Chinese label first so tool choice does not depend on reading internal ids.
-  return installed.filter((tool) => names.includes(tool.name)).map(({ name, description, parameters }) => {
+  return [...installed, ...externalTools.map(tool => ({ ...tool, parameters: tool.inputSchema }))].filter((tool) => names.includes(tool.name)).map(({ name, description, parameters }) => {
     const label = toolLabel(name)
     return copy({ name, description: label === name ? description : `【${label}】${description}`, parameters })
   })
 }
-export function toolCatalog() { return copy(installed.filter(t => !MANAGEMENT_TOOLS.includes(t.name) && !MAIN_TOOLS.includes(t.name))) }
+export function toolCatalog({ externalTools = [] } = {}) { return copy([...installed, ...externalTools.map(tool => ({ ...tool, parameters: tool.inputSchema }))].filter(t => !MANAGEMENT_TOOLS.includes(t.name) && (!MAIN_TOOLS.includes(t.name) || TOOL_GROUPS.some(group => group.tools.includes(t.name))))) }
 export function callLimits(parameters) {
   return { ...DEFAULT_CALL_LIMITS, ...(parameters.callLimits ?? {}) }
 }
@@ -142,13 +155,28 @@ export function parseRevocation(input, bot) {
   return [...input.revoked]
 }
 const denied = (code, message) => ({ ok: false, error: { code, message } })
+// A new validator belongs to this schema compilation; provider $ids cannot collide across stores.
+export function externalToolValidator(tool) {
+  boundedMcpJson(tool.inputSchema, { maxBytes: 32768 })
+  return new AjvJsonSchemaValidator().getValidator(tool.inputSchema)
+}
+
 export function checkToolCall({ card, record, conversation, call, displayed, sets, priorEventIds = [] }) {
   if (record?.input?.botId !== card.bot.id || record?.id !== card.taskId || card.configRef.botId !== card.bot.id || conversation?.owner?.taskId !== card.taskId) {
     return denied('TOOL_IDENTITY_DENIED', 'Task、Bot 或 conversation 身份不匹配。')
   }
   if (!sets.installed.includes(call.name)) return denied('TOOL_NOT_INSTALLED', '工具未登记。')
   if (!sets.authorized.includes(call.name) || !displayed.includes(call.name)) return denied('TOOL_NOT_AUTHORIZED', '工具未授权、已撤权或未在本轮展示。')
+  const external = sets.externalTools?.find(tool => tool.name === call.name)
+  if (external) {
+    try {
+      const args = boundedMcpJson(call.arguments, { maxBytes: 32768 })
+      return !call.argumentsError && args && !Array.isArray(args) && typeof args === 'object' && externalToolValidator(external)(args).valid
+        ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '外部工具参数不符合已登记 schema。')
+    } catch { return denied('TOOL_INVALID_ARGUMENTS', '外部工具参数或 schema 无法校验。') }
+  }
   if (skillTools.some((tool) => tool.name === call.name)) return validSkillArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', 'Skill 参数无效；不接受路径、规则或版本覆盖。')
+  if (CAPABILITY_MANAGEMENT_TOOLS.includes(call.name)) return validCapabilityManagementArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '能力配置参数无效；不得提供凭据或授权标志。')
   if (MANAGEMENT_TOOLS.includes(call.name)) return card.bot.id === 'chief' && validManagementArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', 'Chief管理参数无效；必须明确目标、版本与变更。')
   if (SHARED_TOOLS.includes(call.name)) return validSharedArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '共享参数无效。')
   if (COLLABORATION_TOOLS.includes(call.name)) return validCollaborationArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '协作参数无效。')
@@ -167,6 +195,7 @@ export function checkToolCall({ card, record, conversation, call, displayed, set
   if (FEISHU_MUTATION_TOOLS.includes(call.name)) return normalizeFeishuMutation(call.name, args) && sets.resources.includes(args.resource) ? { ok: true } : denied('TOOL_RESOURCE_DENIED', '真实更新删除参数或资源未获准。')
   if (call.name === FEISHU_CREATE_TOOL) return normalizeFeishuCreate(args) && sets.resources.includes(args.resource) ? { ok: true } : denied('TOOL_RESOURCE_DENIED', '真实创建参数或资源未获准。')
   if (FEISHU_TOOLS.includes(call.name)) return validFeishuArgs(call.name, args) && sets.resources.includes(args.resource) ? { ok: true } : denied('TOOL_RESOURCE_DENIED', '真实日历参数或资源未获准。')
+  if (call.name === RESULT_READ_TOOL && args.resource?.startsWith('mcp:')) return validResultReadArgs(args) && args.view === 'text' && sets.resources.includes(args.resource) ? { ok: true } : denied('TOOL_RESOURCE_DENIED', '外部结果来源已撤销或读取方式无效。')
   if (call.name === RESULT_READ_TOOL && args.resource?.startsWith('workspace:')) return validResultReadArgs(args) && sets.resources.includes(args.resource) ? { ok: true } : denied('TOOL_RESOURCE_DENIED', '工作区来源已撤权。')
   if (call.name === RESULT_READ_TOOL && isFeishuResource(args.resource)) return validResultReadArgs(args) && sets.resources.includes(args.resource) ? { ok: true } : denied('TOOL_RESOURCE_DENIED', '真实来源已撤权。')
   if (args.resource !== 'mock:personal' || !sets.resources.includes(args.resource)) return denied('TOOL_RESOURCE_DENIED', '不允许读取该日程资源。')

@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { openTaskStore } from './fixtures/authorized-task-store.mjs'
 import { listBots } from './bots.mjs'
 import { createApiServer } from './app.mjs'
-import { SKILL_DIRECTORY } from './skills.mjs'
+import { SKILL_DIRECTORY, skillCapabilityCatalog } from './skills.mjs'
 import { buildCommands, matchCommands } from '../src/commands.mjs'
 
 // Skills auto-register from the directory; the composer "/" menu picks one for a message.
@@ -18,6 +18,7 @@ async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'pidot-skill-cmd-')), directory = join(dir, 'skills'), requests = [], state = { gate: null }
   await cp(SKILL_DIRECTORY, directory, { recursive: true })
   const open = () => openTaskStore({ file: join(dir, 'task.sqlite'), bots: listBots(config), skillDirectory: directory,
+    readCapabilityCatalog: () => skillCapabilityCatalog(directory),
     modelReply: async (_m, { context: request }) => { requests.push(request); if (state.gate) await state.gate; return { mode: 'model', reply: { content: '按要求处理完成。' }, execution: { usage: { totalTokens: 9 } } } } })
   let store = await open()
   t.after(async () => { await store.close(); await rm(dir, { recursive: true, force: true }) })
@@ -33,7 +34,7 @@ async function addSkill(directory, id, manifest = {}, rules = `# ${id}\n只做�
   if (rules !== null) await writeFile(join(directory, id, 'SKILL.md'), rules)
 }
 
-test('Skills auto-register from the directory without a restart; broken ones are listed unavailable; others are ignored', async (t) => {
+test('Skills are discovered without a restart; new ones need explicit assignment; broken ones are unavailable and others ignored', async (t) => {
   const { store, directory } = await fixture(t)
   assert.deepEqual((await store.skillCatalog()).map(s => s.id), [skillId])
   await addSkill(directory, 'todo-review')
@@ -43,8 +44,17 @@ test('Skills auto-register from the directory without a restart; broken ones are
   const catalog = await store.skillCatalog()
   assert.deepEqual(catalog.map(s => [s.id, s.available]), [['broken-skill', false], [skillId, true], ['todo-review', true]])
   const task = await store.create({ botId: 'calendar' })
-  assert.deepEqual((await store.taskSkills(task.taskId)).map(s => [s.id, s.available]), [[skillId, true], ['todo-review', true]]) // broken: not loadable, not offered
-  // Removing the folder removes the Skill (read on each use).
+  const taskSkills = await store.taskSkills(task.taskId)
+  assert.deepEqual(taskSkills.map(s => [s.id, s.available]), [[skillId, true], ['todo-review', false]]) // broken: not loadable, not offered
+  assert.equal(taskSkills.find(s => s.id === 'todo-review').error.code, 'CAPABILITY_NOT_ENABLED')
+  await assert.rejects(store.send(task.taskId, '查看待办', undefined, { skillId: 'todo-review' }), error => error.code === 'SKILL_UNAVAILABLE')
+  const capabilities = await store.getBotCapabilities('calendar')
+  const skill = capabilities.items.find(item => item.id === 'skill:todo-review')
+  assert.equal(skill.enabledForBot, false)
+  await store.setBotCapabilityAssignment('calendar', { requestId: 'assign-todo-review', expectedRevision: capabilities.revision,
+    expectedCatalogRevision: skill.revision, capabilityId: skill.id, enabled: true })
+  assert.equal((await store.taskSkills(task.taskId)).find(s => s.id === 'todo-review').available, true)
+  // Removing the folder removes even an explicitly assigned Skill from new selections.
   await rm(join(directory, 'todo-review'), { recursive: true })
   assert.ok(!(await store.taskSkills(task.taskId)).some(s => s.id === 'todo-review'))
 })

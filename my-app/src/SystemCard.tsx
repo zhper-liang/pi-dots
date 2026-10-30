@@ -4,12 +4,12 @@ import { cardView, type CardInput } from './system-cards.mjs'
 // PLAN §8.4 unified system card frame: kind badge, title, live state, body, buttons, error.
 // Every conversation card (approval, question, mirror, finding, automatic execution, summary,
 // routine proposal, Bot management) renders through this; button rules live in system-cards.mjs.
-export default function SystemCard({ card, title, state, meta, actions, error, className = '', children }: {
-  card: CardInput; title?: ReactNode; state?: string; meta?: ReactNode; actions?: ReactNode; error?: string; className?: string; children?: ReactNode
+export default function SystemCard({ card, title, state, meta, actions, error, className = '', id, children }: {
+  card: CardInput; title?: ReactNode; state?: string; meta?: ReactNode; actions?: ReactNode; error?: string; className?: string; id?: string; children?: ReactNode
 }) {
   const view = cardView(card)
   const shown = state ?? view.state
-  return <article className={`system-card system-card-${view.kind} tone-${view.tone} ${className}`} data-card-kind={view.kind}>
+  return <article id={id} className={`system-card system-card-${view.kind} tone-${view.tone} ${className}`} data-card-kind={view.kind}>
     <header className="system-card-head">
       <span className="system-card-kind">{view.label}</span>
       {title && <strong className="system-card-title">{title}</strong>}

@@ -1,7 +1,7 @@
 /** Directory/detail navigation reuses existing Bot and Task identities. */
 export const botTabs = [
   { id: 'chat', label: '对话' },
-  { id: 'rules', label: '规则' },
+  { id: 'rules', label: '工具' },
   { id: 'skills', label: 'Skills' },
   { id: 'mcp', label: 'MCP' },
   { id: 'memory', label: '记忆' },

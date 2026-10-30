@@ -65,8 +65,8 @@ export async function createGroup(tx, input, createTask, TaskCard) {
 }
 
 // Input receipts are data on the existing group document, not another scheduler.
-// A message may address several members: structured targetBotIds (member picker) and literal "@名" are
-// merged, in order, deduplicated. Each target later runs in its own bounded fork and replies publicly.
+// Structured targetBotIds are authoritative, including an empty list. Legacy callers without that
+// field may address unambiguous literal "@名". Targets stay ordered and deduplicated.
 export const MAX_GROUP_TARGETS = 8
 export async function admitGroupTarget(tx, card, input, bots) {
   const group = await assertGroupTask(tx, card)
@@ -76,23 +76,34 @@ export async function admitGroupTarget(tx, card, input, bots) {
   if (!input || Object.keys(input).some(k => !['message','targetBotId','targetBotIds','requestId'].includes(k)) || typeof input.message !== 'string' || !input.message.trim() || input.message.length > 4000 ||
     hasRequest && (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(input.requestId)) ||
     (input.targetBotId !== undefined && typeof input.targetBotId !== 'string') ||
-    (input.targetBotIds !== undefined && (!Array.isArray(input.targetBotIds) || input.targetBotIds.some((id) => typeof id !== 'string')))) {
+    (Object.hasOwn(input, 'targetBotIds') && (!Array.isArray(input.targetBotIds) || input.targetBotIds.some((id) => typeof id !== 'string')))) {
     throw new TaskInputError(400, 'INVALID_GROUP_TARGET', '须提供 message、稳定 requestId，以及 targetBotId 或 targetBotIds。')
   }
   const members = await groupMembers(tx, group)
-  const byName = new Map(members.map((member) => [member.name.normalize('NFKC').trim(), member]))
-  const mentions = mentionNames(input.message)
-  const unknown = mentions.filter((name) => !byName.has(name.normalize('NFKC').trim()))
-  if (unknown.length) throw new TaskInputError(400, 'GROUP_MENTION_UNKNOWN', `群里没有叫「${unknown[0]}」的 Bot；请从成员列表选择。`)
-  const listed = [...(input.targetBotIds ?? []), ...(input.targetBotId ? [input.targetBotId] : [])]
+  const byId = new Map(members.map(member => [member.id, member]))
+  const byName = new Map()
+  for (const member of members) {
+    const name = member.name.normalize('NFKC').trim()
+    const matches = byName.get(name) ?? []
+    matches.push(member)
+    byName.set(name, matches)
+  }
+  const structured = Object.hasOwn(input, 'targetBotIds')
+  const mentions = structured ? [] : mentionNames(input.message)
+  for (const name of mentions) {
+    const matches = byName.get(name.normalize('NFKC').trim()) ?? []
+    if (!matches.length) throw new TaskInputError(400, 'GROUP_MENTION_UNKNOWN', `群里没有叫「${name}」的 Bot；请从成员列表选择。`)
+    if (matches.length > 1) throw new TaskInputError(400, 'GROUP_MENTION_AMBIGUOUS', `群里有多个叫「${name}」的 Bot；请从成员列表按 ID 选择。`)
+  }
+  const listed = structured ? input.targetBotIds : input.targetBotId ? [input.targetBotId] : []
   // The limit counts what the sender asked for, not duplicates collapsed afterwards.
   if (listed.length > MAX_GROUP_TARGETS || mentions.length > MAX_GROUP_TARGETS) throw new TaskInputError(400, 'GROUP_TARGET_LIMIT', `一条消息最多 @ ${MAX_GROUP_TARGETS} 个 Bot。`)
-  const targets = [...new Set([...listed, ...mentions.map((name) => byName.get(name.normalize('NFKC').trim()).id)])]
+  const targets = [...new Set([...listed, ...mentions.map((name) => byName.get(name.normalize('NFKC').trim())[0].id)])]
   if (!targets.length) return null
   if (targets.length && !hasRequest) throw new TaskInputError(400, 'INVALID_GROUP_TARGET', '定向消息需要稳定的 requestId，以便重试时不重复派发。')
   for (const id of targets) {
     if (!group.memberBotIds.includes(id)) throw new TaskInputError(400, 'GROUP_TARGET_DENIED', '目标必须是本群成员。')
-    if (byName.get(id)?.status === 'inactive') throw new TaskInputError(409, 'BOT_INACTIVE', `「${byName.get(id)?.name ?? id}」已停用，不能接收新消息。`)
+    if (byId.get(id)?.status === 'inactive') throw new TaskInputError(409, 'BOT_INACTIVE', `「${byId.get(id)?.name ?? id}」已停用，不能接收新消息。`)
     await assertBotActive(tx, id)
   }
   // The admin's collaboration tools stay required for the private fork itself; the user's explicit @ is

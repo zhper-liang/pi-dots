@@ -8,7 +8,9 @@ import { createHash } from 'node:crypto'
 import { BotDirectory, assertBotActive } from './bot-directory.mjs'
 import { ToolAccess, toolSets, CallUsage, callLimits } from './tools.mjs'
 import { TaskInputError } from './task-config.mjs'
-import { assertNotCancelled } from './cancellation.mjs'
+import { assertNotCancelled, TaskCancellation, readCancelledArchive } from './cancellation.mjs'
+import { SessionLifecycle } from './session-lifecycle.mjs'
+import { MainSessions, mirrorToMain } from './main-session.mjs'
 
 // Relationships/receipts only: execution remains in the existing Harness phases.
 export const Collaboration = defineDoc({kind:'pidot.collaboration',version:1,scope:'session',initial:()=>({items:[],stops:[]})})
@@ -71,6 +73,47 @@ export function collaborationService({TaskCard,ChatInput,createTask,bots}) {
     await tx.appendEntry(card.conversationId,{kind:'pidot.collaboration-assigned',data:copy(relation)})
     return {ok:true,data:assignmentReceipt(relation)}
   }
+  async function supervisorFor(tx, relation) {
+    const originalId = relation.parentTaskId, record = await tx.task(originalId)
+    const archive = record?.state.status === 'terminal' ? await readCancelledArchive(tx, originalId) : null
+    const cancellation = archive?.cancellation ?? (record?.state.status === 'terminal' ? null : (await tx.doc(TaskCancellation, originalId)).request)
+    if (cancellation?.scope !== 'main-session-only') {
+      await assertNotCancelled(tx, originalId, record)
+      const parent = await tx.doc(TaskCard, originalId)
+      return { parent, source: parent }
+    }
+    const source = archive?.documents[TaskCard.definition.kind] ?? await tx.doc(TaskCard, originalId)
+    const lifecycle = await tx.doc(SessionLifecycle), currentId = (await tx.doc(MainSessions)).byBot[relation.supervisorBotId]
+    const sourceValid = source.kind === 'main' && source.bot.id === relation.supervisorBotId && source.configRef.botId === relation.supervisorBotId && record.input.botId === relation.supervisorBotId && !relation.groupId
+    const pending = id => Object.values(lifecycle.requests).some(request => request.taskId === id && request.action === 'clear-main' && request.state !== 'succeeded')
+    const waitForReplacement = id => {
+      const error = new TaskInputError(409, 'MAIN_SESSION_REPLACING', '主管主会话换新尚未核实，独立子任务等待原请求完成后续跑。')
+      error.mainBotId = relation.supervisorBotId; error.mainTaskId = id
+      throw error
+    }
+    if (sourceValid && currentId === originalId && pending(originalId)) waitForReplacement(originalId)
+    let next = originalId
+    const visited = new Set()
+    while (next !== currentId && !visited.has(next)) {
+      visited.add(next)
+      const cleared = lifecycle.deleted[String(next)]
+      if (cleared?.action !== 'clear-main' || cleared.botId !== relation.supervisorBotId || !Number.isSafeInteger(cleared.replacementTaskId)) break
+      next = cleared.replacementTaskId
+    }
+    if (!sourceValid || !currentId || next !== currentId || currentId === originalId) {
+      fail('TASK_CANCELLED', '原主管主会话尚未核实换新，不能恢复子任务。')
+    }
+    const currentRecord = await tx.task(currentId)
+    const currentArchive = currentRecord.state.status === 'terminal' ? await readCancelledArchive(tx, currentId) : null
+    const currentCancellation = currentArchive?.cancellation ?? (currentRecord.state.status === 'terminal' ? null : (await tx.doc(TaskCancellation, currentId)).request)
+    if (currentCancellation?.scope === 'main-session-only' && pending(currentId)) waitForReplacement(currentId)
+    await assertNotCancelled(tx, currentId, currentRecord)
+    const parent = await tx.doc(TaskCard, currentId)
+    if (parent.kind !== 'main' || parent.bot.id !== relation.supervisorBotId || parent.configRef.botId !== relation.supervisorBotId || parent.conversationId === source.conversationId) {
+      fail('COLLABORATION_IDENTITY_DENIED', '换新主会话必须属于原主管 Bot 并使用独立上下文。')
+    }
+    return { parent, source }
+  }
   async function guard(tx,taskId,{issueDecision=false}={}) {
     await assertWorkOpen(tx,taskId)
     const state=await tx.doc(Collaboration), r=state.items.find(i=>i.childTaskId===taskId)
@@ -79,12 +122,13 @@ export function collaborationService({TaskCard,ChatInput,createTask,bots}) {
       if(state.items.some(i=>i.parentTaskId===taskId&&i.parentInputId===activeInput)) await authorize(tx,await tx.doc(TaskCard,taskId))
       return
     }
-    // assertNotCancelled handles terminal/abort request without reading retired docs.
-    await assertNotCancelled(tx,r.parentTaskId,await tx.task(r.parentTaskId))
-    const parent=await tx.doc(TaskCard,r.parentTaskId)
+    // A completed main clear changes the entry point, never the original work identity.
+    const { parent, source } = await supervisorFor(tx, r)
     await authorize(tx,parent)
     const childCard = await tx.doc(TaskCard, taskId)
-    if (!await workspaceHistoryAllowed(tx, parent, toolSets(parent,bots,await tx.doc(ToolAccess))) || !await workspaceHistoryAllowed(tx, childCard, toolSets(childCard,bots,await tx.doc(ToolAccess))) || !workspaceShareAllowed(parent, childCard, await tx.doc(ToolAccess))) fail('COLLABORATION_NOT_AUTHORIZED','工作区派生来源已失效。')
+    const access = await tx.doc(ToolAccess)
+    if (!await workspaceHistoryAllowed(tx, source, toolSets(source, bots, access)) || !await workspaceHistoryAllowed(tx, parent, toolSets(parent, bots, access)) ||
+      !await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, bots, access)) || !workspaceShareAllowed(source, childCard, access) || !workspaceShareAllowed(parent, childCard, access)) fail('COLLABORATION_NOT_AUTHORIZED','工作区派生来源已失效。')
     if (r.groupId) { const g=await assertGroupTask(tx,parent); if (!g || g.groupId!==r.groupId || !g.memberBotIds.includes(r.executorBotId)) fail('GROUP_TARGET_DENIED','群来源与执行者绑定失效。') }
     if(r.groupId&&issueDecision) {
       const {GroupResultSources,projectGroupResult}=await import('./group-result-provenance.mjs')
@@ -213,6 +257,19 @@ export async function publishChildResult(tx,taskId,entryId,result) {
     Object.assign(r.result,{groupId:r.groupId,sourceMessageId:r.sourceMessageId,parentInputId:r.parentInputId,deliveryKey:`${r.id}:revision:${revision}`,sources})
   }
   r.revisions??=[];r.revisions.push(copy(r.result));r.businessStatus=result.status
+  const lifecycle = await tx.doc(SessionLifecycle), cleared = lifecycle.deleted[String(r.parentTaskId)]
+  const clearing = Object.values(lifecycle.requests).some(request => request.taskId === r.parentTaskId && request.action === 'clear-main' && request.state !== 'succeeded')
+  if ((cleared?.action === 'clear-main' && cleared.botId === r.supervisorBotId || clearing) && !r.groupId) {
+    const access = await tx.doc(ToolAccess), assigned = access.assignments[r.supervisorBotId]?.tools ?? []
+    const directory = await tx.doc(BotDirectory), supervisor = directory.items.find(bot => bot.id === r.supervisorBotId)
+    if (supervisor?.status !== 'inactive' && COLLABORATION_TOOLS.every(name => assigned.includes(name) && !access.revoked[r.supervisorBotId]?.includes(name)) &&
+      (!r.reviewRequired || assigned.includes(REVIEW_TOOL) && !access.revoked[r.supervisorBotId]?.includes(REVIEW_TOOL))) {
+      await mirrorToMain(tx, { ...child, mainParent: { mainTaskId: r.parentTaskId, botId: r.supervisorBotId } }, {
+        mirrorKind: 'collaboration-result', relationId: r.id, revision, outcome: result.status,
+        summary: `任务「${child.title}」${result.status === 'submitted' ? '已提交结果' : result.status === 'cancelled' ? '已取消' : '执行失败'}${r.reviewRequired && result.status === 'submitted' ? '，仍待主管验收' : ''}`,
+      })
+    }
+  }
 
 }
 

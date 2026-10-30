@@ -10,9 +10,9 @@ import { listBots } from './bots.mjs'
 import { createApiServer } from './app.mjs'
 import { toolCatalog, ToolAccess } from './tools.mjs'
 import { TOOL_GROUPS } from './tool-groups.mjs'
-import { decide, WRITE_TOOLS, addRule, setAutomationPause } from './policy.mjs'
+import { decide, WRITE_TOOLS, addRule, setAutomationPause, PolicyRules } from './policy.mjs'
 import { openTaskStore as openRawStore } from './tasks.mjs'
-import { allGroupTools, TOOL_GROUPS_VERSION } from './bot-configuration.mjs'
+import { TOOL_GROUPS_VERSION } from './bot-configuration.mjs'
 import { commandSkills } from './skills.mjs'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 
@@ -97,7 +97,7 @@ test('closing a group makes its writes ask even where the default would allow', 
   assert.ok(WRITE_TOOLS.has('calendar_feishu_update_event'))
 })
 
-// Production defaults: the real store runs the tool-group migration on open.
+// Production defaults run the marker migration, preserving live per-Bot assignments.
 async function rawFixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pidot-tool-groups-raw-')), file = join(dir, 'task.sqlite')
   const open = (extra = {}) => openRawStore({ file, bots: listBots(config), modelReply: async () => reply(), ...options, ...extra })
@@ -107,24 +107,25 @@ async function rawFixture(t, options = {}) {
   return state
 }
 
-test('T01 every Bot holds every tool group and every switch starts on; Bot management stays Chief-only', async (t) => {
+test('R1 existing Bots keep their seeded capabilities, management stays Chief-only, and new Bots stay blank', async (t) => {
   const { store } = await rawFixture(t)
-  for (const id of ['chief', 'calendar', 'todo']) {
-    const view = await store.getBotConfiguration(id)
-    for (const name of allGroupTools()) assert.ok(view.assigned.tools.includes(name), `${id} ${name}`)
+  for (const seed of listBots(config)) {
+    const view = await store.getBotConfiguration(seed.id)
+    assert.deepEqual(view.assigned, { tools: seed.defaults.tools, resources: seed.defaults.toolResources })
     assert.deepEqual(view.revoked, [])
-    for (const group of view.toolGroups) assert.equal(group.mode, 'allow', `${id} ${group.id}`)
+    for (const group of view.toolGroups) assert.equal(group.mode, 'allow', `${seed.id} ${group.id}`)
     const bots = view.toolGroups.find((group) => group.id === 'bots')
-    assert.equal(bots.available, id === 'chief', id)
-    // Only groups with a usable write get a switch; read-only groups are always on.
-    assert.deepEqual(view.toolGroups.filter((group) => group.switchable).map((group) => group.id), id === 'chief' ? ['calendar', 'todos', 'bots'] : ['calendar', 'todos'], id)
-    if (id !== 'chief') assert.equal(bots.tools.find((tool) => tool.name === 'bot_manage').status, 'chief-only')
+    assert.equal(bots.available, seed.id === 'chief', seed.id)
+    assert.deepEqual(view.toolGroups.filter((group) => group.switchable).map((group) => group.id), seed.id === 'chief' ? ['bots'] : seed.id === 'calendar' ? ['calendar'] : [], seed.id)
+    if (seed.id !== 'chief') assert.equal(bots.tools.find((tool) => tool.name === 'bot_manage').status, 'chief-only')
   }
   const { bot } = await store.createBot({ name: '新助理', requestId: requestId() })
   const created = await store.getBotConfiguration(bot.id)
-  for (const name of allGroupTools()) assert.ok(created.assigned.tools.includes(name), name)
+  assert.deepEqual(created.assigned, { tools: [], resources: [] })
+  assert.ok(created.toolGroups.every((group) => !group.enabled && !group.available && !group.switchable))
   assert.ok(created.toolGroups.every((group) => group.mode === 'allow'))
-  assert.deepEqual(created.assigned.resources, ['workspace:local'])
+  const main = await store.get((await store.mainSessions())[bot.id])
+  assert.deepEqual(main.toolSets.authorized, [])
 })
 
 test('T01 open: every write runs directly, deletion included; closed: every write asks; pause still asks', async (t) => {
@@ -143,34 +144,37 @@ test('T01 open: every write runs directly, deletion included; closed: every writ
   assert.equal((await verdict({ tool: 'workspace.list' })).effect, 'allow')
 })
 
-test('T01 migration runs once: every Bot gets every group, revocations clear, a group with ask/deny becomes 关, replaced state is kept', async (t) => {
+test('R1 marker migration preserves live assignments, revocations, narrowed rules and v1 audit across reopens', async (t) => {
   const state = await rawFixture(t, { toolGroupsMigration: false })
-  await state.store.harness.commit(async (tx) => {
+  const before = await state.store.harness.commit(async (tx) => {
     const access = await tx.doc(ToolAccess)
+    access.groupsVersion = 1
+    access.groupsMigration = { version: 1, bots: { todo: { tools: ['workspace.list'], resources: ['workspace:local'] } } }
     access.assignments.todo.tools = ['report_blocker']
     access.revoked.calendar = ['calendar_read_event']
     await addRule(tx, { botId: 'calendar', match: { tool: 'workspace.prepare_change', action: 'delete' }, effect: 'deny' })
     await addRule(tx, { botId: 'calendar', match: { tool: 'calendar_feishu_create_event' }, effect: 'allow' })
+    return JSON.parse(JSON.stringify({ assignments: access.assignments, revoked: access.revoked, audit: access.groupsMigration, rules: (await tx.doc(PolicyRules)).items }))
   }, context)
   const store = await state.reopen({ toolGroupsMigration: true })
   const calendar = await store.getBotConfiguration('calendar'), todo = await store.getBotConfiguration('todo')
-  for (const name of allGroupTools()) { assert.ok(calendar.assigned.tools.includes(name), name); assert.ok(todo.assigned.tools.includes(name), name) }
-  assert.deepEqual(calendar.revoked, [])
+  assert.deepEqual(calendar.assigned, before.assignments.calendar)
+  assert.deepEqual(todo.assigned, before.assignments.todo)
+  assert.deepEqual(calendar.revoked, ['calendar_read_event'])
   assert.equal(calendar.toolGroups.find((group) => group.id === 'todos').mode, 'ask')
   assert.equal(calendar.toolGroups.find((group) => group.id === 'calendar').mode, 'allow')
   for (const action of ['create', 'update', 'delete'])
-    assert.equal((await store.harness.commit((tx) => decide(tx, { botId: 'calendar', tool: 'workspace.prepare_change', action }), context)).effect, 'ask', action)
+    assert.equal((await store.harness.commit((tx) => decide(tx, { botId: 'calendar', tool: 'workspace.prepare_change', action }), context)).effect, action === 'delete' ? 'deny' : 'allow', action)
   const access = await store.harness.snapshot(ToolAccess, undefined, context)
   assert.equal(access.groupsVersion, TOOL_GROUPS_VERSION)
-  assert.deepEqual(access.groupsMigration.bots.todo.tools, ['report_blocker'])
-  assert.deepEqual(access.groupsMigration.bots.calendar.revoked, ['calendar_read_event'])
-  assert.equal(access.groupsMigration.bots.calendar.rules.length, 2)
-  // A later choice survives reopen: the migration does not run again.
+  assert.equal(access.capabilityMigration.strategy, 'preserve-live-access')
+  assert.deepEqual({ assignments: access.assignments, revoked: access.revoked, audit: access.groupsMigration, rules: (await store.harness.snapshot(PolicyRules, undefined, context)).items }, before)
   await store.switchGroup('calendar', { groupId: 'todos', mode: 'allow', requestId: requestId() })
   await store.harness.commit(async (tx) => { (await tx.doc(ToolAccess)).revoked.todo = ['shared_read'] }, context)
   const again = await state.reopen({ toolGroupsMigration: true })
   assert.equal((await again.getBotConfiguration('calendar')).toolGroups.find((group) => group.id === 'todos').mode, 'allow')
   assert.deepEqual((await again.getBotConfiguration('todo')).revoked, ['shared_read'])
+  assert.deepEqual((await again.getBotConfiguration('todo')).assigned, before.assignments.todo)
 })
 
 test('HTTP: switch route validates group/mode and unknown Bots fail closed', async (t) => {

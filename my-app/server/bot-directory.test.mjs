@@ -17,7 +17,7 @@ import { CALENDAR_TOOL } from './tools.mjs'
 import { BLOCKER_TOOL } from './blockers.mjs'
 import { CALENDAR_WRITE_TOOL } from './approvals.mjs'
 import { addRule } from './policy.mjs'
-import { allGroupTools } from './bot-configuration.mjs'
+import { skillCapabilityCatalog } from './skills.mjs'
 
 const config = { baseUrl: 'https://fixture.invalid/v1', model: 'multi-bot-fixture', apiKey: 'fixture-secret-never-persist' }
 const token = 'multi-bot-test-token'
@@ -38,6 +38,10 @@ async function fixture(t, options = {}) {
   const close = async (store) => { await store.close(); stores.delete(store) }
   t.after(async () => { for (const store of stores) await store.close(); await rm(dir, { recursive: true, force: true }) })
   return { dir, file, open, close, store: await open() }
+}
+async function assignBotTools(store, botId, tools, resources) {
+  const { bot } = await store.getBotConfiguration(botId)
+  return store.updateBotConfiguration(botId, { requestId: `fixture-tools-${botId}`, expectedVersion: bot.configRef.version, description: bot.description, tools, resources })
 }
 async function apiFixture(t, options = {}) {
   const f = await fixture(t, options)
@@ -111,14 +115,17 @@ test('SQLite failed Bot commit publishes neither identity nor receipt; retry aft
   assert.equal(next.bots().length, 4)
 })
 
-test('creation only permits bounded ordinary settings and server-owned capability profiles; no credentials persist', async (t) => {
+test('creation accepts bounded ordinary settings but legacy profiles grant no capabilities; no credentials persist', async (t) => {
   const { store } = await fixture(t, { bots: listBots(config) })
   for (const invalid of [null, [], {}, { ...creation(), tools: [] }, { ...creation(), credentials: 'secret' }, { ...creation(), name: ' ' }, { ...creation(), description: 'x'.repeat(2001) }, { ...creation(), requestId: '__proto__' }, { ...creation(), requestId: 'constructor' }, { ...creation(), profile: 'chief' }, { ...creation(), parameters: { tools: [] } }, { ...creation(), parameters: { toolResources: ['other'] } }, { ...creation(), parameters: { model: { id: 'x', baseUrl: 'https://evil.invalid' } } }, { ...creation(), parameters: { maxOutputTokens: 0 } }]) await assert.rejects(store.createBot(invalid))
   assert.equal(store.bots().length, 3)
   const general = (await store.createBot({ ...creation(), parameters: { maxOutputTokens: 128, callLimits: { modelCalls: 4 } } })).bot
   const calendar = (await store.createBot(creation('模拟日程专家', 'request-0002', 'mock-calendar'))).bot
-  assert.deepEqual([...general.defaults.tools].sort(), [...new Set([BLOCKER_TOOL, ...allGroupTools()])].sort()); assert.deepEqual(general.defaults.toolResources, ['workspace:local'])
-  assert.ok(calendar.defaults.tools.includes(CALENDAR_TOOL)); assert.deepEqual(calendar.defaults.toolResources, ['mock:personal', 'workspace:local'])
+  for (const bot of [general, calendar]) {
+    assert.equal(bot.capabilityDefaultsVersion, 2)
+    assert.deepEqual(bot.defaults.tools, [])
+    assert.deepEqual(bot.defaults.toolResources, [])
+  }
   assert.equal(general.defaults.maxOutputTokens, 128)
   assert.equal(JSON.stringify(await store.harness.snapshot(BotDirectory, context)).includes(config.apiKey), false)
 })
@@ -130,8 +137,8 @@ test('general specialists cannot inherit Chief management tools; reordered setti
   const first = await store.createBot(input)
   const retry = await store.createBot({ ...input, parameters: { callLimits: { toolCalls: 2, modelCalls: 3 }, maxOutputTokens: 128, thinkingLevel: 'off' } })
   assert.equal(retry.created, false); assert.equal(retry.bot.id, first.bot.id)
-  assert.deepEqual([...first.bot.defaults.tools].sort(), [...new Set([BLOCKER_TOOL, ...allGroupTools()])].sort())
-  assert.ok(!first.bot.defaults.tools.includes('manage_bots') && !first.bot.defaults.tools.includes('bot_manage')); assert.deepEqual(first.bot.defaults.toolResources, ['workspace:local'])
+  assert.deepEqual(first.bot.defaults.tools, [])
+  assert.deepEqual(first.bot.defaults.toolResources, [])
 })
 
 test('authenticated Bot HTTP creation, idempotent retry, filtering and every scoped Task control reject wrong Bot', async (t) => {
@@ -177,9 +184,13 @@ test('independent Bot Tasks keep FIFO queues, frozen duties and model history se
   const second = await store.create({ botId: a.id }); assert.notEqual(second.conversationId, ta.conversationId); assert.deepEqual(second.messages, [])
 })
 
-test('Bot profile Skill activation and produced artifacts never copy into another Bot or conversation', async (t) => {
-  const { store } = await fixture(t, { bots: listBots(config) })
+test('explicitly assigned Skill activation and produced artifacts never copy into another Bot or conversation', async (t) => {
+  const { store } = await fixture(t, { bots: listBots(config), readCapabilityCatalog: () => skillCapabilityCatalog() })
   const a = (await store.createBot(creation('A日历', 'request-0001', 'mock-calendar'))).bot, b = (await store.createBot(creation('B日历', 'request-0002', 'mock-calendar'))).bot
+  const calendar = listBots(config).find(bot => bot.id === 'calendar')
+  for (const bot of [a, b]) await assignBotTools(store, bot.id, calendar.defaults.tools, calendar.defaults.toolResources)
+  const capabilities = await store.getBotCapabilities(a.id), skill = capabilities.items.find(item => item.id === 'skill:calendar-conflict-analysis')
+  await store.setBotCapabilityAssignment(a.id, { requestId: 'fixture-enable-calendar-skill', expectedRevision: capabilities.revision, expectedCatalogRevision: skill.revision, capabilityId: skill.id, enabled: true })
   const ta = await store.create({ botId: a.id }), tb = await store.create({ botId: b.id }), tc = await store.create({ botId: a.id })
   await store.activateSkill(ta.taskId, { skillId: 'calendar-conflict-analysis' })
   assert.equal((await store.get(ta.taskId)).skillState.active.length, 1)
@@ -211,6 +222,7 @@ test('Bot problems and approvals remain attached to original Task, another Bot c
     return text()
   } })
   const a = (await store.createBot(creation('A日历', 'request-0001', 'mock-calendar'))).bot, b = (await store.createBot(creation('B日历', 'request-0002', 'mock-calendar'))).bot
+  await assignBotTools(store, a.id, [BLOCKER_TOOL, CALENDAR_TOOL, 'calendar_read_event', CALENDAR_WRITE_TOOL], ['mock:personal'])
   await store.harness.commit(tx => addRule(tx, { botId: a.id, match: { tool: CALENDAR_WRITE_TOOL }, effect: 'ask' }), context)
   const ta = await store.create({ botId: a.id }), tb = await store.create({ botId: b.id })
   await store.send(ta.taskId, 'ask'); const blocked = await until(() => store.get(ta.taskId), (v) => v.blockers.activeId)

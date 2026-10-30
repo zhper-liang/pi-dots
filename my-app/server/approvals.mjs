@@ -62,8 +62,9 @@ export async function overlayMockEvent(tx, data, args) {
 }
 const canonicalJson = (x) => Array.isArray(x) ? x.map(canonicalJson) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, canonicalJson(x[k])])) : x
 // Host approvals bind the exact management or routine call.
-export const HOST_APPROVAL_TOOLS = ['bot_manage', 'routine_propose']
-const binding = (item) => HOST_APPROVAL_TOOLS.includes(item.toolName) ? createHash('sha256').update(JSON.stringify([item.taskId, item.conversationId, item.inReplyTo, item.turnId, item.callId, item.botId, item.toolName, canonicalJson(item.arguments), canonicalJson(item.before), item.operationKey])).digest('hex') : item.simulated === false ? createHash('sha256').update(JSON.stringify([item.taskId, item.conversationId, item.inReplyTo, item.turnId, item.callId, item.botId, item.toolName, item.source, ...(item.toolName === FEISHU_CREATE_TOOL ? [feishuCreateHash(item.arguments)] : [feishuMutationHash(item.toolName, item.arguments), item.before]), item.retryOf ?? null, item.duplicateRisk ?? null])).digest('hex') : createHash('sha256').update(JSON.stringify([item.taskId, item.conversationId, item.inReplyTo, item.turnId, item.callId,
+export const HOST_APPROVAL_TOOLS = ['bot_manage', 'routine_propose', 'mcp_manage', 'skill_manage']
+const hostApproval = item => HOST_APPROVAL_TOOLS.includes(item.toolName) || Boolean(item.externalMcp)
+const binding = (item) => hostApproval(item) ? createHash('sha256').update(JSON.stringify([item.taskId, item.conversationId, item.inReplyTo, item.turnId, item.callId, item.botId, item.toolName, canonicalJson(item.arguments), canonicalJson(item.before), item.operationKey, ...(item.externalMcp ? [canonicalJson(item.externalMcp)] : []), ...(item.capabilityIntent ? [canonicalJson(item.capabilityIntent)] : []), ...(item.capabilitySetupSpec ? [canonicalJson(item.capabilitySetupSpec)] : [])])).digest('hex') : item.simulated === false ? createHash('sha256').update(JSON.stringify([item.taskId, item.conversationId, item.inReplyTo, item.turnId, item.callId, item.botId, item.toolName, item.source, ...(item.toolName === FEISHU_CREATE_TOOL ? [feishuCreateHash(item.arguments)] : [feishuMutationHash(item.toolName, item.arguments), item.before]), item.retryOf ?? null, item.duplicateRisk ?? null])).digest('hex') : createHash('sha256').update(JSON.stringify([item.taskId, item.conversationId, item.inReplyTo, item.turnId, item.callId,
   item.arguments.resource, item.arguments.eventId, item.arguments.expectedStart, item.arguments.expectedEnd, item.arguments.start, item.arguments.end, item.before, ...(item.retryOf ? [item.retryOf, item.duplicateRisk] : [])])).digest('hex')
 const fail = (code, message) => ({ ok: false, error: { code, message } })
 export async function requestCalendarApproval(tx, card, args, entryId, turnId, callId, readEvent, allowAlways = true) {
@@ -109,17 +110,20 @@ export async function requestFeishuMutationApproval(tx, card, name, args, entryI
   state.items.push({ ...item, id: audit.id }); state.activeId = audit.id
   return { ok: true, data: { approvalId: audit.id, taskId: card.taskId, status: 'waiting-for-user-approval', simulated: false, notice: '精确修改或删除意图已登记；宿主按当前规则直接执行或等待确认，以最终回执为准。' } }
 }
-export async function requestManagementApproval(tx, card, call, entryId, turnId, operationKey, target, toolName = 'bot_manage', allowAlways = true) {
+export async function requestManagementApproval(tx, card, call, entryId, turnId, operationKey, target, toolName = 'bot_manage', allowAlways = true, externalMcp = null, capabilityIntent = null, capabilitySetupSpec = null) {
   const state = await tx.doc(TaskApprovals, card.taskId)
   if (state.activeId !== null) return fail('TASK_AWAITING_APPROVAL', '请先处理原审批事项。')
   const rejected = state.items.find(i => i.toolName === toolName && i.inReplyTo === entryId && i.operationKey === operationKey && i.receipt && !i.receipt.result.ok)
   if (rejected) return { ...JSON.parse(JSON.stringify(rejected.receipt.result)), replayed: true }
   const item = { taskId: card.taskId, conversationId: card.conversationId, botId: card.bot.id, inReplyTo: entryId, turnId, callId: call.id, toolName, arguments: structuredClone(call.arguments), operationKey,
+    ...(externalMcp ? { externalMcp: structuredClone(externalMcp) } : {}),
+    ...(capabilityIntent ? { capabilityIntent: structuredClone(capabilityIntent) } : {}),
+    ...(capabilitySetupSpec ? { capabilitySetupSpec: structuredClone(capabilitySetupSpec) } : {}),
     before: target ? { botId: target.id, name: target.name, description: target.description, configRef: JSON.parse(JSON.stringify(target.configRef)) } : null, simulated: false, allowAlways, status: 'pending', decision: null, receipt: null, createdAt: new Date().toISOString() }
   item.binding = binding(item)
   const audit = await tx.appendEntry(card.conversationId, { kind: 'pidot.approval-requested', data: item })
   state.items.push({ ...item, id: audit.id }); state.activeId = audit.id
-  return { ok: true, data: { approvalId: audit.id, taskId: card.taskId, status: 'waiting-for-user-approval', notice: toolName === 'routine_propose' ? '例行任务意图已登记；宿主按当前规则直接执行或等待确认，以最终回执为准。' : 'Bot管理意图已登记；宿主按当前规则直接执行或等待确认，以最终回执为准。' } }
+  return { ok: true, data: { approvalId: audit.id, taskId: card.taskId, status: 'waiting-for-user-approval', notice: capabilityIntent || capabilitySetupSpec ? '能力配置需要核对目标、来源和精确范围后确认；没有配置完成回执不得视为可用。' : externalMcp ? '外部工具需要核对精确操作后确认；连接和启用不等于已执行。' : toolName === 'routine_propose' ? '例行任务意图已登记；宿主按当前规则直接执行或等待确认，以最终回执为准。' : 'Bot管理意图已登记；宿主按当前规则直接执行或等待确认，以最终回执为准。' } }
 }
 /** D-09: an exact "always allow" rule decides the card itself; dispatch, unknown and read-back are unchanged. */
 export async function autoApproveByRule(tx, card, item, rule) {
@@ -167,7 +171,7 @@ export async function saveApprovalReceipt(tx, card, item, result, source = 'tool
     taskId: card.taskId, approvalId: item.id, inReplyTo: item.inReplyTo, binding: item.binding,
     operationId: item.operation?.id ?? null, result, source, createdAt } })
   item.receipt = { id: audit.id, result, source, createdAt }
-  item.status = result.ok ? 'executed' : item.decision?.decision === 'rejected' ? 'rejected' : 'not-executed'
+  item.status = item.externalMcp && result.error?.unknown ? 'outcome-unknown' : result.ok ? 'executed' : item.decision?.decision === 'rejected' ? 'rejected' : 'not-executed'
   const state = await tx.doc(TaskApprovals, card.taskId)
   if (state.activeId === item.id) state.activeId = null
   return result
@@ -209,7 +213,7 @@ export async function finishCalendarApproval(tx, card, item, check, capabilities
 }
 
 async function guardRealApproval(tx, card, item, bots, sync) {
-  if (item.simulated !== false || HOST_APPROVAL_TOOLS.includes(item.toolName)) return
+  if (item.simulated !== false || hostApproval(item)) return
   if (sync) await sync(tx)
   await (await import('./bot-directory.mjs')).assertBotActive(tx, card.bot.id)
   const { ToolAccess, toolSets } = await import('./tools.mjs')

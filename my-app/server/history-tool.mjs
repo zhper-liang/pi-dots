@@ -34,6 +34,7 @@ export async function readTaskHistory(tx, card, args, inputId, sets) {
   const deniedInputs=card.kind==='group'||card.forkSource?await deniedGroupInputs(tx,card,entries,{...(await import('./tasks.mjs')),bots:(await tx.doc((await import('./bot-directory.mjs')).BotDirectory)).items}):new Set()
   const realAllowed = await (await import('./feishu-calendar.mjs')).feishuTaskAllowed(tx, card, sets)
   const sourceAllowed = (entry, seen = new Set()) => {
+    if (card.externalMcpHistoryFloor && entry.id < card.externalMcpHistoryFloor && entry.kind !== 'pidot.user') return false
     if (!realAllowed && entry.kind !== 'pidot.user') return false
     if(entry.kind!=='pidot.user'&&(deniedInputs.has(entry.data.inReplyTo)||deniedInputs.size&&entry.kind==='pidot.context-compaction'))return false
     if (entry.kind !== 'pidot.tool-result') return true

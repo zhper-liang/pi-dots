@@ -88,3 +88,23 @@ export function routineRule({ when, value, weekdays = [1], day = 1, event = 'tod
   else return { error: '请选择什么时候运行。' }
   return { rule }
 }
+
+/** Seeded legacy Bots omit status; only an explicit inactive value excludes a Bot. */
+export function routineBotChoices(bots, allowed) {
+  return bots.filter(bot => bot.status !== 'inactive' && (!allowed || allowed.some(option => option.id === bot.id && option.status !== 'inactive')))
+}
+
+/** UI-only guard over authenticated read responses; never grants missing capabilities. */
+export function routineBotSelection({ botId, directory, configuration, task }) {
+  const bot = directory?.bots?.find(item => item.id === botId)
+  if (!bot || bot.status === 'inactive' || configuration?.bot?.id !== botId || configuration.bot.status === 'inactive') return { error: '执行 Bot 已停用或不存在，请重新选择。' }
+  const revision = configuration.bot.configRef?.version
+  const models = [...new Set((configuration.models ?? []).map(item => item.id).filter(id => typeof id === 'string' && id))].sort()
+  const mainTaskId = directory.mainSessions?.[botId]
+  if (typeof revision !== 'string' || !revision || !Number.isSafeInteger(mainTaskId) || task?.taskId !== mainTaskId || task.bot?.id !== botId || task.kind !== 'main') return { error: 'Bot 当前版本或主会话已改变，请重新读取。' }
+  if (task.parameters?.mode !== 'model' || !models.length) return { error: '目标 Bot 没有可用模型，请先配置模型。' }
+  const tools = configuration.assigned?.tools ?? [], resources = configuration.assigned?.resources ?? []
+  const missing = [...['workspace.list', 'workspace.get'].filter(name => !tools.includes(name)), ...(!resources.includes('workspace:local') ? ['workspace:local'] : [])]
+  return { botId, revision, mainTaskId, models, defaultModel: configuration.bot.defaults?.model?.id ?? '', missing,
+    fingerprint: JSON.stringify([botId, revision, mainTaskId, models, [...tools].sort(), [...resources].sort()]) }
+}

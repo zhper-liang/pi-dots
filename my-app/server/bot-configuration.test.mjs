@@ -7,7 +7,7 @@ import { once } from 'node:events'
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { openTaskStore } from './fixtures/authorized-task-store.mjs'
+import { assignCapabilities, openTaskStore } from './fixtures/authorized-task-store.mjs'
 import { listBots } from './bots.mjs'
 import { ToolAccess, CALENDAR_TOOL, CALENDAR_EVENT_TOOL, readMockSchedule } from './tools.mjs'
 import { MockCalendar, CALENDAR_WRITE_TOOL } from './approvals.mjs'
@@ -22,6 +22,12 @@ const turn = (name, arguments_ = args) => { const call = { type: 'toolCall', id:
 async function until(read, predicate = Boolean) { for (let i = 0; i < 900; i++) { const x = await read(); if (predicate(x)) return x; await delay(5) } assert.fail('configuration fixture did not settle') }
 const done = (s, id) => until(() => s.get(id), (t) => t.activeInputId === null && t.queueLength === 0 && t.runtime.checkpoint?.phase === 'awaitInput')
 const waiting = (s, id) => until(() => s.get(id), (t) => t.approvals?.activeId != null && t.runtime.checkpoint?.phase === 'awaitApproval')
+async function boundedWait(promise, label) {
+  let timer
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), 4500) })])
+  } finally { clearTimeout(timer) }
+}
 async function fixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pidot-config-02-')), file = join(dir, 'task.sqlite'), stores = new Set()
   const open = async (extra = {}) => { const s = await openTaskStore({ file, bots: listBots(config), modelReply: async () => text(), ...options, ...extra }); stores.add(s); return s }
@@ -85,8 +91,8 @@ test('02 immutable idempotency receipts survive newer configs, base changes and 
 test('02 installed tools can be assigned directly; assignment changes reach existing Tasks', async (t) => {
   const { store } = await fixture(t)
   const { bot } = await store.createBot({ name: '权限专家', description: '独立职责', profile: 'general', requestId: requestId() })
-  // A new Bot holds every group (T01); narrow it first so the grant below is observable.
-  await store.updateBotConfiguration(bot.id, await edit(store, bot.id, { tools: [] }))
+  // Creation is blank; only the explicit configuration below grants business access.
+  assert.deepEqual(bot.defaults.tools, []); assert.deepEqual(bot.defaults.toolResources, [])
   const old = await store.create({ botId: bot.id }), sameBotOld = await store.create({ botId: 'calendar' })
   const before = await store.getBotConfiguration(bot.id)
   assert.ok(before.installed.includes(CALENDAR_TOOL)); assert.ok(!before.assigned.tools.includes(CALENDAR_TOOL))
@@ -99,12 +105,14 @@ test('02 installed tools can be assigned directly; assignment changes reach exis
 
 for (const level of ['bot-tools', 'bot-resources']) test(`02 ${level} removal and regrant immediately update old Tasks across restart`, async (t) => {
   const { store, close, open } = await fixture(t), old = await store.create({ botId: 'calendar' })
+  await assignCapabilities(store, { operation: 'grant', tools: [CALENDAR_TOOL], resources: [args.resource] })
+  const granted = (await store.getBotConfiguration('calendar')).assigned
   const resource = level.endsWith('resources')
   await store.updateBotConfiguration('calendar', await edit(store, 'calendar', resource ? { resources: [] } : { tools: [] }))
   let current = await store.get(old.taskId)
   assert.ok(resource ? !current.toolSets.resources.includes(args.resource) : !current.toolSets.authorized.includes(CALENDAR_TOOL))
   assert.deepEqual(current.parameters, old.parameters)
-  await store.updateBotConfiguration('calendar', await edit(store, 'calendar', resource ? { resources: [args.resource] } : { tools: old.parameters.tools }))
+  await store.updateBotConfiguration('calendar', await edit(store, 'calendar', resource ? { resources: granted.resources } : { tools: granted.tools.filter(name => allGroupTools().includes(name)) }))
   await close(store); const reopened = await open(); current = await reopened.get(old.taskId)
   assert.ok(resource ? current.toolSets.resources.includes(args.resource) : current.toolSets.authorized.includes(CALENDAR_TOOL))
   const fresh = await reopened.create({ botId: 'calendar' })
@@ -112,8 +120,10 @@ for (const level of ['bot-tools', 'bot-resources']) test(`02 ${level} removal an
 })
 
 test('02 invalid model, credentials, source, request keys, unknown resources and inherited fields cannot partially save', async (t) => {
-  const { store } = await fixture(t), before = await store.getBotConfiguration('calendar'), input = await edit(store)
-  for (const patch of [{ parameters: { model: { id: 'not-configured' } } }, { parameters: { model: { id: config.model, baseUrl: 'evil' } } }, { credentials: 'TOP_SECRET' }, { source: 'chief' }, { tools: ['shell'] }, { resources: ['mock:someone-else'] }, { requestId: '__proto__' }, { requestId: 'constructor' }, { description: '' }, { expectedVersion: 'stale' }]) {
+  const { store } = await fixture(t)
+  await store.updateBotConfiguration('calendar', await edit(store, 'calendar', { tools: [CALENDAR_TOOL], resources: [args.resource] }))
+  const before = await store.getBotConfiguration('calendar'), input = await edit(store)
+  for (const patch of [{ parameters: { model: { id: 'not-configured' } } }, { parameters: { model: { id: config.model, baseUrl: 'evil' } } }, { credentials: 'TOP_SECRET' }, { source: 'chief' }, { tools: ['shell'] }, { resources: ['mock:someone-else'] }, { requestId: '__proto__' }, { requestId: 'constructor' }, { description: null }, { description: 'x'.repeat(2001) }, { expectedVersion: 'stale' }]) {
     await assert.rejects(store.updateBotConfiguration('calendar', { ...input, ...patch }))
   }
   const after = await store.getBotConfiguration('calendar')
@@ -133,13 +143,17 @@ test('02 new configured model can be selected; unsupported provider is rejected 
 test('02 delayed model response uses the latest Bot assignment at dispatch time', async (t) => {
   let entered, release, executions = 0
   const ready = new Promise((r) => { entered = r }), held = new Promise((r) => { release = r })
+  t.after(() => release())
   const { store } = await fixture(t, { modelReply: async (_m, { context: ctx }) => {
-    if (!ctx.messages.some((m) => m.role === 'toolResult')) { entered(); await held; return turn(CALENDAR_TOOL) } return text()
+    if (!ctx.messages.some((m) => m.role === 'toolResult')) { entered(); await boundedWait(held, 'delayed model release'); return turn(CALENDAR_TOOL) } return text()
   }, toolImpl: (a) => { executions++; return readMockSchedule(a) } })
-  const task = await store.create({ botId: 'calendar' }); await store.send(task.taskId, '读取'); await ready
-  const before = await store.getBotConfiguration('calendar')
-  await store.updateBotConfiguration('calendar', await edit(store, 'calendar', { tools: before.assigned.tools.filter(n => n !== CALENDAR_TOOL) }))
-  release()
+  const task = await store.create({ botId: 'calendar' })
+  await store.updateBotConfiguration('calendar', await edit(store, 'calendar', { tools: [CALENDAR_TOOL], resources: [args.resource] }))
+  try {
+    await store.send(task.taskId, '读取'); await boundedWait(ready, 'delayed model entry')
+    const before = await store.getBotConfiguration('calendar')
+    await store.updateBotConfiguration('calendar', await edit(store, 'calendar', { tools: before.assigned.tools.filter(n => n !== CALENDAR_TOOL) }))
+  } finally { release() }
   const final = await done(store, task.taskId)
   assert.equal(executions, 0); assert.ok(final.messages.some((m) => m.result?.error?.code === 'TOOL_NOT_AUTHORIZED'))
 })
@@ -154,10 +168,14 @@ test('02 resource revocation blocks actual read dispatch, not only tool visibili
 
 for (const level of ['pool', 'bot', 'resource']) test(`02 old exact approval cannot bypass ${level} revocation after restart`, async (t) => {
   const { store, close, open } = await fixture(t, { modelReply: planner() }), task = await store.create({ botId: 'calendar' })
+  await store.updateBotConfiguration('calendar', await edit(store, 'calendar', { tools: [CALENDAR_TOOL, CALENDAR_EVENT_TOOL, CALENDAR_WRITE_TOOL], resources: [args.resource] }))
   await store.send(task.taskId, '精确改期'); const pending = await waiting(store, task.taskId), item = pending.approvals.items[0]
   if (level === 'pool') await pool(store, 'revoke', [CALENDAR_WRITE_TOOL])
   else if (level === 'resource') await pool(store, 'revoke', [], [args.resource])
-  else await store.updateBotConfiguration('calendar', await edit(store, 'calendar', { tools: pending.parameters.tools.filter((n) => n !== CALENDAR_WRITE_TOOL) }))
+  else {
+    const { assigned } = await store.getBotConfiguration('calendar')
+    await store.updateBotConfiguration('calendar', await edit(store, 'calendar', { tools: assigned.tools.filter((n) => n !== CALENDAR_WRITE_TOOL) }))
+  }
   await close(store); const reopened = await open({ modelReply: async () => text() })
   await reopened.decideApproval(task.taskId, item.id, { decision: 'approved' })
   const final = await done(reopened, task.taskId)
@@ -213,47 +231,74 @@ test('02 SIGKILL restores persisted configuration and pool denial before replayi
   assert.equal((await store.harness.snapshot(ToolAccess, undefined, context)).pool, undefined)
 })
 
-test('02 new Bot defaults are assigned without an intermediate capability pool', async (t) => {
+test('02 new Bot starts blank and restart never restores revoked access or changes an existing Bot', async (t) => {
   const { store, close, open } = await fixture(t)
-  await pool(store, 'revoke', [CALENDAR_TOOL], [args.resource])
-  const input = { name: '池未授权时创建', description: '不借用模板提升能力', profile: 'mock-calendar', requestId: requestId() }
+  const existing = await store.getBotConfiguration('calendar')
+  const input = { name: '空白日程助理', description: '不借用模板提升能力', profile: 'mock-calendar', requestId: requestId() }
   const { bot } = await store.createBot(input)
-  assert.ok(bot.defaults.tools.includes(CALENDAR_TOOL)); assert.ok(bot.defaults.toolResources.includes('workspace:local'))
-  assert.deepEqual((await store.getBotConfiguration(bot.id)).bot.defaults, bot.defaults)
-  await pool(store, 'grant', [CALENDAR_TOOL], [args.resource]); await close(store)
-  const reopened = await open(), fresh = await reopened.create({ botId: bot.id })
-  assert.ok(fresh.parameters.tools.includes(CALENDAR_TOOL)); assert.ok(fresh.parameters.toolResources.includes('workspace:local'))
-  assert.deepEqual((await reopened.createBot(input)).bot, bot)
+  assert.deepEqual(bot.defaults.tools, []); assert.deepEqual(bot.defaults.toolResources, [])
+  assert.deepEqual((await store.getBotConfiguration(bot.id)).assigned, { tools: [], resources: [] })
+  const old = await store.create({ botId: bot.id })
+  assert.ok(!old.toolSets.authorized.includes(CALENDAR_TOOL)); assert.deepEqual(old.toolSets.resources, [])
+  await close(store)
+  const reopened = await open()
+  assert.deepEqual((await reopened.getBotConfiguration(bot.id)).assigned, { tools: [], resources: [] })
+  await reopened.updateBotConfiguration(bot.id, await edit(reopened, bot.id, { tools: [CALENDAR_TOOL], resources: [args.resource] }))
+  assert.ok((await reopened.get(old.taskId)).toolSets.authorized.includes(CALENDAR_TOOL))
+  await reopened.updateBotConfiguration(bot.id, await edit(reopened, bot.id, { tools: [], resources: [] }))
+  await close(reopened)
+  const restarted = await open(), fresh = await restarted.create({ botId: bot.id })
+  assert.deepEqual((await restarted.getBotConfiguration(bot.id)).assigned, { tools: [], resources: [] })
+  assert.ok(!fresh.parameters.tools.includes(CALENDAR_TOOL)); assert.deepEqual(fresh.parameters.toolResources, [])
+  assert.ok(!(await restarted.get(old.taskId)).toolSets.authorized.includes(CALENDAR_TOOL))
+  assert.deepEqual(await restarted.getBotConfiguration('calendar'), existing)
+  assert.ok(existing.assigned.tools.includes(CALENDAR_TOOL)); assert.ok(existing.assigned.resources.includes(args.resource))
+  assert.deepEqual((await restarted.createBot(input)).bot, bot)
 })
 
 test('02 in-flight read receipt remains real after revoke; next dispatch denied without deleting prior result', async (t) => {
   let entered, release, reads = 0
   const ready = new Promise((r) => { entered = r }), held = new Promise((r) => { release = r })
+  t.after(() => release())
   const { store } = await fixture(t, { modelReply: async (_m, { context: ctx }) => {
     const results = ctx.messages.filter((m) => m.role === 'toolResult')
     return results.length < 2 ? turn(CALENDAR_TOOL, results.length ? { ...args, date: '2026-10-21' } : args) : text()
-  }, toolImpl: async (a) => { reads++; entered(); await held; return readMockSchedule(a) } })
-  const task = await store.create({ botId: 'calendar' }); await store.send(task.taskId, '先读再读'); await ready
-  await pool(store, 'revoke', [CALENDAR_TOOL]); release()
+  }, toolImpl: async (a) => { reads++; entered(); await boundedWait(held, 'in-flight read release'); return readMockSchedule(a) } })
+  const task = await store.create({ botId: 'calendar' })
+  await store.updateBotConfiguration('calendar', await edit(store, 'calendar', { tools: [CALENDAR_TOOL], resources: [args.resource] }))
+  try {
+    await store.send(task.taskId, '先读再读'); await boundedWait(ready, 'in-flight read entry')
+    await pool(store, 'revoke', [CALENDAR_TOOL])
+  } finally { release() }
   const final = await done(store, task.taskId), receipts = final.messages.filter((m) => m.role === 'tool')
   assert.equal(reads, 1); assert.equal(receipts[0].result.ok, true); assert.equal(receipts[1].result.error.code, 'TOOL_NOT_AUTHORIZED')
 })
 
-test('02 fresh runtime assigns every tool group; a legacy record initializes from Bot defaults', async (t) => {
+test('02 fresh runtime keeps existing grants and new Bots blank; legacy assignment metadata initializes from persisted defaults', async (t) => {
   const { openTaskStore: rawOpen } = await import('./tasks.mjs')
   const { BotDirectory } = await import('./bot-directory.mjs')
   const dir = await mkdtemp(join(tmpdir(), 'pidot-raw-pool-')), file = join(dir, 'task.sqlite'); let store
   t.after(async () => { if (store) await store.close(); await rm(dir, { recursive: true, force: true }) })
   store = await rawOpen({ file, bots: listBots(config), modelReply: async () => text() })
   let view = await store.getBotConfiguration('calendar')
-  assert.ok(view.installed.includes(CALENDAR_TOOL)); assert.deepEqual([...view.assigned.tools].sort(), [...new Set([...view.bot.defaults.tools, ...allGroupTools()])].sort())
+  assert.ok(view.installed.includes(CALENDAR_TOOL))
+  // Intrinsic main-session management tools are not configurable business grants.
+  assert.deepEqual(view.assigned.tools.filter(name => allGroupTools().includes(name)), view.bot.defaults.tools.filter(name => allGroupTools().includes(name)))
+  assert.deepEqual(view.assigned.resources, view.bot.defaults.toolResources)
+  const existing = structuredClone(view.assigned)
   const old = await store.create({ botId: 'calendar' }); assert.ok(old.toolSets.authorized.includes(CALENDAR_TOOL))
+  const { bot } = await store.createBot({ name: '全新日程助理', profile: 'mock-calendar', requestId: requestId() })
+  assert.deepEqual(bot.defaults.tools, []); assert.deepEqual(bot.defaults.toolResources, [])
+  assert.deepEqual((await store.getBotConfiguration(bot.id)).assigned, { tools: [], resources: [] })
   // A prior record without assignment metadata initializes from the current Bot defaults.
   await store.harness.commit(async (tx) => { const access = await tx.doc(ToolAccess); delete access.assignments; const directory = await tx.doc(BotDirectory); delete directory.configurations; delete directory.managementAudit; delete directory.managementRequests }, context)
   await store.close(); store = await rawOpen({ file, bots: listBots(config) })
   view = await store.getBotConfiguration('calendar')
-  assert.ok(view.assigned.tools.includes(CALENDAR_TOOL))
+  assert.deepEqual(view.assigned, existing)
+  assert.deepEqual((await store.getBotConfiguration(bot.id)).assigned, { tools: [], resources: [] })
   assert.ok((await store.get(old.taskId)).toolSets.authorized.includes(CALENDAR_TOOL))
+  const fresh = await store.create({ botId: bot.id })
+  assert.ok(!fresh.toolSets.authorized.some(name => allGroupTools().includes(name))); assert.deepEqual(fresh.toolSets.resources, [])
   assert.equal((await store.harness.snapshot(ToolAccess, undefined, context)).pool, undefined)
 })
 

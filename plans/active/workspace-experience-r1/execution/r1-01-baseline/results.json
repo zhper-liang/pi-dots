@@ -1,0 +1,26 @@
+[
+  {
+    "command": "pnpm test",
+    "exitCode": 0,
+    "startedAt": "2026-10-29T15:02:22.085462+08:00",
+    "finishedAt": "2026-10-29T15:02:54.433929+08:00",
+    "seconds": 32.35,
+    "log": "plans/active/workspace-experience-r1/execution/r1-01-baseline/test.log"
+  },
+  {
+    "command": "pnpm lint",
+    "exitCode": 0,
+    "startedAt": "2026-10-29T15:02:54.434819+08:00",
+    "finishedAt": "2026-10-29T15:02:55.531698+08:00",
+    "seconds": 1.1,
+    "log": "plans/active/workspace-experience-r1/execution/r1-01-baseline/lint.log"
+  },
+  {
+    "command": "pnpm build",
+    "exitCode": 0,
+    "startedAt": "2026-10-29T15:02:55.532030+08:00",
+    "finishedAt": "2026-10-29T15:03:00.656403+08:00",
+    "seconds": 5.12,
+    "log": "plans/active/workspace-experience-r1/execution/r1-01-baseline/build.log"
+  }
+]

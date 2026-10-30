@@ -83,7 +83,7 @@ async function fixture(t) {
   t.after(async () => { await closeServer(api); await store?.close(); await closeServer(provider); await rm(dir, { recursive: true, force: true }) })
   await open()
   const { bot, assigned } = await store.getBotConfiguration('calendar')
-  await store.updateBotConfiguration('calendar', { requestId: 't09-local-setup', expectedVersion: bot.configRef.version, description: bot.description, tools: assigned.tools, resources: [...new Set([...assigned.resources, 'workspace:local'])] })
+  await store.updateBotConfiguration('calendar', { requestId: 't09-local-setup', expectedVersion: bot.configRef.version, description: bot.description, tools: [...new Set([...assigned.tools, 'workspace.list', 'workspace.get'])], resources: [...new Set([...assigned.resources, 'workspace:local'])] })
   const request = async (path, input) => {
     const response = await fetch(`${baseUrl}${path}`, { method: input === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, ...(input === undefined ? {} : { body: JSON.stringify(input) }) })
     const body = await response.json()

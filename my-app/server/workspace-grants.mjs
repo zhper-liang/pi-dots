@@ -33,7 +33,13 @@ export async function workspaceSourceReadable(tx, botId, sourceId) {
 
 // Common historical-data gate used by context, history, artifacts and collaboration.
 // Reading stored text is an access decision, not permission to resurrect old Tasks.
+export function externalMcpHistoryAllowed(card, sets) {
+  return (card.externalMcpUsedRefs ?? []).every(ref => sets.authorized.includes(ref.toolName) &&
+    sets.externalTools?.some(tool => tool.name === ref.toolName && tool.connectionId === ref.connectionId && tool.catalogRevision === ref.catalogRevision && tool.enabledBotIds.includes(card.bot.id)))
+}
+
 export async function workspaceHistoryAllowed(tx, card, sets) {
+  if (!externalMcpHistoryAllowed(card, sets)) return false
   const names = workspaceUsedTools(card)
   const resources = workspaceUsedResources(card)
   if (!names.length && !resources.length) return true
@@ -47,5 +53,7 @@ export async function workspaceHistoryAllowed(tx, card, sets) {
 }
 export function workspaceShareAllowed(author, reader, access) {
   const assigned = access?.assignments?.[reader?.bot?.id]
-  return !!assigned && workspaceUsedResources(author).every(r => assigned.resources.includes(r))
+  return !!assigned && workspaceUsedResources(author).every(r => assigned.resources.includes(r)) &&
+    (author.externalMcpUsedRefs ?? []).every(ref => assigned.tools.includes(ref.toolName) && !access.revoked?.[reader.bot.id]?.includes(ref.toolName) &&
+      access.externalMcp?.tools?.some(tool => tool.name === ref.toolName && tool.connectionId === ref.connectionId && tool.catalogRevision === ref.catalogRevision && tool.enabledBotIds.includes(reader.bot.id)))
 }

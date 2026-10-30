@@ -7,7 +7,7 @@ import { buildInbox } from './inbox.mjs'
 
 // PLAN §8.4 (phase 4) T4-01: pure logic behind the unified system cards, the Task timeline and the home summary.
 test('S3 every ordinary approval offers "always" except pause and retry', () => {
-  assert.deepEqual(Object.keys(CARD_KINDS).sort(), ['approval', 'auto-applied', 'blocker', 'bot-management', 'finding', 'mirror', 'routine-proposal', 'summary'])
+  assert.deepEqual(Object.keys(CARD_KINDS).sort(), ['approval', 'auto-applied', 'blocker', 'bot-management', 'capability-setup', 'finding', 'mirror', 'routine-proposal', 'summary'])
   assert.equal(canAlways({ kind: 'approval', toolName: 'calendar_feishu_create_event' }), true)
   assert.equal(canAlways({ kind: 'approval', toolName: 'workspace.prepare_change' }), true)
   for (const card of [{ kind: 'approval', toolName: 'bot_manage' }, { kind: 'approval', toolName: 'workspace.prepare_schedule' },

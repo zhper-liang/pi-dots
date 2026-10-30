@@ -1,4 +1,4 @@
-export type CardKind = 'approval' | 'blocker' | 'mirror' | 'finding' | 'auto-applied' | 'summary' | 'routine-proposal' | 'bot-management'
+export type CardKind = 'approval' | 'blocker' | 'mirror' | 'finding' | 'auto-applied' | 'summary' | 'routine-proposal' | 'bot-management' | 'capability-setup'
 export type CardTone = 'attention' | 'busy' | 'muted'
 export type CardAction = 'approve' | 'always' | 'reject' | 'answer' | 'undo' | 'handle' | 'assist' | 'dismiss' | 'mute'
 export type CardInput = { kind: CardKind | string; state?: string; detector?: string; toolName?: string; retry?: boolean; allowAlways?: boolean; assist?: boolean }

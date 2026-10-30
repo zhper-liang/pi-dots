@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import StdioCredentials from './StdioCredentials'
+import ExternalMcpConnections from './ExternalMcpConnections'
 import ModelSettings from './ModelSettings'
 import UserPreferences from './UserPreferences'
 import WorkspaceStatus from './WorkspaceStatus'
@@ -15,7 +16,8 @@ export default function SettingsPage({ token, footer }: { token: string; footer?
       <details className="shell-more"><summary>飞书日历来源</summary><p className="shell-muted small">只读同步不会授予写权限。</p><ExternalWorkspace token={token} /></details>
     </section>
     <section className="today-card" aria-labelledby="settings-mcp">
-      <h2 id="settings-mcp">本机工具连接</h2>
+      <h2 id="settings-mcp">MCP 工具连接</h2>
+      <ExternalMcpConnections key={`external:${token}`} token={token} />
       <StdioCredentials key={token} token={token} />
     </section>
     <section className="today-card" aria-labelledby="settings-automation">

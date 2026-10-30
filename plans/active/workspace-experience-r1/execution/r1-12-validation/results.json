@@ -1,0 +1,85 @@
+{
+  "status": "implementation_and_local_acceptance_complete_user_acceptance_pending",
+  "tests": {
+    "total": 1395,
+    "pass": 1395,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0,
+    "durationSeconds": 43.1
+  },
+  "lint": {
+    "exit": 0,
+    "warnings": 13
+  },
+  "build": {
+    "exit": 0,
+    "asset": "index-CTZ3GFnv.js",
+    "jsKilobytes": 651.41,
+    "chunkWarning": true
+  },
+  "browser": {
+    "widths": [
+      1440,
+      375
+    ],
+    "blankBot": true,
+    "directAndScopedTaskGet": 200,
+    "chiefMcpConfigureApprovalAndCredentialContinuation": true,
+    "passwordCharactersAfterSave": 0,
+    "actualSdkReceipts": 2,
+    "newAssetExternalApprovalNoBlank": true,
+    "chiefSkillConfigurationAndPreciseMechanismApproval": true,
+    "keyboardSkillSelectionAndPromptUse": true,
+    "sameTaskMcpDisableRemovesAliases": true,
+    "sameDatabaseRestart": true,
+    "mcpAfterRestart": "configured until explicit UI check",
+    "mcpAfterUiCheck": "ready; target still disabled",
+    "skillUseAfterRestart": true,
+    "horizontalOverflow": false
+  },
+  "credentialExposureDetected": {
+    "publicPayload": false,
+    "browserStorage": false,
+    "pageText": false,
+    "passwordCharacters": 0
+  },
+  "untested": [
+    "real user account/provider acceptance",
+    "physical OS IME",
+    "full browser fault-injection matrix",
+    "all-stage SIGKILL matrix",
+    "user acceptance"
+  ],
+  "localCleanup": {
+    "qaExited": 0,
+    "browserClosed": true,
+    "latestSyntheticDirectoryAndCredentialScriptsRemoved": true,
+    "redactedEvidenceRetained": true,
+    "formalServiceEnvDatabaseTouched": false,
+    "deployedCommittedPushed": false,
+    "rootDiffCheck": "passed"
+  },
+  "source": {
+    "rootSnapshot": ".scratch/2026-10-29-workspace-experience-r1/r1-09-12/final-source-snapshot.json",
+    "snapshotFileSha256": "2c0a47c93dd000f1b1c7b5921c19bff6a713b5c71ae3bb33b2a946c719fb3f55",
+    "changesFromPreviousFreeze": [
+      "my-app/src/TaskApprovalControls.tsx",
+      "my-app/src/capability-setup-ui.test.mjs"
+    ]
+  },
+  "logs": [
+    "/tmp/pidot-r1-complete-final2-test.log",
+    "/tmp/pidot-r1-complete-final2-lint.log",
+    "/tmp/pidot-r1-complete-final2-build.log"
+  ],
+  "scopeNotes": [
+    "Loopback SDK fixtures and fake model, no real account acceptance",
+    "Old delete/clear/calendar/mention/model width evidence reused, not rerun this final pass",
+    "1391 was before final external approval rendering fix; final tested snapshot is1395",
+    "Tavily SDK-only smoke is separate, no product automatic npx entitlement"
+  ],
+  "userAccepted": false,
+  "moveToDone": false
+}

@@ -1,0 +1,44 @@
+/* Scoped to the shared / and @ surface; no App/shell/global overrides. */
+.composer-suggestions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 20;
+  box-sizing: border-box;
+  margin: 0;
+  padding: var(--space-1, 4px);
+  list-style: none;
+  max-height: min(320px, 45vh);
+  max-height: min(320px, 45dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  background: var(--c-bg, #fff);
+  border: 1px solid var(--c-border-strong, #a1a1aa);
+  border-radius: var(--radius, 8px);
+  color: var(--c-text, #18181b);
+}
+.composer-suggestion {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+}
+.composer-suggestion.is-active { background: var(--c-hover, #f4f4f5); }
+.composer-suggestion.is-disabled { cursor: not-allowed; }
+.composer-suggestion.is-disabled .composer-suggestion-label { color: var(--c-muted, #71717a); }
+.composer-suggestion-leading { flex: 0 0 28px; padding-top: 2px; }
+.composer-suggestion-body { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.composer-suggestion-label { font-weight: 600; overflow-wrap: anywhere; }
+.composer-suggestion-id { margin-left: 8px; color: var(--c-muted, #71717a); font-weight: 400; font-size: .8em; }
+.composer-suggestion-hint, .composer-suggestion-detail { color: var(--c-muted, #71717a); font-size: .85em; overflow-wrap: anywhere; }
+.composer-suggestions-empty { padding: 12px 10px; color: var(--c-muted, #71717a); overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .composer-suggestion { padding: 10px 8px; }
+  .composer-suggestions { max-height: min(280px, 40dvh); }
+}

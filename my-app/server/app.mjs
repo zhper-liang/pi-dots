@@ -113,6 +113,78 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         })
         return
       }
+      // Lifecycle routes precede public Task visibility checks: deleted receipts remain replayable.
+      const deleteSessionMatch = /^\/api\/tasks\/([1-9]\d*)\/delete$/.exec(req.url)
+      const clearMainSessionMatch = /^\/api\/tasks\/([1-9]\d*)\/clear-main$/.exec(req.url)
+      const sessionRequestMatch = /^\/api\/session-requests\/([\w:-]{1,160})$/.exec(req.url)
+      if (tasks && (deleteSessionMatch || clearMainSessionMatch || sessionRequestMatch)) {
+        const method = deleteSessionMatch || clearMainSessionMatch ? 'POST' : 'GET'
+        if (req.method !== method) {
+          req.resume()
+          sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: `该接口仅支持 ${method}。` } }, { Allow: method })
+          return
+        }
+        if (deleteSessionMatch || clearMainSessionMatch) {
+          const id = Number((deleteSessionMatch ?? clearMainSessionMatch)[1]), input = await readJson(req)
+          const data = clearMainSessionMatch ? await tasks.clearMainSession(id, input) : await tasks.deleteSession(id, input)
+          sendJson(res, 200, { data })
+        } else {
+          req.resume()
+          const data = await tasks.sessionRequestStatus(sessionRequestMatch[1])
+          if (!data) throw new RequestError(404, 'SESSION_REQUEST_NOT_FOUND', '未找到此删除请求，请保留原请求标识。')
+          sendJson(res, 200, { data })
+        }
+        return
+      }
+      const capabilitySetupMatch = /^\/api\/capability-setups\/(setup_[a-f0-9]{32})(\/resume)?(?:\?taskId=([1-9]\d*))?$/.exec(req.url)
+      if (tasks && capabilitySetupMatch) {
+        const method = capabilitySetupMatch[2] ? 'POST' : 'GET'
+        if (req.method !== method) { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: `该接口仅支持 ${method}。` } }, { Allow: method }); return }
+        let data
+        if (method === 'POST') data = await tasks.resumeCapabilitySetup(capabilitySetupMatch[1], await readJson(req))
+        else {
+          req.resume()
+          const taskId = Number(capabilitySetupMatch[3])
+          if (!Number.isSafeInteger(taskId) || taskId <= 0) throw new RequestError(400, 'SETUP_INPUT_INVALID', '须提供原 Task 标识。')
+          data = await tasks.capabilitySetupStatus(capabilitySetupMatch[1], taskId)
+        }
+        sendJson(res, 200, { data }); return
+      }
+      const externalMcpAction = /^\/api\/external-mcp\/(configure|credentials|check|reconnect|disable|remove)$/.exec(req.url)
+      const externalMcpRequest = /^\/api\/external-mcp\/requests\/([\w:-]{1,160})$/.exec(req.url)
+      if (tasks && (req.url === '/api/external-mcp' || externalMcpAction || externalMcpRequest)) {
+        const method = externalMcpAction ? 'POST' : 'GET'
+        if (req.method !== method) {
+          req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: `该接口仅支持 ${method}。` } }, { Allow: method }); return
+        }
+        let data
+        if (externalMcpAction) {
+          const methods = { configure: 'externalMcpConfigure', credentials: 'externalMcpSaveCredential', check: 'externalMcpCheck', reconnect: 'externalMcpReconnect', disable: 'externalMcpDisable', remove: 'externalMcpRemove' }
+          data = await tasks[methods[externalMcpAction[1]]](await readJson(req))
+        } else {
+          req.resume()
+          data = externalMcpRequest ? await tasks.externalMcpRequestStatus(externalMcpRequest[1]) : await tasks.externalMcpConnections()
+          if (externalMcpRequest && !data) throw new RequestError(404, 'MCP_REQUEST_NOT_FOUND', '未找到该连接操作请求。')
+        }
+        sendJson(res, 200, { data }); return
+      }
+      const skillPrepareMatch = req.url === '/api/skills/import/prepare'
+      const skillMutationMatch = /^\/api\/skills\/(import|update|rollback|remove)$/.exec(req.url)
+      if (tasks && (skillPrepareMatch || skillMutationMatch)) {
+        if (req.method !== 'POST') {
+          req.resume()
+          sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'Skill 管理接口仅支持 POST。' } }, { Allow: 'POST' })
+          return
+        }
+        const body = await readJson(req)
+        const data = skillPrepareMatch ? await tasks.skillImportPrepare(body)
+          : skillMutationMatch[1] === 'import' ? await tasks.skillImportInstall(body)
+            : skillMutationMatch[1] === 'update' ? await tasks.skillImportUpdate(body)
+              : skillMutationMatch[1] === 'rollback' ? await tasks.skillImportRollback(body)
+                : await tasks.skillImportRemove(body)
+        sendJson(res, 200, { data })
+        return
+      }
       if (tasks && req.url === '/api/settings/model') {
         if (req.method === 'GET') { req.resume(); sendJson(res, 200, { data: await tasks.getModelSettings() }); return }
         if (req.method === 'POST') { sendJson(res, 200, { data: await tasks.saveModelSettings(await readJson(req)) }); return }
@@ -283,6 +355,12 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         const task = await tasks.setThinkingLevel(parametersMatch[1], Number(parametersMatch[2]), body)
         sendJson(res, 200, { task }); return
       }
+      const capabilitiesMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/capabilities$/.exec(req.url)
+      if (tasks && capabilitiesMatch) {
+        if (!['GET', 'POST'].includes(req.method)) { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET 与 POST。' } }, { Allow: 'GET, POST' }); return }
+        const data = req.method === 'GET' ? await tasks.getBotCapabilities(capabilitiesMatch[1]) : await tasks.setBotCapabilityAssignment(capabilitiesMatch[1], await readJson(req))
+        req.resume(); sendJson(res, 200, { data }); return
+      }
       const configurationMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/configuration$/.exec(req.url)
       if (tasks && configurationMatch) {
         if (!['GET', 'POST'].includes(req.method)) { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持GET、POST。' } }, { Allow: 'GET, POST' }); return }
@@ -330,7 +408,7 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         sendJson(res, 200, { access: await tasks.updateToolAccess(accessMatch[1], await readJson(req)) })
       } else if (route === 'tools') {
         req.resume()
-        sendJson(res, 200, { tools: tasks.toolCatalog() })
+        sendJson(res, 200, { tools: await tasks.toolCatalog() })
       } else if (route === 'chat') {
         sendJson(res, 200, await reply(await readMessage(req)))
       } else if (route === 'state') {

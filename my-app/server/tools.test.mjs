@@ -81,12 +81,20 @@ test('tool declares strict input/result and installed/authorized/displayed sets 
   assert.equal(readMockEvent({ ...detailArgs, eventId: 'not-a-fixture' }), null)
 })
 
-test('main session includes assigned write tools alongside its intrinsic tools', () => {
+test('main session business tools require live explicit assignment and honor revocation', () => {
   const bot = listBots(config).find(item => item.id === 'calendar')
   const card = { bot, taskId: 1, kind: 'main', configRef: bot.configRef, parameters: bot.defaults }
-  const sets = toolSets(card, [bot], { assignments: { calendar: { tools: [...bot.defaults.tools], resources: [...bot.defaults.toolResources] } }, revoked: {} })
-  assert.ok(sets.authorized.includes('calendar_reschedule_event'))
-  assert.ok(sets.authorized.includes('task_create'))
+  const access = { assignments: { calendar: { tools: [...bot.defaults.tools], resources: [...bot.defaults.toolResources] } }, revoked: {} }
+  assert.ok(toolSets(card, [bot], access).authorized.includes('calendar_reschedule_event'))
+  for (const name of ['task_create', 'task_status', 'routine_propose', 'automation_pause']) {
+    assert.ok(!toolSets(card, [bot], access).displayed.includes(name))
+    access.assignments.calendar.tools.push(name)
+    assert.ok(toolSets(card, [bot], access).displayed.includes(name))
+    access.revoked.calendar = [name]
+    const sets = toolSets(card, [bot], access)
+    assert.ok(!sets.authorized.includes(name))
+    assert.ok(!sets.displayed.includes(name))
+  }
 })
 
 test('system text-block compatibility preserves exact prompt; adapter accepts native toolUse with call IDs/arguments', async () => {
@@ -343,7 +351,7 @@ test('existing Tasks use current tool and resource assignments immediately', asy
   const initial = await store.getBotConfiguration('calendar')
   await store.updateBotConfiguration('calendar', {
     requestId: `live-assignment-${Date.now()}-1`, expectedVersion: initial.bot.configRef.version, description: initial.bot.description,
-    tools: [...initial.assigned.tools, 'calendar_feishu_read_schedule'], resources: [...initial.assigned.resources, 'workspace:local'],
+    tools: [...initial.assigned.tools, 'calendar_feishu_read_schedule'], resources: [...new Set([...initial.assigned.resources, 'workspace:local'])],
   })
   let current = await store.get(task.taskId)
   assert.ok(current.toolSets.authorized.includes('calendar_feishu_read_schedule'))

@@ -1,6 +1,6 @@
 # 当前状态与授权边界
 
-更新：2026-10-29（Asia/Shanghai）。接手前读这一页，再读 [plans](plans/README.md)。
+更新：2026-10-30（Asia/Shanghai）。接手前读这一页，再读 [plans](plans/README.md)。
 
 ## 一句话状态
 
@@ -40,16 +40,28 @@
 
 [Agent 运行骨架](plans/done/2026-10-17-agent-loop-foundation/README.md) · [多 Bot 与 Chief](plans/done/2026-10-17-multi-bot-chief/README.md) · [跨 Bot 协作](plans/done/2026-10-18-cross-bot-collaboration/README.md) · [群聊协作](plans/done/2026-10-18-group-chat-collaboration/README.md) · [飞书日历](plans/done/2026-10-19-feishu-calendar/README.md) · [统一工作区 V2](plans/done/2026-10-20-unified-workspace-v2/README.md)
 
+## R1 当前交接：代码与本地核心验收完成，待用户验收
+
+[第一轮12票](plans/active/workspace-experience-r1/README.md)实现、共享接线、受控本地验收及材料已完成，**待用户验收，保持active，不移done**。[逐票结果/历史失败/未验范围](plans/active/workspace-experience-r1/ACCEPTANCE.md)与[最终摘要](plans/active/workspace-experience-r1/execution/r1-12-validation/results.json)已锁定。
+
+- 最后外部MCP审批渲染fix后的源码：**1395/1395**，0 fail/cancel/skip/todo，43.1秒；lint exit0（13条既有React warning）；build exit0，`index-CTZ3GFnv.js` 651.41kB，保留chunk体积提示。日志 `/tmp/pidot-r1-complete-final2-{test,lint,build}.log`。1391是修复前历史快照，不冒充最终。
+- 本轮1440真实链：新空白Bot无业务授权/direct和scoped GET200→Chief自然语言MCP→真实批准→needs_auth专用凭据立即清空→同setup ready→目标工具出现；目标greeting.echo两次调用各自获批准并保存SDK receipt，最新asset批准151无白屏。375：Skill自然语言/初次批准/第二次三机制范围→ready→独立Task168通过/菜单ArrowDown+Enter选择并真实注入内容回复。
+- 对话停用仅撤销目标MCP分配：原目标main110无mcp_、无新审批；SIGUSR2只重启同临时DB的API/store，SDKfixture保留，main110/独立168保留。连接configured、凭据及toolCount3保留，不自动ready；UI检查恢复ready但目标仍未绑定，375再用Skill成功。停用/重启没有增加fixture调用。
+- 旧会话删除/清主/日历/@/模型双宽度证据明确复用上轮实操，不冒充本轮重做。1382/1383分组失败、403中断、settled overlay GET500、两次审批白屏及QA假模型再次提议均保留实际根因/修复证据；Tavily SDK-only smoke单列，不当Pidot链路。
+- Root已完成合成MCP凭据输出检查：公开API/页面/storage未发现、密码框0，真实Tavily Key未复用。QA exit0、browser关闭，仅当次专属受控/tmp目录与含合成凭据临时文件清理；保留redacted证据/截图/sourcehash/最终日志。正式服务/.env/正式库未访问未改，无部署、提交或推送；root最终diffcheck通过。
+- 未验真实账户/供应商、物理IME/触屏/系统辅助技术及浏览器全故障注入/全SIGKILL矩阵。单Node/Harness/SQLite、本机单owner、后端在线执行不变；文件式记忆迁移、Google Workspace、通用包安装/脚本沙箱、多提供方路由不随本轮交付。
+
 ## 授权边界
 
 - 2026-10-28 用户授权新阶段「Bot 工作区与 Hermes 风格统一」，范围以 [该计划](plans/active-hermes-workspace-deepseek.md) 为准；计划内的票可以直接开工。
+- 2026-10-29 用户进一步明确授权“派遣子agent完成分票你只作为主管”，覆盖此前仅规划/未授权启动状态。第一轮按分票实施；主管只协调/审核/验收，集成负责人独占共享接线。新增依赖仍需单独确认；本次 SDK 1.32.2/Zod 4.6.7 已获单独安装批准，其余依赖不在本次批准内。不操作正式库，不开展第二/三轮。
 - 计划以外的**新阶段、新连接器、新依赖、子 Agent 仍需用户另行授权**；Google Workspace 本轮不接。
 - 候选方向见 [plans/backlog](plans/backlog/)，未授权不得开工。
 - 不操作正式数据库，不把凭证写入文档或日志。
 
 ## 交付基线
 
-本阶段开工基线（2026-10-28，未提交的工作区，自动检查）：全量 953/953、lint 0 错误（既有 7 条 React effect 警告）、build 通过（既有 bundle 体积提示）；本轮改动尚未做浏览器手测。
+本阶段开工基线（2026-10-28，未提交的工作区，自动检查）：全量 953/953、lint 0 错误（既有 7 条 React effect 警告）、build 通过（既有 bundle 体积提示）；该历史开工时点尚未做浏览器手测；本轮证据见上方 R1 状态。
 
 最近业务验收：全量 941/941（权限简化 S4）、957/957（可控自动代理）、870/870（V2），lint 与 build 通过，含真实模型、provider 整链、重启恢复与 1440/375 双尺寸网页验证。原始失败、unknown 与跨租户豁免保留，不清账、不复活旧 Task。
 

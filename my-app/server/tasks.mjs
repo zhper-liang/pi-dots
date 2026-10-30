@@ -1,3 +1,6 @@
+import { createCapabilityManagement, CapabilitySetups } from './capability-management.mjs'
+import { CAPABILITY_MANAGEMENT_TOOLS, parseCapabilityManagementCall } from './capability-management-tools.mjs'
+import { publicMcpError } from './external-mcp.mjs'
 import { createModelSettings } from './model-settings.mjs'
 import { createAgentWorkflows } from './workspace-agent-workflows.mjs'
 import { createWorkspaceReminders } from './workspace-reminders.mjs'
@@ -27,9 +30,9 @@ import { Collaboration, collaborationService, waitForChildren, publishChildResul
 import { COLLABORATION_TOOLS } from './collaboration-tools.mjs'
 import { createChatTask } from './task-creation.mjs'
 import { executeManagement, gateManagement } from './chief-management.mjs'
-import { REGISTERED_TOOLS, AUTOMATION_PAUSE_TOOL, decide, unattended, setAutomationPause, automationStatus, addRule, listRules, removeRules, PolicyRules } from './policy.mjs'
+import { registeredPolicyTool, AUTOMATION_PAUSE_TOOL, decide, unattended, setAutomationPause, automationStatus, addRule, listRules, removeRules, PolicyRules } from './policy.mjs'
 import { switchGroup } from './tool-group-settings.mjs'
-import { MainSessions, mainSessionFor, ensureMainSession, mainSessionService, mainInputModel, markMainChildOver, mirrorToMain, claimDigest, settleDigest, beginMainInput, projectMainCard, MAIN_SYSTEM_PROMPT, MAIN_DELEGATION_PROMPT } from './main-session.mjs'
+import { MainSessions, TaskDigest, mainSessionFor, createMainSession, ensureMainSession, mainSessionService, mainInputModel, markMainChildOver, mirrorToMain, claimDigest, settleDigest, beginMainInput, projectMainCard, MAIN_SYSTEM_PROMPT, MAIN_DELEGATION_PROMPT } from './main-session.mjs'
 import { MAIN_TOOLS, ROUTINE_PROPOSE_TOOL, ROUTINE_TIMEZONE, ROUTINE_CALL_LIMITS, FINDING_ASSIST_LIMITS, ASSIST_READ_TOOLS } from './main-tools.mjs'
 import { normalizeScheduleRule } from './workspace-schedule-rules.mjs'
 import { workspaceShareAllowed, workspaceHistoryAllowed } from './workspace-grants.mjs'
@@ -44,10 +47,11 @@ import { executionDisposition, messageControlSnapshot, waitingSnapshot } from '.
 import { TaskApprovals, MockCalendar, CALENDAR_WRITE_TOOL, requestCalendarApproval, requestFeishuApproval, requestFeishuMutationApproval, waitForApproval, finishCalendarApproval, finishManagementApproval, requestManagementApproval, autoApproveByRule, saveApprovalReceipt, markOutcomeUnknown, validApprovalBinding, outcomeApi, approvalApi, overlayMockSchedule, overlayMockEvent, calendarRecoveryCapability } from './approvals.mjs'
 import { BLOCKER_TOOL, TaskBlockers, reportBlocker, waitForBlocker, blockerApi, executeBlockerAction, guardBlocker } from './blockers.mjs'
 import { TaskCancellation, CancelledTaskArchive, readCancelledArchive, cancelledOutcome, isCancelled, assertNotCancelled, cancellationApi, requestTaskCancellation } from './cancellation.mjs'
+import { createSessionLifecycle, readLifecycleSession, assertSessionVisible, isDeleted } from './session-lifecycle.mjs'
 import { ContextCompaction, contextPolicy, planCompaction, saveCompaction, contextTokens } from './context-compaction.mjs'
 import { HISTORY_TOOL, readTaskHistory } from './history-tool.mjs'
 import { ChatSteering, applySteering, steeringApi } from './steering.mjs'
-import { skillApi, TaskSkills, executeSkillTool, deactivateSkills, skillCatalogForTask, commandSkills, activateCommandSkill } from './skills.mjs'
+import { skillApi, TaskSkills, executeSkillTool, deactivateSkills, skillCatalogForTask, commandSkills, activateCommandSkill, skillCapabilityCatalog, loadSkill } from './skills.mjs'
 import { skillTools } from './skill-tools.mjs'
 import { mkdir, chmod } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -60,6 +64,7 @@ import { createModelReply, modelParameters, ModelReplyError, MODEL_ERRORS } from
 import { listBots } from './bots.mjs'
 import { migrationApi } from './task-migration.mjs'
 import { configurationApi, initializeConfiguration, createConfiguredBot, migrateToolGroups } from './bot-configuration.mjs'
+import { CapabilityAssignments, listBotCapabilities, setCapabilityAssignment } from './capability-assignments.mjs'
 import { BotDirectory, parseBotCreation, deactivateDirectoryBot, assertBotActive } from './bot-directory.mjs'
 import { inferBotRole } from './bot-templates.mjs'
 import { TaskInputError, parseTaskState, currentTaskState, currentTaskStateSources, raisedCallLimits } from './task-config.mjs'
@@ -69,9 +74,11 @@ import { buildTaskContext, injectMemoryContext } from './task-context.mjs'
 import { boundToolResult, readToolResult, RESULT_READ_TOOL, ToolResults } from './tool-results.mjs'
 import { ToolAccess, CallUsage, CALENDAR_TOOL, toolSets, toolDefinitions, toolCatalog, checkToolCall,
   readMockSchedule, validSchedule, readMockEvent, validEventDetail,
-  callLimits, checkModelLimit, CallLimitError, parseRevocation, modelVisible } from './tools.mjs'
+  callLimits, checkModelLimit, CallLimitError, parseRevocation, modelVisible, externalToolValidator } from './tools.mjs'
 export { TaskInputError } from './task-config.mjs'
 
+const CapabilityHostApprovals = defineDoc({ kind: 'pidot.capability-host-approvals', version: 1, scope: 'session', initial: () => ({ items: {} }) })
+const ExternalMcpRemovals = defineDoc({ kind: 'pidot.external-mcp-removals', version: 1, scope: 'session', initial: () => ({ requests: {} }) })
 export const TaskCard = defineDoc({
   kind: 'pidot.task-card', version: 1, scope: 'task', initial: () => ({}),
 })
@@ -182,11 +189,81 @@ function assertOwnActiveBot(botId, catalog) {
 }
 
 function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(), toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, saveCancelledReceipt, saveCancelledToolReceipt, saveCancelledActionReceipt, dispatchCalendarWrite, recoverAction, queryCapability, dispatchForBot, managementModels, syncManagedCatalog, collaboration, harnessGuard, feishu, workspaceMcp, managementHooks = {}) {
+  async function executeExternalApproval(task, runtime, ctx) {
+    const { approvalId, entryId } = task.state.checkpoint
+    await waitForApproval(runtime, approvalId, ctx)
+    await managementHooks.external.refresh()
+    let request
+    const failure = (code, message, unknown = false) => ({ ok: false, error: { code, message, ...(unknown ? { unknown: true, retryable: false } : {}) } })
+    await runtime.commit(async tx => {
+      const card = await tx.doc(TaskCard, runtime.taskId), state = await tx.doc(TaskApprovals, runtime.taskId)
+      const item = state.items.find(item => item.id === approvalId)
+      const next = { status: 'running', checkpoint: { phase: 'reply', entryId, resolvedApprovalId: approvalId } }
+      if (!item?.externalMcp || item.inReplyTo !== entryId || (await tx.doc(ChatInput, runtime.taskId)).entryId !== entryId) throw new Error('External approval ownership mismatch')
+      if (item.receipt) return next
+      if (item.operation) {
+        await saveApprovalReceipt(tx, card, item, failure('MCP_OUTCOME_UNKNOWN', '原调用已有持久派发意图；未确认结果，不自动重试。', true))
+        return next
+      }
+      if (!validApprovalBinding(card, item)) {
+        await saveApprovalReceipt(tx, card, item, failure('APPROVAL_BINDING_MISMATCH', '外部调用决定与原参数不一致，未执行。'))
+        return next
+      }
+      if (item.decision.decision !== 'approved') {
+        await saveApprovalReceipt(tx, card, item, failure('APPROVAL_REJECTED', '用户未批准该外部操作，未执行。'))
+        return next
+      }
+      const turn = await tx.entry(item.turnId), decision = await tx.entry(item.decision.id)
+      const original = turn?.data.assistant?.content?.find(call => call.id === item.callId && call.name === item.toolName)
+      const sets = toolSets(card, bots, await tx.doc(ToolAccess)), external = sets.externalTools?.find(tool => tool.name === item.toolName)
+      const call = { id: item.callId, name: item.toolName, arguments: JSON.parse(JSON.stringify(item.arguments)) }
+      let check = checkToolCall({ card, record: await tx.task(runtime.taskId), conversation: await tx.conversation(card.conversationId), call, displayed: turn?.data.displayed ?? [], sets })
+      if (!original || JSON.stringify(original.arguments) !== JSON.stringify(item.arguments) || turn.byTaskId !== card.taskId ||
+        decision?.data.binding !== item.binding || decision.data.source !== 'authenticated-user') check = failure('APPROVAL_BINDING_MISMATCH', '外部操作原调用或决定不匹配。')
+      if (!external || external.catalogRevision !== item.externalMcp.catalogRevision || external.connectionId !== item.externalMcp.connectionId) check = failure('CAPABILITY_CATALOG_CONFLICT', '连接工具目录已改变，请重新核对并确认。')
+      const usage = await tx.doc(CallUsage, runtime.taskId), limits = callLimits(card.parameters)
+      if (usage.toolCalls > limits.toolCalls || limits.totalTokens !== undefined && (usage.unknownTokenCalls > 0 || usage.totalTokens >= limits.totalTokens)) check = failure('CALL_LIMIT_REACHED', '当前工具或 token 预算不足，未调用外部服务。')
+      if (!check.ok) { await saveApprovalReceipt(tx, card, item, check); return next }
+      await assertNotCancelled(tx, card.taskId, await tx.task(card.taskId))
+      await collaboration.guard(tx, card.taskId)
+      const verdict = await decide(tx, { botId: card.bot.id, tool: call.name }, { externalTool: external })
+      if (verdict.effect === 'deny') { await saveApprovalReceipt(tx, card, item, failure('POLICY_DENIED', '当前规则禁止该外部操作。')); return next }
+      const operation = { id: randomUUID(), taskId: card.taskId, approvalId, inReplyTo: entryId, binding: item.binding,
+        toolName: call.name, arguments: structuredClone(call.arguments), createdAt: new Date().toISOString(), retryable: false }
+      const intent = await tx.appendEntry(card.conversationId, { kind: 'pidot.action-dispatch-intent', data: operation })
+      item.operation = { ...operation, intentEntryId: intent.id }; item.status = 'dispatching'
+      request = { card: JSON.parse(JSON.stringify(card)), call, args: structuredClone(call.arguments), entryId, turnId: item.turnId, external: JSON.parse(JSON.stringify(item.externalMcp)), operationId: operation.id }
+      return { status: 'running', checkpoint: { phase: 'awaitApproval', entryId, approvalId, waitingReason: 'external-mcp-dispatch', inFlight: { kind: 'external-mcp', operationId: operation.id } } }
+    }, ctx)
+    if (!request) return
+    let result
+    try {
+      const data = await managementHooks.external.invoke(request, runtime.signal)
+      result = { ok: data.isError !== true, data, ...(data.isError ? { error: { code: 'MCP_TOOL_ERROR', message: '外部工具报告失败；请根据实际回执处理。' } } : {}) }
+    } catch (error) {
+      const view = error instanceof TaskInputError ? { code: error.code, message: error.message } : publicMcpError(error)
+      result = failure(view.code, view.message, error?.unknown === true)
+    }
+    let stored = false
+    try {
+      await runtime.commit(async tx => {
+        const card = await tx.doc(TaskCard, runtime.taskId), item = (await tx.doc(TaskApprovals, runtime.taskId)).items.find(item => item.id === approvalId)
+        if (!item || item.operation?.id !== request.operationId) throw new Error('External intent ownership mismatch')
+        const bounded = await boundToolResult(tx, card, result, { toolName: request.call.name, callId: request.call.id, arguments: request.args,
+          resource: `mcp:${request.external.connectionId}`, externalMcp: request.external, turnId: request.turnId, inReplyTo: entryId })
+        await saveApprovalReceipt(tx, card, item, bounded)
+        stored = true
+        if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
+        return { status: 'running', checkpoint: { phase: 'reply', entryId, resolvedApprovalId: approvalId } }
+      }, ctx)
+    } finally { if (!stored && saveCancelledActionReceipt) await saveCancelledActionReceipt(runtime.taskId, approvalId, request.operationId, result) }
+  }
   return defineTask({
     name: 'pidot.chat', version: 1,
     initial: () => ({ phase: 'awaitInput' }),
     phases: {
       workflowUnknown: async (_task, runtime, ctx) => { await waitForInput(runtime, ctx) },
+      capabilitySetup: (task, runtime, ctx) => managementHooks.capabilities.wait(task, runtime, ctx),
       awaitChildren: async (task, runtime, ctx) => {
         await waitForChildren(runtime, task.state.checkpoint.entryId, ctx)
         await runtime.commit(async tx => {
@@ -196,6 +273,12 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
       },
       awaitApproval: async (task, runtime, ctx) => {
         const { approvalId, entryId } = task.state.checkpoint
+        let externalApproval = false
+        await runtime.commit(async tx => { externalApproval = Boolean((await tx.doc(TaskApprovals, runtime.taskId)).items.find(item => item.id === approvalId)?.externalMcp) }, ctx)
+        let capabilityApproval = false
+        await runtime.commit(async tx => { const item = (await tx.doc(TaskApprovals, runtime.taskId)).items.find(item => item.id === approvalId); capabilityApproval = Boolean(item?.capabilityIntent || item?.capabilitySetupSpec) }, ctx)
+        if (capabilityApproval) return managementHooks.capabilities.approval(task, runtime, ctx)
+        if (externalApproval) return executeExternalApproval(task, runtime, ctx)
         if (recoverAction) await recoverAction(runtime.taskId, approvalId, runtime.signal)
         await runtime.commit(async tx => {
           const item = (await tx.doc(TaskApprovals, runtime.taskId)).items.find(i => i.id === approvalId)
@@ -422,11 +505,26 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
             if (slot.entryId !== entryId) throw new Error('Input slot mismatch')
             entry = await tx.entry(entryId)
             if (!entry || entry.conversationId !== card.conversationId) throw new Error('Invalid input entry')
-            modelContext = await buildTaskContext(tx, card, entryId, { bots })
+            const digestVisibility = new Map()
+            if (card.kind === 'main') {
+              const access = await tx.doc(ToolAccess)
+              for (const item of (await tx.doc(TaskDigest)).byMain[card.taskId] ?? []) {
+                if (item.state !== 'over' || await isDeleted(tx, item.taskId)) continue
+                const record = await tx.task(item.taskId)
+                if (!record || record.kind !== ChatTask.definition.name) continue
+                const archive = record.state.status === 'terminal' ? await readCancelledArchive(tx, item.taskId) : null
+                if (record.state.status === 'terminal' && !archive) continue
+                const source = archive?.documents[TaskCard.definition.kind] ?? await tx.doc(TaskCard, item.taskId)
+                if (source.bot.id !== card.bot.id || source.configRef.botId !== source.bot.id || record.input.botId !== source.bot.id ||
+                  (await tx.conversation(source.conversationId))?.owner?.taskId !== item.taskId) continue
+                digestVisibility.set(item.taskId, workspaceShareAllowed(source, card, access) && await workspaceHistoryAllowed(tx, source, toolSets(source, bots, access)))
+              }
+            }
+            modelContext = await buildTaskContext(tx, card, entryId, { bots, skillDirectory })
             if (commanded) modelContext.systemPrompt += commanded.ok
               ? `\n用户这条消息指定用 Skill「${entry.data.skillId}」处理，完整规则已加载（见上方活动 Skill），不必再调用 skill_activate。`
               : `\n用户这条消息指定的 Skill「${entry.data.skillId}」没能加载（${commanded.error?.message ?? '未知原因'}）。先告诉用户没有按这个 Skill 处理，再尽量按普通方式回答。`
-            if (card.kind === 'main') modelContext.systemPrompt += MAIN_SYSTEM_PROMPT + await claimDigest(tx, card.taskId, entryId)
+            if (card.kind === 'main') modelContext.systemPrompt += MAIN_SYSTEM_PROMPT + await claimDigest(tx, card.taskId, entryId, { isSourceVisible: id => digestVisibility.get(id) === true })
             // D-18: the main session never carries task_assign (D-05); a derived Task does when the Bot has it.
             if (card.kind === 'main') {
               const access = await tx.doc(ToolAccess), assigned = access.assignments?.[card.bot.id]?.tools ?? []
@@ -446,11 +544,12 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           let failed = false
           let compactionPlan
           try {
-            let displayed = [], resources = []
+            let displayed = [], resources = [], externalTools = []
             if (mode === 'model') {
               await runtime.commit(async (tx) => {
                 if (await isCancelled(tx, runtime.taskId)) { stopped = true; await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
-                ;({ displayed, resources } = toolSets(card, bots, await tx.doc(ToolAccess)))
+                const sets = toolSets(card, bots, await tx.doc(ToolAccess))
+                displayed = sets.displayed; resources = sets.resources; externalTools = JSON.parse(JSON.stringify(sets.externalTools ?? []))
               }, ctx)
               if (stopped) return
               if (displayed.some(n => WORKSPACE_TOOLS.includes(n))) {
@@ -460,7 +559,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
               }
               // Every Bot holds every group: offer only tools usable here. A delegated child cannot
               // delegate again (COLLABORATION_DEPTH_DENIED), so it is not offered task_assign.
-              const definitions = toolDefinitions(modelVisible(displayed, resources).filter(n => !(card.collaboration && n === 'task_assign')))
+              const definitions = toolDefinitions(modelVisible(displayed, resources).filter(n => !(card.collaboration && n === 'task_assign')), { externalTools })
               if (definitions.length) modelContext.tools = definitions
               await runtime.commit(async (tx) => {
                 const usage = await tx.doc(CallUsage, runtime.taskId)
@@ -647,7 +746,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
             result = checkToolCall({ card, record: await tx.task(runtime.taskId), conversation: await tx.conversation(card.conversationId),
               call, displayed: [...turn.data.displayed, call.name], sets, priorEventIds })
           // I-03: every call is checked against the policy registry; unregistered tools never run.
-          if (result.ok && !REGISTERED_TOOLS.includes(call.name)) result = { ok: false, error: { code: 'POLICY_UNREGISTERED', message: '工具未登记风险等级，拒绝执行。' } }
+          if (result.ok && !registeredPolicyTool(call.name, sets)) result = { ok: false, error: { code: 'POLICY_UNREGISTERED', message: '工具未登记风险等级，拒绝执行。' } }
           let limit = limited
           if (usage.toolCalls >= limits.toolCalls || (limits.totalTokens !== undefined &&
             (usage.unknownTokenCalls > 0 || usage.totalTokens >= limits.totalTokens))) {
@@ -660,7 +759,8 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                 const args = JSON.parse(JSON.stringify(call.arguments))
                 const inputEntry = await tx.entry(entryId)
                 if ([CALENDAR_WRITE_TOOL, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) && !calendarToolMatches(inputEntry?.data.calendarCommand, call.name, args)) throw new TaskInputError(403, 'CALENDAR_COMMAND_MISMATCH', '模型写入参数必须与图形提案精确一致。')
-                const writeVerdict = [CALENDAR_WRITE_TOOL, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) ? await decide(tx, { botId: card.bot.id, tool: call.name, origin: card.origin ?? (card.scheduledWorkflow ? 'routine' : 'user') }) : null
+                const external = sets.externalTools?.find(tool => tool.name === call.name)
+                const writeVerdict = external ? await decide(tx, { botId: card.bot.id, tool: call.name }, { externalTool: external }) : [CALENDAR_WRITE_TOOL, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) ? await decide(tx, { botId: card.bot.id, tool: call.name, origin: card.origin ?? (card.scheduledWorkflow ? 'routine' : 'user') }) : null
                 if (writeVerdict?.effect === 'deny') throw new TaskInputError(403, 'POLICY_DENIED', '规则禁止该动作。')
                 const isSchedule = call.name === CALENDAR_TOOL
                 if (replay && !WORKSPACE_TOOLS.includes(call.name)) {
@@ -668,6 +768,16 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                     executedAgain: false, notice: '复用压缩前本次输入已成功的相同操作回执，未重新执行业务操作。原文按entryId回读。' } }
                 } else if (writeVerdict?.effect === 'ask' && unattended(card.origin ?? (card.scheduledWorkflow ? 'routine' : 'user'))) {
                   result = { ok: true, data: { state: 'skipped', reason: writeVerdict.reason, notice: '已跳过：这一步需要你来做。' } }
+                } else if (CAPABILITY_MANAGEMENT_TOOLS.includes(call.name)) {
+                  if (!managementHooks.capabilities?.enabled) result = { ok: false, error: { code: 'SETUP_UNAVAILABLE', message: '能力配置 Host 尚未启用。' } }
+                  else {
+                    request = { card: JSON.parse(JSON.stringify(card)), call: structuredClone(call), entryId, turnId, callIndex, callCount: calls.length, remainingCalls: calls.slice(callIndex + 1).map(call => structuredClone(call)), capabilityManagement: true }
+                    return { status: 'running', checkpoint: { phase: 'tools', entryId, turnId, callIndex, inFlight: { kind: 'capability-management', toolName: call.name } } }
+                  }
+                } else if (external) {
+                  result = await requestManagementApproval(tx, card, call, entryId, turnId,
+                    payloadHash(['external-mcp', call.name, args, external.catalogRevision]), null, call.name, false,
+                    { connectionId: external.connectionId, capabilityId: external.capabilityId, catalogRevision: external.catalogRevision, originalName: external.originalName, connectionName: external.connectionName })
                 } else if (skillTools.some((tool) => tool.name === call.name)) {
                   result = await executeSkillTool(tx, card, bots, call, entryId, skillDirectory)
                 } else if (FEISHU_MUTATION_TOOLS.includes(call.name)) {
@@ -749,7 +859,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
             role: 'tool', content: JSON.stringify(result), callId: call.id, toolName: call.name, arguments: call.arguments,
             turnId, result, toolResult, inReplyTo: entryId, createdAt,
           } })
-          if (([CALENDAR_WRITE_TOOL, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) || [ 'bot_manage', ROUTINE_PROPOSE_TOOL ].includes(call.name) && result.data?.status === 'waiting-for-user-approval') && result.ok) {
+          if (([CALENDAR_WRITE_TOOL, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) || ([ 'bot_manage', ROUTINE_PROPOSE_TOOL, ...CAPABILITY_MANAGEMENT_TOOLS ].includes(call.name) || sets.externalTools?.some(tool => tool.name === call.name)) && result.data?.status === 'waiting-for-user-approval') && result.ok) {
             if (card.mainParent) await mirrorToMain(tx, card, { mirrorKind: 'approval', approvalId: result.data.approvalId, toolName: call.name, summary: summarizeApproval(card.bot.name, call.name, call.arguments) })
             await markDirty(tx, { sourceId: `task:${card.taskId}`, type: 'Approval', id: result.data.approvalId })
             for (const skipped of calls.slice(callIndex + 1)) await appendToolReceipt(tx, { card, call: skipped, entryId, turnId }, { ok: false,
@@ -774,6 +884,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
         }, ctx)
         if (managed) await syncManagedCatalog()
         if (!request) return
+        if (request.capabilityManagement) return managementHooks.capabilities.execute(request, runtime, ctx)
         const feishuReadGuard = request => runtime.commit(async tx => {
           await assertNotCancelled(tx, runtime.taskId, await tx.task(runtime.taskId))
           await assertBotActive(tx, request.card.bot.id)
@@ -887,8 +998,41 @@ async function appendToolReceipt(tx, request, result, afterCancellation = false)
 
 /** Test hooks stay in-process; never exposed as HTTP parameters. */
 export async function openTaskStore({ file, bots = listBots(), beforeCommit, reply = createTestReply, modelReply, modelSettings, readModelSettings = modelSettings?.read,
-  toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, memoryOptions = {}, feishuClient = createFeishuClient(), toolGroupsMigration = true } = {}) {
+  toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, memoryOptions = {}, feishuClient = createFeishuClient(), toolGroupsMigration = true, readCapabilityCatalog = async () => [], externalMcp, capabilityManagementEnabled = false } = {}) {
   if (!file) throw new Error('Task storage file is required')
+  if (typeof readCapabilityCatalog !== 'function') throw new Error('Capability catalog reader must be a server-owned function')
+  const skillImport = skillDirectory && typeof skillDirectory === 'object' ? skillDirectory.userSkills : null
+  const skillImportCall = async (work) => {
+    if (!skillImport) throw new TaskInputError(503, 'SKILL_IMPORT_UNAVAILABLE', '当前运行实例未启用用户 Skill 导入。')
+    try { return await work(skillImport) } catch (error) {
+      if (error instanceof TaskInputError) throw error
+      const status = /CONFLICT|EXPIRED|NOT_FOUND|REQUIRED|INVALID|FORBIDDEN|LIMIT|MISMATCH|UNSUPPORTED|FAILED|CORRUPT/.test(error?.code ?? '') ? 409 : 400
+      throw new TaskInputError(status, error?.code ?? 'SKILL_IMPORT_FAILED', typeof error?.message === 'string' ? error.message : 'Skill 管理操作失败。')
+    }
+  }
+  async function readExternalProjection() {
+    const capabilities = await externalMcp.catalog(), supported = [], unsupported = new Set()
+    for (const tool of await externalMcp.toolCatalog()) {
+      try { externalToolValidator(tool); supported.push(tool) } catch { unsupported.add(tool.connectionId) }
+    }
+    return { capabilities: capabilities.map(item => unsupported.has(item.id.slice(4)) && item.status === 'ready'
+      ? { ...item, status: 'missing_dependency', requirements: [...item.requirements, 'input_schema_validation'] } : item), tools: supported }
+  }
+  const readAdditionalCapabilities = readCapabilityCatalog
+  readCapabilityCatalog = async (tx, scope) => {
+    const additional = await readAdditionalCapabilities(tx, scope)
+    if (!externalMcp) return additional
+    const { capabilities: projections } = await readExternalProjection()
+    return [...new Map([...additional, ...projections].map(item => [item.id, item])).values()]
+  }
+  const externalServiceCall = async work => {
+    if (!externalMcp) throw new TaskInputError(503, 'EXTERNAL_MCP_UNAVAILABLE', '当前实例未启用外部 MCP。')
+    try { return await work(externalMcp) } catch (error) {
+      if (error instanceof TaskInputError) throw error
+      const publicError = publicMcpError(error)
+      throw new TaskInputError(error?.status ?? 409, publicError.code, publicError.message)
+    }
+  }
   bots = structuredClone(bots)
   // Embedded/test stores remain isolated from user env files unless explicitly wired.
   modelSettings ??= createModelSettings({ file, env: {}, envFiles: [] })
@@ -987,25 +1131,42 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       try {await Promise.race([rootStop.promise,new Promise((resolve,reject)=>{abort=()=>reject(runtime.signal.reason??new Error("Invocation stopped"));runtime.signal.addEventListener("abort",abort,{once:true});if(runtime.signal.aborted)abort()})])}
       finally {runtime.signal.removeEventListener("abort",abort);await rootStop.stop()}
     }
+    async function waitForMainReplacement(runtime, error, ctx) {
+      const watch = await runtime.watchDoc(MainSessions, ctx)
+      let abort
+      try {
+        await new Promise((resolve, reject) => {
+          const check = state => { if (state.byBot[error.mainBotId] !== error.mainTaskId) resolve() }
+          abort = () => reject(runtime.signal.reason ?? new Error('Invocation stopped'))
+          runtime.signal.addEventListener('abort', abort, { once: true })
+          if (runtime.signal.aborted) return abort()
+          check(watch.value); watch.start(check)
+          void watch.closed.then(() => reject(new Error('Main session watch closed')))
+        })
+      } finally { runtime.signal.removeEventListener('abort', abort); await watch.stop() }
+    }
     const feishu = createCalendarService({ client: feishuClient, commit: fn => harness.commit(fn, context), ToolAccess })
     const registry = createRegistry()
-    let createTask
+    let createTask, capabilityManagement
     const collaboration = collaborationService({ TaskCard, ChatInput, bots, createTask: (...args) => createTask(...args) })
-    const definition = chatDefinition((message, options) => dispatchForBot(options.botId, options.signal, signal => reply(message, { signal })), guardedModelReply, bots, toolImpl, eventImpl, skillDirectory, saveCancelledReceipt, saveCancelledToolReceipt, saveCancelledActionReceipt, dispatchCalendarWrite, (...args) => recoverAction(...args), queryCapability, dispatchForBot, configuredModels, syncManagedCatalog, collaboration, id=>harness.commit(async tx=>{const card=await tx.doc(TaskCard,id);await validateWorkspaceHistory(tx, card, resolveWorkspaceTask);await assertBotActive(tx,card.bot.id);await collaboration.assertWorkOpen(tx,id);const r=(await tx.doc(Collaboration)).items.find(r=>r.childTaskId===id);if(r)await assertBotActive(tx,r.supervisorBotId)},context), feishu, (id, name, args, options) => options?.validateTx ? validateWorkspaceHistory(options.validateTx, { taskId: id, ...(options.card ?? {}) }, resolveWorkspaceTask) : workspaceMcp.invoke(id, name, args, options), { botCreated: async (tx, botId, chiefCard) => { await ensureMainSession(tx, botId, { ...mainDeps, rootConversationId: (await tx.task(chiefCard.taskId)).conversationId }) }, main: { execute: (...args) => mainService.execute(...args) }, routine: { propose: (...args) => proposeRoutine(...args), create: (...args) => createProposedRoutine(...args) } })
+    const definition = chatDefinition((message, options) => dispatchForBot(options.botId, options.signal, signal => reply(message, { signal })), guardedModelReply, bots, toolImpl, eventImpl, skillDirectory, saveCancelledReceipt, saveCancelledToolReceipt, saveCancelledActionReceipt, dispatchCalendarWrite, (...args) => recoverAction(...args), queryCapability, dispatchForBot, configuredModels, syncManagedCatalog, collaboration, id=>harness.commit(async tx=>{const card=await tx.doc(TaskCard,id);await validateWorkspaceHistory(tx, card, resolveWorkspaceTask);await assertBotActive(tx,card.bot.id);await collaboration.assertWorkOpen(tx,id);const r=(await tx.doc(Collaboration)).items.find(r=>r.childTaskId===id);if(r)await assertBotActive(tx,r.supervisorBotId)},context), feishu, (id, name, args, options) => options?.validateTx ? validateWorkspaceHistory(options.validateTx, { taskId: id, ...(options.card ?? {}) }, resolveWorkspaceTask) : workspaceMcp.invoke(id, name, args, options), { botCreated: async (tx, botId, chiefCard) => { await ensureMainSession(tx, botId, { ...mainDeps, rootConversationId: (await tx.task(chiefCard.taskId)).conversationId }) }, main: { execute: (...args) => mainService.execute(...args) }, external: { refresh: () => refreshExternalCatalog(), invoke: invokeExternalMcp }, capabilities: { enabled: capabilityManagementEnabled && Boolean(externalMcp && skillImport), request: requestCapabilityIntent, execute: executeCapabilityCall, approval: executeCapabilityApproval, wait: waitCapabilitySetup }, routine: { propose: (...args) => proposeRoutine(...args), create: (...args) => createProposedRoutine(...args) } })
     const phases = definition.definition.phases
     for (const [name, phase] of Object.entries(phases)) phases[name] = async (task, runtime, ctx) => {
-      try {
-        await runtime.commit(async tx=>{if(!await isCancelled(tx,runtime.taskId))await collaboration.assertWorkOpen(tx,runtime.taskId)},ctx)
-        await parkInactive(task, runtime, ctx)
-        await runtime.commit(async tx => { if (!await isCancelled(tx, runtime.taskId)) await collaboration.guard(tx, runtime.taskId) }, ctx)
-        return await phase(task, runtime, ctx)
-      } catch (error) {
-        if(error.code==='COLLABORATION_STOPPED'&&await settleStoppedInput(runtime,ctx)) return
-        if (['COLLABORATION_STOPPED','REVIEW_NOT_AUTHORIZED','COLLABORATION_NOT_AUTHORIZED','TASK_CANCELLED','TASK_UNAVAILABLE','BOT_INACTIVE'].includes(error.code)) {
-          try {await parkControlled(runtime,ctx)}catch(stopped){if(stopped.code==='COLLABORATION_STOPPED'&&await settleStoppedInput(runtime,ctx))return;throw stopped}
-          return
+      for (;;) {
+        try {
+          await runtime.commit(async tx=>{if(!await isCancelled(tx,runtime.taskId))await collaboration.assertWorkOpen(tx,runtime.taskId)},ctx)
+          await parkInactive(task, runtime, ctx)
+          await runtime.commit(async tx => { if (!await isCancelled(tx, runtime.taskId)) await collaboration.guard(tx, runtime.taskId) }, ctx)
+          return await phase(task, runtime, ctx)
+        } catch (error) {
+          if (error.code === 'MAIN_SESSION_REPLACING') { await waitForMainReplacement(runtime, error, ctx); continue }
+          if(error.code==='COLLABORATION_STOPPED'&&await settleStoppedInput(runtime,ctx)) return
+          if (['COLLABORATION_STOPPED','REVIEW_NOT_AUTHORIZED','COLLABORATION_NOT_AUTHORIZED','TASK_CANCELLED','TASK_UNAVAILABLE','BOT_INACTIVE'].includes(error.code)) {
+            try {await parkControlled(runtime,ctx)}catch(stopped){if(stopped.code==='COLLABORATION_STOPPED'&&await settleStoppedInput(runtime,ctx))return;throw stopped}
+            return
+          }
+          throw error
         }
-        throw error
       }
     }
     registry.install({ name: 'pidot', tasks: [definition] })
@@ -1069,8 +1230,24 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         directory.initialized = true
       }
       await feishu.sync(tx)
-      initializeConfiguration(directory, await tx.doc(ToolAccess))
-      if (toolGroupsMigration) migrateToolGroups(directory, await tx.doc(ToolAccess), await tx.doc(PolicyRules))
+      const access = await tx.doc(ToolAccess)
+      initializeConfiguration(directory, access)
+      // Preserve legacy main-session intrinsic grants separately from ordinary Bot assignments.
+      // New blank Bots never inherit them; persisted revocations still win at projection time.
+      access.mainAssignments ??= { version: 1, bots: [] }
+      if (!Array.isArray(access.mainAssignments.bots)) access.mainAssignments.bots = []
+      for (const bot of directory.items) {
+        if (access.mainAssignments.bots.includes(bot.id)) continue
+        if (bot.capabilityDefaultsVersion !== 2) {
+          const assigned = access.assignments[bot.id]
+          // Older stores may already contain the implicit tools from an earlier migration.
+          // Move them out of the regular assignment so configuration edits and ordinary Tasks
+          // retain their exact business grants.
+          assigned.tools = assigned.tools.filter(name => !MAIN_TOOLS.includes(name) && name !== AUTOMATION_PAUSE_TOOL)
+          access.mainAssignments.bots.push(bot.id)
+        }
+      }
+      if (toolGroupsMigration) migrateToolGroups(directory, access, await tx.doc(PolicyRules))
       return JSON.parse(JSON.stringify(directory.items))
     }, context)
     bots.splice(0, bots.length, ...persisted)
@@ -1099,7 +1276,303 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     await harness.commit(refreshModelSettings, context)
     // ADR-012: one-time move of tiers/allowRules into the rule table (idempotent).
     const catalog = bots
+    async function readCapabilityTask(tx, taskId) {
+      await assertSessionVisible(tx, taskId)
+      const record = await tx.task(taskId)
+      if (!record || record.kind !== ChatTask.definition.name) return null
+      const card = await readLifecycleSession(tx, taskId, { TaskCard, taskKind: ChatTask.definition.name })
+      return card ? { ...card, activeInputId: record.state.status === 'terminal' ? null : (await tx.doc(ChatInput, taskId)).entryId } : null
+    }
+    async function canManageCapabilities(tx, { task, toolName }) {
+      if (!capabilityManagementEnabled || !externalMcp || !skillImport || task.kind === 'group' || task.groupId || task.forkSource || task.scheduledWorkflow || task.initiatingUser !== 'authenticated-user') return false
+      await assertNotCancelled(tx, task.taskId, await tx.task(task.taskId))
+      const access = await tx.doc(ToolAccess), sets = toolSets(task, bots, access)
+      return CAPABILITY_MANAGEMENT_TOOLS.includes(toolName) && sets.authorized.includes(toolName) &&
+        (task.bot.id === 'chief' || access.assignments[task.bot.id]?.tools.includes(toolName))
+    }
+    async function readManagerCatalog() {
+      const skillItems = await skillCapabilityCatalog(skillDirectory)
+      const { capabilities } = await readExternalProjection()
+      return [...skillItems, ...capabilities]
+    }
+    async function requestCapabilityIntent(tx, request, catalog) {
+      const { card, call, entryId, turnId } = request, { kind, args } = parseCapabilityManagementCall(call)
+      const task = await readCapabilityTask(tx, card.taskId), entry = await tx.entry(entryId)
+      if (!task || task.activeInputId !== entryId || !await canManageCapabilities(tx, { task, toolName: call.name }) || entry?.kind !== 'pidot.user' || entry.data.source || entry.conversationId !== card.conversationId) throw new TaskInputError(403, 'SETUP_INPUT_INVALID', '配置必须由当前真实用户输入和宿主精确确认发起。')
+      if ((await decide(tx, { botId: card.bot.id, tool: call.name, action: args.action })).effect === 'deny') return { ok: false, error: { code: 'POLICY_DENIED', message: '当前规则禁止该配置动作。' } }
+      const capabilityId = kind === 'mcp' ? `mcp:${args.connectionId}` : args.skillId ? `skill:${args.skillId}` : null
+      const item = catalog.find(item => item.id === capabilityId)
+      const target = (await tx.doc(BotDirectory)).items.find(bot => bot.id === args.targetBotId)
+      const intent = { kind, proposal: args, sourceFingerprint: payloadHash([kind, args, item?.revision ?? null]),
+        scope: ['update', 'remove', 'rollback'].includes(args.action) ? 'global' : 'target-bot' }
+      return requestManagementApproval(tx, card, call, entryId, turnId, payloadHash(['capability-intent', call.name, intent]), target, call.name, false, null, intent)
+    }
+    async function authorizeCapabilityIntent(tx, { task, entry, originEntry, proposal, sourceFingerprint }) {
+      if (originEntry.kind !== 'pidot.user' || originEntry.data.source || originEntry.conversationId !== task.conversationId || task.activeInputId !== entry.id) return null
+      const toolName = proposal.connectionId || proposal.config ? 'mcp_manage' : 'skill_manage'
+      const usage = await tx.doc(CallUsage, task.taskId), limits = callLimits(task.parameters)
+      if (usage.toolCalls > limits.toolCalls || limits.totalTokens !== undefined && (usage.unknownTokenCalls || usage.totalTokens >= limits.totalTokens) ||
+        (await decide(tx, { botId: task.bot.id, tool: toolName, action: proposal.action })).effect === 'deny') return null
+      const state = await tx.doc(TaskApprovals, task.taskId)
+      for (const item of state.items) {
+        if (!item.capabilityIntent || item.inReplyTo !== originEntry.id || item.capabilityIntent.sourceFingerprint !== sourceFingerprint || payloadHash(item.capabilityIntent.proposal) !== payloadHash(proposal) || !validApprovalBinding(task, item) || item.decision.decision !== 'approved') continue
+        const decision = await tx.entry(item.decision.id), turn = await tx.entry(item.turnId)
+        const call = turn?.data.assistant?.content?.find(call => call.id === item.callId && call.name === item.toolName)
+        if (decision?.kind !== 'pidot.approval-decided' || decision.data.source !== 'authenticated-user' || decision.data.binding !== item.binding || decision.conversationId !== task.conversationId || turn?.byTaskId !== task.taskId || !call || payloadHash(call.arguments) !== payloadHash(item.arguments)) continue
+        return { authorizationId: `approval:${item.id}:${item.binding}`, taskId: task.taskId, inputId: originEntry.id,
+          targetBotId: proposal.targetBotId, action: proposal.action, sourceFingerprint, scope: item.capabilityIntent.scope }
+      }
+      return null
+    }
+    async function requestCapabilityScopeApproval(tx, spec) {
+      const state = await tx.doc(TaskApprovals, spec.taskId)
+      const original = state.items.find(item => item.capabilityIntent?.sourceFingerprint === spec.sourceFingerprint && item.inReplyTo === spec.inputId && item.decision?.decision === 'approved')
+      if (!original) throw new TaskInputError(403, 'SETUP_APPROVAL_INVALID', '原能力配置精确确认不存在。')
+      const card = await tx.doc(TaskCard, spec.taskId), target = (await tx.doc(BotDirectory)).items.find(bot => bot.id === spec.targetBotId)
+      const call = { id: original.callId, name: original.toolName, arguments: JSON.parse(JSON.stringify(original.arguments)) }
+      const result = await requestManagementApproval(tx, card, call, spec.inputId, original.turnId, payloadHash(['capability-scope', spec]), target, call.name, false, null, null, spec)
+      if (!result.ok || !result.data?.approvalId) throw new TaskInputError(409, 'SETUP_APPROVAL_INVALID', '无法建立当前配置范围的精确确认。')
+      const approvalId = String(result.data.approvalId)
+      ;(await tx.doc(CapabilityHostApprovals)).items[approvalId] = JSON.parse(JSON.stringify(spec))
+      return { approvalId }
+    }
+    async function readCapabilityScopeApproval(tx, approvalId) {
+      const spec = (await tx.doc(CapabilityHostApprovals)).items[approvalId]
+      if (!spec) return null
+      const card = await tx.doc(TaskCard, spec.taskId), item = (await tx.doc(TaskApprovals, spec.taskId)).items.find(item => String(item.id) === approvalId)
+      if (!item || payloadHash(item.capabilitySetupSpec) !== payloadHash(spec)) return null
+      if (!item.decision) return { ...JSON.parse(JSON.stringify(spec)), state: 'pending' }
+      const decision = await tx.entry(item.decision.id)
+      const verified = validApprovalBinding(card, item) && decision?.kind === 'pidot.approval-decided' && decision.data.source === 'authenticated-user' && decision.data.binding === item.binding
+      return { ...JSON.parse(JSON.stringify(spec)), state: verified && item.decision.decision === 'approved' ? 'approved' : 'denied' }
+    }
+    async function verifyManagedCapability({ kind, targetBotId, capabilityId }) {
+      await syncManagedCatalog()
+      const catalog = await readManagerCatalog()
+      let skill
+      if (kind === 'skill') { try { skill = await loadSkill(capabilityId.slice(6), skillDirectory) } catch { return { status: 'error', missing: [], summary: 'Skill 未登记或固定内容不可读取。' } } }
+      return harness.commit(async tx => {
+        const view = await listBotCapabilities(tx, targetBotId, { catalog }), item = view.items.find(item => item.id === capabilityId)
+        const target = (await tx.doc(BotDirectory)).items.find(bot => bot.id === targetBotId), access = await tx.doc(ToolAccess)
+        const card = { bot: { id: targetBotId }, kind: 'chat', parameters: target?.defaults ?? {}, managementTools: [] }, sets = toolSets(card, bots, access)
+        if (!item?.enabledForBot) return { status: 'pending', missing: [{ kind: 'binding', id: capabilityId, message: '能力尚未分配给目标 Bot。' }], summary: '真实绑定尚未完成。' }
+        if (kind === 'mcp') {
+          if (item.status !== 'ready') return { status: item.status === 'needs_auth' ? 'needs_auth' : item.status === 'missing_dependency' ? 'missing_dependency' : 'pending', missing: [{ kind: 'connection', id: capabilityId, message: '当前连接尚未验证为可用。' }], summary: '仅核对实际握手、目录与绑定，没有执行外部写入。' }
+          const missing = item.toolNames.filter(name => !sets.authorized.includes(name)).map(id => ({ kind: 'tool', id, message: '当前登记工具尚未获得真实分配。' }))
+          return { status: missing.length ? 'missing_dependency' : 'ready', missing, summary: '官方 SDK 已发现工具，当前目标绑定与目录版本已复核；未用外部写入作测试。' }
+        }
+        const requiredTools = [...new Set(['skill_activate', 'skill_deactivate', 'skill_read_resource', ...skill.requiredTools])]
+        const missing = requiredTools.filter(name => !sets.authorized.includes(name)).map(id => ({ kind: 'tool', id, message: `缺少工具 ${id}；Skill 声明不会授予工具。` }))
+        if (target?.defaults.mode !== 'model') missing.push({ kind: 'model', id: 'model', message: '目标 Bot 尚未配置可使用 Skill 的模型。' })
+        for (const id of skill.requiredResources) if (!sets.resources.includes(id)) missing.push({ kind: 'resource', id, message: `缺少来源 ${id}；Skill 声明不会授予来源。` })
+        for (const id of skill.scripts) missing.push({ kind: 'script', id, message: '当前未提供通用脚本执行器。' })
+        return { status: missing.length ? 'missing_dependency' : 'ready', missing, summary: missing.length ? 'Skill 已登记和分配，仍缺明确列出的依赖。' : 'Skill 固定内容、目标分配及机制依赖均已复核。' }
+      }, context)
+    }
+    async function reserveCapabilityResume(taskId, inputId) {
+      await refreshExternalCatalog()
+      await harness.commit(async tx => {
+        const task = await readCapabilityTask(tx, taskId)
+        if (!task || task.activeInputId !== inputId) throw new TaskInputError(403, 'SETUP_INPUT_INVALID', '原配置输入已结束或不是当前真实输入。')
+        const entry = await tx.entry(inputId)
+        if (entry?.kind !== 'pidot.user' || entry.conversationId !== task.conversationId || entry.data.source) throw new TaskInputError(403, 'SETUP_INPUT_INVALID', '续办须绑定当前已认证用户输入。')
+        if (!await canManageCapabilities(tx, { task, toolName: 'mcp_manage' }) && !await canManageCapabilities(tx, { task, toolName: 'skill_manage' })) throw new TaskInputError(403, 'SETUP_NOT_AUTHORIZED', '当前 Bot 无配置管理授权。')
+        const usage = await tx.doc(CallUsage, taskId), limits = callLimits(task.parameters)
+        if (usage.toolCalls >= limits.toolCalls || limits.totalTokens !== undefined && (usage.unknownTokenCalls || usage.totalTokens >= limits.totalTokens)) throw new TaskInputError(409, 'CALL_LIMIT_REACHED', '配置续办预算不足，请先处理额度。')
+        usage.toolCalls++
+      }, context)
+    }
+    async function publishCapabilityResult(runtime, ctx, request, result, approvalId = null) {
+      await syncManagedCatalog()
+      await runtime.commit(async tx => {
+        const card = await tx.doc(TaskCard, runtime.taskId), receipt = result.data?.setupId ? result.data : null
+        const state = await tx.doc(TaskApprovals, runtime.taskId), item = approvalId === null ? null : state.items.find(item => item.id === approvalId)
+        if (item && !item.receipt) {
+          await saveApprovalReceipt(tx, card, item, result)
+          if (receipt?.canResume) item.status = receipt.state === 'unknown' ? 'outcome-unknown' : 'setup-pending'
+        }
+        if (!approvalId && request.call) await appendToolReceipt(tx, { ...request, card }, result)
+        if (receipt) await tx.appendEntry(card.conversationId, { kind: 'pidot.capability-setup-status', data: { receipt, inReplyTo: request.entryId, createdAt: new Date().toISOString() } })
+        if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
+        if (receipt?.canResume) {
+          for (const skipped of request.remainingCalls ?? []) await appendToolReceipt(tx, { card, call: skipped, entryId: request.entryId, turnId: request.turnId }, { ok: false, error: { code: 'TOOL_SKIPPED_SETUP', message: '原能力配置仍待完成；其后旧调用跳过，须根据真实状态重新规划。' } })
+          if (receipt.state === 'needs_confirmation' && receipt.approvalId) return { status: 'running', checkpoint: { phase: 'awaitApproval', entryId: request.entryId, approvalId: Number(receipt.approvalId), capabilitySetupId: receipt.setupId, waitingReason: 'capability-confirmation' } }
+          return { status: 'running', checkpoint: { phase: 'capabilitySetup', entryId: request.entryId, setupId: receipt.setupId, ...(receipt.state === 'unknown' && receipt.approvalId ? { ignoreApprovalId: receipt.approvalId } : {}), waitingReason: receipt.state === 'needs_auth' ? 'capability-credentials' : 'capability-dependencies', lastOutcome: receipt.state } }
+        }
+        return { status: 'running', checkpoint: request.call && request.callIndex + 1 < request.callCount ? { phase: 'tools', entryId: request.entryId, turnId: request.turnId, callIndex: request.callIndex + 1 } : { phase: 'reply', entryId: request.entryId } }
+      }, ctx)
+    }
+    async function executeCapabilityCall(request, runtime, ctx) {
+      const parsed = parseCapabilityManagementCall(request.call)
+      if (!capabilityManagement) throw new TaskInputError(503, 'SETUP_UNAVAILABLE', '配置 Host 尚未启用。')
+      if (!['inspect', 'resume'].includes(parsed.args.action)) {
+        const catalog = await readManagerCatalog()
+        await runtime.commit(async tx => {
+          const card = await tx.doc(TaskCard, runtime.taskId), result = await requestCapabilityIntent(tx, { ...request, card }, catalog)
+          await appendToolReceipt(tx, { ...request, card }, result)
+          for (const skipped of request.remainingCalls ?? []) await appendToolReceipt(tx, { card, call: skipped, entryId: request.entryId, turnId: request.turnId }, { ok: false, error: { code: 'TOOL_SKIPPED_APPROVAL', message: '能力配置等待精确确认；其后旧调用未执行。' } })
+          return result.ok && result.data?.approvalId ? { status: 'running', checkpoint: { phase: 'awaitApproval', entryId: request.entryId, approvalId: result.data.approvalId, waitingReason: 'capability-intent-confirmation' } }
+            : { status: 'running', checkpoint: { phase: 'reply', entryId: request.entryId } }
+        }, ctx)
+        return
+      }
+      let result
+      try { result = await capabilityManagement.execute({ taskId: runtime.taskId, inputId: request.entryId, call: request.call }) }
+      catch (error) { result = { ok: false, error: { code: error instanceof TaskInputError ? error.code : 'SETUP_UNKNOWN', message: error instanceof TaskInputError ? error.message : '配置状态未核实，请核查原操作。' } } }
+      await publishCapabilityResult(runtime, ctx, request, result)
+    }
+    async function executeCapabilityApproval(task, runtime, ctx) {
+      const { approvalId, entryId } = task.state.checkpoint
+      await waitForApproval(runtime, approvalId, ctx)
+      let request, previous
+      await runtime.commit(async tx => {
+        const card = await tx.doc(TaskCard, runtime.taskId), state = await tx.doc(TaskApprovals, runtime.taskId), item = state.items.find(item => item.id === approvalId)
+        if (!item || item.inReplyTo !== entryId || (await tx.doc(ChatInput, runtime.taskId)).entryId !== entryId) throw new TaskInputError(409, 'SETUP_INPUT_INVALID', '配置确认输入已改变。')
+        request = { card: JSON.parse(JSON.stringify(card)), entryId, turnId: item.turnId, call: { id: item.callId, name: item.toolName, arguments: JSON.parse(JSON.stringify(item.arguments)) }, setupId: item.capabilitySetupSpec?.setupId }
+        if (!validApprovalBinding(card, item) || item.decision.decision !== 'approved') {
+          if (item.capabilitySetupSpec && validApprovalBinding(card, item)) {
+            if (state.activeId === item.id) state.activeId = null
+            return
+          }
+          previous = { ok: false, error: { code: 'SETUP_APPROVAL_DENIED', message: '用户未批准此精确配置变更。' } }
+          return
+        }
+        const turn = await tx.entry(item.turnId), original = turn?.data.assistant?.content?.find(call => call.id === item.callId && call.name === item.toolName)
+        const decision = await tx.entry(item.decision.id), sets = toolSets(card, bots, await tx.doc(ToolAccess))
+        const check = checkToolCall({ card, record: await tx.task(card.taskId), conversation: await tx.conversation(card.conversationId), call: request.call, displayed: turn?.data.displayed ?? [], sets })
+        if (!check.ok || !original || payloadHash(original.arguments) !== payloadHash(item.arguments) || decision?.data.source !== 'authenticated-user') { previous = check.ok ? { ok: false, error: { code: 'SETUP_APPROVAL_INVALID', message: '配置原调用与真实确认不一致。' } } : check; return }
+        if (item.operation) {
+          const setupId = item.capabilitySetupSpec?.setupId ?? (await tx.doc(CapabilitySetups)).byOperation[`${card.taskId}:${item.capabilityIntent?.proposal.operationId}`]
+          if (setupId) request.recoverSetupId = setupId
+          else previous = { ok: false, error: { code: 'SETUP_UNKNOWN', message: '原配置调用已有持久意图；不会自动重派，须核查原操作。' } }
+          return
+        }
+        const usage = await tx.doc(CallUsage, card.taskId), limits = callLimits(card.parameters)
+        if (usage.toolCalls > limits.toolCalls || limits.totalTokens !== undefined && (usage.unknownTokenCalls || usage.totalTokens >= limits.totalTokens)) { previous = { ok: false, error: { code: 'CALL_LIMIT_REACHED', message: '当前配置预算不足。' } }; return }
+        const operation = { id: randomUUID(), taskId: card.taskId, approvalId, inReplyTo: entryId, toolName: item.toolName, binding: item.binding, retryable: false, createdAt: new Date().toISOString() }
+        const intent = await tx.appendEntry(card.conversationId, { kind: 'pidot.action-dispatch-intent', data: operation })
+        item.operation = { ...operation, intentEntryId: intent.id }; item.status = 'dispatching'
+        if (state.activeId === item.id) state.activeId = null
+        return { status: 'running', checkpoint: { phase: 'awaitApproval', entryId, approvalId, inFlight: { kind: 'capability-management', operationId: operation.id } } }
+      }, ctx)
+      let result = previous
+      if (!result) {
+        try {
+          if (request.recoverSetupId) {
+            const receipt = await capabilityManagement.get(request.recoverSetupId, { taskId: runtime.taskId })
+            result = ['ready', 'disabled', 'unbound', 'removed'].includes(receipt.state) ? { ok: true, data: receipt }
+              : { ok: false, error: { code: 'SETUP_UNKNOWN', message: '原配置意图结果尚未核实；请只查询或显式续办原操作。' }, data: { ...receipt, state: 'unknown' } }
+          } else result = request.setupId ? await capabilityManagement.resume(request.setupId, { taskId: runtime.taskId, inputId: entryId }) : await capabilityManagement.execute({ taskId: runtime.taskId, inputId: entryId, call: request.call })
+        }
+        catch (error) { result = { ok: false, error: { code: error instanceof TaskInputError ? error.code : 'SETUP_UNKNOWN', message: error instanceof TaskInputError ? error.message : '原配置结果未核实，请核查原操作。' } } }
+      }
+      await publishCapabilityResult(runtime, ctx, request, result, approvalId)
+    }
+    async function waitCapabilitySetup(task, runtime, ctx) {
+      const { setupId, entryId } = task.state.checkpoint
+      const watch = await runtime.watchDoc(CapabilitySetups, ctx)
+      let abort
+      try {
+        await new Promise((resolve, reject) => {
+          const check = state => { const record = state.items[setupId]; if (record && (['ready', 'disabled', 'unbound', 'removed'].includes(record.state) || record.state === 'needs_confirmation' && record.approvalId && record.approvalId !== task.state.checkpoint.ignoreApprovalId || record.blocked || record.state === 'error' && ['SETUP_APPROVAL_DENIED', 'SETUP_SOURCE_CHANGED', 'SETUP_TARGET_CHANGED'].includes(record.error?.code))) resolve() }
+          abort = () => reject(runtime.signal.reason ?? new Error('Configuration stopped'))
+          runtime.signal.addEventListener('abort', abort, { once: true })
+          if (runtime.signal.aborted) return abort()
+          check(watch.value); watch.start(check)
+          void watch.closed.then(() => reject(new Error('Configuration watch closed')))
+        })
+      } finally { runtime.signal.removeEventListener('abort', abort); await watch.stop() }
+      const receipt = await capabilityManagement.get(setupId, { taskId: runtime.taskId })
+      await publishCapabilityResult(runtime, ctx, { entryId }, { ok: !receipt.error, data: receipt })
+    }
+    async function invokeExternalMcp(request, signal) {
+      await refreshExternalCatalog()
+      return dispatchForBot(request.card.bot.id, signal, activeSignal => externalMcp.invoke({
+        connectionId: request.external.connectionId, toolName: request.call.name, arguments: request.args, signal: activeSignal,
+        authorize: async identity => {
+          if (identity.toolName !== request.call.name || identity.connectionId !== request.external.connectionId) throw new TaskInputError(403, 'TOOL_IDENTITY_DENIED', '外部工具身份不匹配。')
+          await refreshExternalCatalog()
+          return harness.commit(async tx => {
+            const card = await tx.doc(TaskCard, request.card.taskId), record = await tx.task(card.taskId)
+            await assertNotCancelled(tx, card.taskId, record)
+            await collaboration.guard(tx, card.taskId)
+            const sets = toolSets(card, bots, await tx.doc(ToolAccess)), external = sets.externalTools?.find(tool => tool.name === request.call.name)
+            if (!external || external.catalogRevision !== request.external.catalogRevision) throw new TaskInputError(409, 'CAPABILITY_CATALOG_CONFLICT', '外部工具目录已改变，未执行。')
+            const check = checkToolCall({ card, record, conversation: await tx.conversation(card.conversationId), call: request.call, displayed: [request.call.name], sets })
+            if (!check.ok) throw new TaskInputError(403, check.error.code, check.error.message)
+            const usage = await tx.doc(CallUsage, card.taskId), limits = callLimits(card.parameters)
+            if (usage.toolCalls > limits.toolCalls || limits.totalTokens !== undefined && (usage.unknownTokenCalls > 0 || usage.totalTokens >= limits.totalTokens)) throw new TaskInputError(409, 'CALL_LIMIT_REACHED', '当前预算不足，未派发外部调用。')
+            if ((await decide(tx, { botId: card.bot.id, tool: request.call.name }, { externalTool: external })).effect === 'deny') throw new TaskInputError(403, 'POLICY_DENIED', '当前规则禁止外部调用。')
+            if (!await workspaceHistoryAllowed(tx, card, sets)) throw new TaskInputError(403, 'MCP_SOURCE_REVOKED', '当前输入依赖的外部来源已失效。')
+            const binding = (await tx.doc(CapabilityAssignments)).bindings[card.bot.id]?.[request.external.capabilityId]
+            if (binding?.catalogRevision !== external.catalogRevision || !binding.toolNames.includes(request.call.name)) throw new TaskInputError(403, 'CAPABILITY_NOT_ENABLED', '外部能力绑定已失效。')
+            card.externalMcpUsedRefs ??= []
+            if (!card.externalMcpUsedRefs.some(ref => ref.toolName === request.call.name && ref.catalogRevision === external.catalogRevision)) {
+              card.externalMcpUsedRefs.push({ toolName: request.call.name, connectionId: external.connectionId, catalogRevision: external.catalogRevision, inReplyTo: request.entryId })
+            }
+            return true
+          }, context)
+        },
+      }), undefined, request.card.taskId)
+    }
+    let externalRefreshSequence = 0
+    async function refreshExternalCatalog() {
+      if (!externalMcp) return
+      const sequence = ++externalRefreshSequence
+      let capabilities = [], tools = []
+      try {
+        ;({ capabilities, tools } = await readExternalProjection())
+      } catch { /* A failed refresh publishes no runnable tools. The service remains the authority. */ }
+      await harness.commit(async tx => {
+        if (sequence !== externalRefreshSequence) return
+        const access = await tx.doc(ToolAccess), state = await tx.doc(CapabilityAssignments)
+        access.externalMcp = { tools: tools.flatMap(tool => {
+          const capability = capabilities.find(item => item.id === `mcp:${tool.connectionId}` && item.status === 'ready' && item.toolNames.includes(tool.name))
+          if (!capability) return []
+          const enabledBotIds = Object.entries(state.bindings).filter(([, bindings]) => {
+            const binding = bindings[capability.id]
+            return binding?.catalogRevision === capability.revision && binding.toolNames.includes(tool.name)
+          }).map(([botId]) => botId)
+          return [{ ...tool, connectionName: capability.name, catalogRevision: capability.revision, capabilityId: capability.id, enabledBotIds }]
+        }) }
+      }, context)
+    }
+    async function externalMutation(operation, input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TaskInputError(400, 'MCP_INVALID_CONFIG', 'MCP 请求无效。')
+      const prepared = { ...input }
+      if (prepared.expectedRevision === '0') delete prepared.expectedRevision
+      delete prepared.confirmGlobal
+      delete prepared.affectedBotIds
+      if (operation === 'remove' && input.confirmGlobal !== true) throw new TaskInputError(409, 'MCP_REMOVE_CONFIRMATION_REQUIRED', '全局移除须明确确认影响到的 Bot。')
+      if (operation !== 'configure' && !input.expectedRevision) throw new TaskInputError(400, 'MCP_REVISION_REQUIRED', '请先读取当前连接版本。')
+      let removal
+      if (operation === 'remove') removal = await harness.commit(async tx => {
+        const ledger = await tx.doc(ExternalMcpRemovals), key = `request:${input.requestId}`
+        const signature = payloadHash(['external-mcp-remove', input.connectionId, input.expectedRevision])
+        const prior = ledger.requests[key]
+        if (prior) {
+          if (prior.signature !== signature) throw new TaskInputError(409, 'MCP_CONFIG_CONFLICT', '同一移除请求不能改变连接或版本。')
+          return JSON.parse(JSON.stringify(prior))
+        }
+        const state = await tx.doc(CapabilityAssignments)
+        const affectedBotIds = Object.entries(state.bindings).filter(([, bindings]) => bindings[`mcp:${input.connectionId}`]?.toolNames.length).map(([id]) => id)
+        ledger.requests[key] = { signature, affectedBotIds }
+        return { signature, affectedBotIds }
+      }, context)
+      if (removal?.result) return removal.result
+      let result
+      try {
+        result = await externalServiceCall(service => ['check', 'reconnect'].includes(operation)
+          ? service[operation](input.connectionId, prepared) : service[operation](prepared))
+      } finally { await refreshExternalCatalog() }
+      if (removal) {
+        result = { ...result, affectedBotIds: removal.affectedBotIds }
+        await harness.commit(async tx => { (await tx.doc(ExternalMcpRemovals)).requests[`request:${input.requestId}`].result = JSON.parse(JSON.stringify(result)) }, context)
+      }
+      return result
+    }
     async function syncManagedCatalog() {
+      await refreshExternalCatalog()
       // Synchronize on the same commit line: no stale read may resurrect an inactive Bot.
       await harness.commit(async tx => {
         const items = JSON.parse(JSON.stringify((await tx.doc(BotDirectory)).items))
@@ -1111,6 +1584,15 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       }, context)
     }
 
+    await harness.commit(async tx => { (await tx.doc(ToolAccess)).capabilityManagementReady = capabilityManagementEnabled && Boolean(externalMcp && skillImport) }, context)
+    if (capabilityManagementEnabled && externalMcp && skillImport) capabilityManagement = createCapabilityManagement({
+      transaction: fn => harness.commit(fn, context), readTask: readCapabilityTask, readEntry: (tx, id) => tx.entry(id),
+      canManage: canManageCapabilities, authorizeIntent: authorizeCapabilityIntent, mcp: externalMcp, skills: skillImport,
+      readCatalog: readManagerCatalog,
+      readCapabilities: listBotCapabilities, assignCapability: setCapabilityAssignment, verifyCapability: verifyManagedCapability,
+      affectedBots: async (tx, capabilityId) => Object.entries((await tx.doc(CapabilityAssignments)).bindings).filter(([, bindings]) => bindings[capabilityId]?.toolNames.length || bindings[capabilityId]?.kind === 'skill').map(([id]) => id),
+      requestApproval: requestCapabilityScopeApproval, readApproval: readCapabilityScopeApproval,
+    })
     await syncManagedCatalog()
     async function readMemoryEntry(tx, ref, scope = {}) {
       const record = await tx.task(ref.taskId), entry = await tx.entry(ref.entryId)
@@ -1120,7 +1602,8 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       if ((await tx.conversation(card.conversationId))?.owner?.taskId !== ref.taskId) return null
       const bot = (await tx.doc(BotDirectory)).items.find(item => item.id === card.bot.id)
       if (!bot || bot.status === 'inactive') return null
-      if (!await workspaceHistoryAllowed(tx, card, toolSets(card, bots, await tx.doc(ToolAccess)))) return null
+      // memorySourceAllowed above accepts only genuine direct user entries, never MCP-derived replies.
+      if (!await workspaceHistoryAllowed(tx, { ...card, externalMcpUsedRefs: [] }, toolSets(card, bots, await tx.doc(ToolAccess)))) return null
       if (scope.actor === 'candidate') {
         let consumed = false, cursor
         do {
@@ -1357,7 +1840,11 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     }
 
     async function get(id, includeMessages = true) {
+      await refreshExternalCatalog()
+      const setupIds = capabilityManagement ? await harness.commit(async tx => Object.values((await tx.doc(CapabilitySetups)).items).filter(item => item.taskId === id).map(item => item.id), context) : []
+      const capabilitySetups = capabilityManagement ? await Promise.all(setupIds.map(setupId => capabilityManagement.get(setupId, { taskId: id }))) : []
       return harness.commit(async (tx) => {
+        await assertSessionVisible(tx, id)
         await feishu.sync(tx)
         const record = await tx.task(id)
         if (!record || record.kind !== ChatTask.definition.name) return undefined
@@ -1419,6 +1906,10 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
             cursor = page.next
           } while (cursor)
         }
+        if (card.externalMcpHistoryFloor) for (let i = 0; i < messages.length; i++) {
+          if (messages[i].role !== 'user' && messages[i].id < card.externalMcpHistoryFloor) messages[i] = { id: messages[i].id, role: messages[i].role, content: '此前外部来源已退役；旧派生内容不再进入当前会话。' }
+        }
+        if (card.externalMcpHistoryFloor) for (let i = compactionHistory.length - 1; i >= 0; i--) if (compactionHistory[i].id < card.externalMcpHistoryFloor) compactionHistory.splice(i, 1)
         const feishuVisible = await feishuTaskAllowed(tx, card, toolSets(card, bots, await tx.doc(ToolAccess)))
         if (!feishuVisible) {
           for (let i = 0; i < messages.length; i++) if (messages[i].role !== 'user') messages[i] = { id: messages[i].id, role: messages[i].role, content: '真实日历来源权限不足；派生内容已隐藏。' }
@@ -1481,9 +1972,17 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
             approvals:await childDoc(TaskApprovals),blockers:await childDoc(TaskBlockers),
             cancellation:(await childDoc(TaskCancellation)).request,runtime:record.state})
         }
+        const approvalDocument = await doc(TaskApprovals)
+        const visibleApprovals = feishuVisible ? { ...approvalDocument, items: approvalDocument.items.filter(item => !card.externalMcpHistoryFloor || item.inReplyTo >= card.externalMcpHistoryFloor) }
+          : { activeId: null, items: approvalDocument.items.filter(item => item.externalMcp && item.receipt?.result.error?.unknown).map(item => ({
+            id: item.id, taskId: item.taskId, conversationId: item.conversationId, botId: item.botId, inReplyTo: item.inReplyTo,
+            toolName: item.toolName, externalMcp: item.externalMcp, arguments: {}, before: null, simulated: false, allowAlways: false,
+            status: 'outcome-unknown', createdAt: item.createdAt, receipt: { id: item.receipt.id, createdAt: item.receipt.createdAt, source: item.receipt.source,
+              result: { ok: false, error: item.receipt.result.error } },
+          })) }
         const stoppedRoots=new Set((collaborationState.stops??[]).map(s=>s.rootWorkId))
         const projectBlocker=b=>({...b,...(b.status==='pending'&&(stoppedRoots.has(b.rootWorkId)||collaborationState.items.some(r=>r.childTaskId===b.taskId&&r.result?.status==='cancelled'))?{status:'cancelled'}:{})})
-        return { ...safeCard, archived: (await tx.doc(TaskArchive)).taskIds.includes(id), calendarAccess: feishuVisible, ...(card.kind==='group'?{groupIssues:JSON.parse(JSON.stringify(groupIssues))}:{}), ...(groupView ? { group: groupView } : {}), collaborationOverview: await collaborationOverview(tx,id,{TaskCard,ChatInput,ChatQueue,CallUsage,TaskApprovals,TaskBlockers,bots}), sharedInformation: await sharedInformationService({TaskCard,ChatInput,bots}).userView(tx,card), collaborations: JSON.parse(JSON.stringify(await projectGroupRelations(tx,card,(await tx.doc(Collaboration)).items.filter(i => i.parentTaskId === id || i.childTaskId === id),{TaskCard,ChatInput,bots}))), botLifecycle: structuredClone((await tx.doc(BotDirectory)).items.find(b => b.id === card.bot.id)?.status ?? 'active'), approvals: feishuVisible ? JSON.parse(JSON.stringify(await doc(TaskApprovals))) : { activeId: null, items: [] }, blockers: JSON.parse(JSON.stringify({...await doc(TaskBlockers),items:(await doc(TaskBlockers)).items.map(projectBlocker),related:(card.kind==='group'?groupIssues.flatMap(c=>c.blockers.items):collaborationState.items.filter(r=>r.parentTaskId===id).flatMap(r=>r.blockers??[])).map(projectBlocker)})), cancellation: JSON.parse(JSON.stringify(cancellation)), messages, taskStateHistory, callLimitHistory, compactionHistory, recoveryHistory, migrationHistory,
+        return { ...safeCard, capabilitySetups, archived: (await tx.doc(TaskArchive)).taskIds.includes(id), calendarAccess: feishuVisible, ...(card.kind==='group'?{groupIssues:JSON.parse(JSON.stringify(groupIssues))}:{}), ...(groupView ? { group: groupView } : {}), collaborationOverview: await collaborationOverview(tx,id,{TaskCard,ChatInput,ChatQueue,CallUsage,TaskApprovals,TaskBlockers,bots}), sharedInformation: await sharedInformationService({TaskCard,ChatInput,bots}).userView(tx,card), collaborations: JSON.parse(JSON.stringify(await projectGroupRelations(tx,card,(await tx.doc(Collaboration)).items.filter(i => i.parentTaskId === id || i.childTaskId === id),{TaskCard,ChatInput,bots}))), botLifecycle: structuredClone((await tx.doc(BotDirectory)).items.find(b => b.id === card.bot.id)?.status ?? 'active'), approvals: JSON.parse(JSON.stringify(visibleApprovals)), blockers: JSON.parse(JSON.stringify({...await doc(TaskBlockers),items:(await doc(TaskBlockers)).items.map(projectBlocker),related:(card.kind==='group'?groupIssues.flatMap(c=>c.blockers.items):collaborationState.items.filter(r=>r.parentTaskId===id).flatMap(r=>r.blockers??[])).map(projectBlocker)})), cancellation: JSON.parse(JSON.stringify(cancellation)), messages, taskStateHistory, callLimitHistory, compactionHistory, recoveryHistory, migrationHistory,
           waiting: waitingSnapshot(record.state.checkpoint, slot, await doc(TaskBlockers), await doc(TaskApprovals), await doc(CallUsage), callLimits(card.parameters), cancellation),
           contextPolicy: contextPolicy(card.parameters), compaction: JSON.parse(JSON.stringify(await doc(ContextCompaction))), activeInputId: slot.entryId,
           messageControl: messageControlSnapshot(slot, { entryIds: queuedInputIds }, steering, cancellation, record.state.checkpoint),
@@ -1502,6 +2001,33 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     // PLAN §8.1: main sessions are infrastructure, not user-created Tasks (no beforeCommit hook).
     mainDeps = { TaskCard, rootConversationId: root.id, createTask: async (tx, input, creationConversationId) => { await refreshModelSettings(tx); return createChatTask(tx, input, { ChatTask, TaskCard, ChatInput, ChatQueue, configuredModels, creationConversationId }) } }
     mainService = mainSessionService({ TaskCard, ChatInput, createTask: (...args) => createTask(...args) })
+    const sessionCancellation = cancellationApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, propagateStops })
+    const freshMainSessions = new WeakMap()
+    const sessionLifecycle = createSessionLifecycle({
+      transaction: fn => harness.commit(fn, context),
+      readSession: (tx, id) => freshMainSessions.get(tx)?.get(id) ?? readLifecycleSession(tx, id, { TaskCard, taskKind: ChatTask.definition.name }),
+      stopSession: id => sessionCancellation.cancel(id, {}),
+      stopMain: async id => {
+        await harness.commit(async tx => {
+          const record = await tx.task(id)
+          if (record.state.status === 'terminal') return
+          await requestTaskCancellation(tx, id, { TaskCard, ChatInput }, record)
+          // Clearing an entry point never stops the independently running work it handed off.
+          const cancellation = await tx.doc(TaskCancellation, id)
+          cancellation.request.scope = 'main-session-only'
+        }, context)
+        void harness.abortTask(id, context).catch(() => { /* durable cancellation blocks further dispatch */ })
+        harness.resume()
+        return { ok: true }
+      },
+      createMain: async (tx, previous) => {
+        const id = await createMainSession(tx, previous.bot.id, mainDeps)
+        // Harness forbids table reads after createTask. Validate the new card from this
+        // transaction's write set without re-reading its just-created Task row.
+        if (id) freshMainSessions.set(tx, new Map([[id, JSON.parse(JSON.stringify(await tx.doc(TaskCard, id)))]]))
+        return id
+      },
+    })
     // PLAN §8.2: the detector reads structured records as the owner; never chat text or a model (I-07).
     async function gatherDetection(at) {
       const owner = workspaceAuthority.user(), today = dayStart(at), yesterday = dayKey(at - 86400000)
@@ -1656,7 +2182,11 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         const state=await tx.doc(Collaboration), result=[]
         for(const r of state.items) {
           const parent=await tx.task(r.parentTaskId)
-          const cancelled=parent.state.status==='terminal'?parent.state.outcome?.status==='aborted':(await tx.doc(TaskCancellation,r.parentTaskId)).request
+          const archive = parent.state.status === 'terminal' ? await readCancelledArchive(tx, r.parentTaskId) : null
+          const cancellation = archive?.cancellation ?? (parent.state.status === 'terminal' ? null : (await tx.doc(TaskCancellation, r.parentTaskId)).request)
+          const parentCard = archive?.documents[TaskCard.definition.kind] ?? (parent.state.status === 'terminal' ? null : await tx.doc(TaskCard, r.parentTaskId))
+          const mainClear = cancellation?.scope === 'main-session-only' && parentCard?.kind === 'main' && parentCard.bot.id === r.supervisorBotId && parent.input.botId === r.supervisorBotId
+          const cancelled = !mainClear && (parent.state.status === 'terminal' ? parent.state.outcome?.status === 'aborted' : Boolean(cancellation))
           if((cancelled||(state.stops??[]).some(s=>s.rootWorkId===r.rootWorkId))&&(!r.result||r.businessStatus==='rework-requested'))result.push(r.childTaskId)
         }
         return [...new Set(result)]
@@ -1937,9 +2467,66 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       ...approvalApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, bots, collaboration, sync: tx => feishu.sync(tx) }),
       ...blockerApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, bots, collaboration, sync: tx => feishu.sync(tx) }),
       ...cancellationApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, bots, collaboration, propagateStops }),
+      deleteSession: (id, input) => sessionLifecycle.deleteSession(id, input),
+      clearMainSession: (id, input) => sessionLifecycle.clearMainSession(id, input),
+      sessionRequestStatus: requestId => {
+        if (typeof requestId !== 'string' || !/^[\w:-]{1,160}$/.test(requestId)) throw new TaskInputError(400, 'INVALID_SESSION_REQUEST', '请求标识无效。')
+        return sessionLifecycle.requestStatus(requestId)
+      },
       ...steeringApi({ harness, context, TaskCard, ChatInput, ChatQueue, taskKind: ChatTask.definition.name }),
       ...skillApi({ harness, context, TaskCard, ChatInput, bots: catalog, get, directory: skillDirectory }),
+      skillImportPrepare: source => skillImportCall(service => service.prepareSkillImport(source)),
+      skillImportInstall: input => skillImportCall(service => service.importSkill(input)),
+      skillImportUpdate: input => skillImportCall(service => service.updateSkill(input)),
+      skillImportRollback: input => skillImportCall(service => service.rollbackSkill(input)),
+      async skillImportRemove(input) {
+        const affectedBotIds = await harness.commit(async tx => {
+          const state = await tx.doc(CapabilityAssignments), directory = await tx.doc(BotDirectory)
+          const capabilityId = `skill:${input?.skillId}`
+          return directory.items.filter(bot => state.skills?.[bot.id]?.[capabilityId] === true || state.bindings?.[bot.id]?.[capabilityId]?.kind === 'skill').map(bot => bot.id)
+        }, context)
+        return skillImportCall(service => service.removeSkill({ ...input, affectedBotIds }))
+      },
       ...configuration,
+      capabilitySetupStatus: async (setupId, taskId) => {
+        if (!capabilityManagement) throw new TaskInputError(503, 'SETUP_UNAVAILABLE', '配置 Host 尚未启用。')
+        await harness.commit(async tx => { await assertSessionVisible(tx, taskId); if (!await readCapabilityTask(tx, taskId)) throw new TaskInputError(404, 'TASK_NOT_FOUND', 'Task 不存在。') }, context)
+        return capabilityManagement.get(setupId, { taskId })
+      },
+      resumeCapabilitySetup: async (setupId, input) => {
+        if (!capabilityManagement) throw new TaskInputError(503, 'SETUP_UNAVAILABLE', '配置 Host 尚未启用。')
+        if (!input || Object.keys(input).some(key => !['taskId', 'inputId'].includes(key)) || !Number.isSafeInteger(input.taskId) || !Number.isSafeInteger(input.inputId)) throw new TaskInputError(400, 'SETUP_INPUT_INVALID', '续办只能提供原 Task 和真实当前输入。')
+        await reserveCapabilityResume(input.taskId, input.inputId)
+        const result = await capabilityManagement.resume(setupId, input)
+        await syncManagedCatalog(); harness.resume()
+        if (!result.data) throw new TaskInputError(409, result.error?.code ?? 'SETUP_UNKNOWN', result.error?.message ?? '配置结果未核实。')
+        return result.data
+      },
+      externalMcpConnections: async () => { await refreshExternalCatalog(); return externalServiceCall(async service => ({ items: await service.connections() })) },
+      externalMcpConfigure: input => externalMutation('configure', input),
+      externalMcpSaveCredential: input => externalMutation('saveCredential', input),
+      externalMcpCheck: input => externalMutation('check', input),
+      externalMcpReconnect: input => externalMutation('reconnect', input),
+      externalMcpDisable: input => externalMutation('disable', input),
+      externalMcpRemove: input => externalMutation('remove', input),
+      externalMcpRequestStatus: requestId => externalServiceCall(service => service.requestStatus(requestId)),
+      // Only trusted store assembly supplies registered 09/10 projections. HTTP never owns catalog.
+      async getBotCapabilities(botId) {
+        await refreshExternalCatalog()
+        return harness.commit(async tx => {
+          await refreshModelSettings(tx)
+          return listBotCapabilities(tx, botId, { catalog: await readCapabilityCatalog(tx, { botId }) })
+        }, context)
+      },
+      async setBotCapabilityAssignment(botId, input) {
+        const result = await harness.commit(async tx => {
+          await refreshModelSettings(tx)
+          return setCapabilityAssignment(tx, botId, input, { catalog: await readCapabilityCatalog(tx, { botId }) })
+        }, context)
+        // Sync committed current truth, not a possibly replayed older receipt.
+        await syncManagedCatalog()
+        return result
+      },
       ...migrationApi({ harness, context, TaskCard, ChatInput, ChatQueue, bots: catalog, models: configuredModels, get, skillDirectory }),
       bots: () => structuredClone(catalog),
       async deactivateBot(botId, input) {
@@ -1975,7 +2562,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           if (record.input.botId !== botId || task.configRef.botId !== botId) throw new TaskInputError(409, 'TASK_BINDING_MISMATCH', 'Task与Bot身份关联不一致。')
         }
       },
-      toolCatalog,
+      async toolCatalog() { await refreshExternalCatalog(); return harness.commit(async tx => toolCatalog({ externalTools: (await tx.doc(ToolAccess)).externalMcp?.tools ?? [] }), context) },
       async getToolAccess(botId) {
         const bot = catalog.find((item) => item.id === botId)
         if (!bot) throw new TaskInputError(404, 'BOT_NOT_FOUND', '指定的 Bot 不存在。')
@@ -2126,7 +2713,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         }, context)
         const list = (await Promise.all(records.map(async record => {
           try { return await get(record.id, false) } catch(error) {
-            if(error instanceof TaskInputError && (error.status===410 && error.code==='TASK_UNAVAILABLE' || error.code==='GROUP_FORK_DENIED')) return null
+            if(error instanceof TaskInputError && (error.status===410 && ['TASK_UNAVAILABLE', 'SESSION_DELETED'].includes(error.code) || error.code==='GROUP_FORK_DENIED')) return null
             throw error
           }
         }))).filter(Boolean)
@@ -2208,6 +2795,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         return card.kind === 'group' ? [] : commandSkills(tx, await projectMainCard(tx, card), bots, skillDirectory)
       }, context),
       async send(id, message, calendarCommand, options = {}) {
+        await refreshExternalCatalog()
         if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['skillId', 'model'].includes(key))) throw new TaskInputError(400, 'INVALID_MESSAGE', '消息选项仅支持 skillId 和 model。')
         const { skillId } = options
         const directedInput = typeof message === 'object' && message !== null ? message : null
@@ -2217,6 +2805,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         }
         if (skillId !== undefined && (typeof skillId !== 'string' || !/^[a-z][a-z0-9-]{0,79}$/.test(skillId) || directedInput || calendarCommand)) throw new TaskInputError(400, 'INVALID_SKILL', 'skillId 须为已登记的 Skill，且只能随普通消息提交。')
         const entry = await harness.commit(async (tx) => {
+          await assertSessionVisible(tx, id)
           const record = await tx.task(id)
           if (!record || record.kind !== ChatTask.definition.name) throw new TaskInputError(404, 'TASK_NOT_FOUND', '会话不存在。')
           await assertNotCancelled(tx, id, record)
@@ -2273,7 +2862,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         harness.resume()
         return entry
       },
-      close: async () => { await memoryWorker?.close(); await detectorWorker?.close(); await workspaceScheduler.close(); await workspaceService.closeExternalSync(); for (const e of workspaceMcpSessions.values()) e.session.close(); workspaceMcpSessions.clear(); return harness.close(context) },
+      close: async () => { await externalMcp?.close(); await memoryWorker?.close(); await detectorWorker?.close(); await workspaceScheduler.close(); await workspaceService.closeExternalSync(); for (const e of workspaceMcpSessions.values()) e.session.close(); workspaceMcpSessions.clear(); return harness.close(context) },
     }
   } catch (error) {
     if (harness) await harness.close(context)

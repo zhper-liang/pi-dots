@@ -4,7 +4,7 @@
 
 ## 1. 项目是什么
 
-Pidot 是运行在本机的多 Bot 个人助理系统：用户在网页中管理待办和日程，也可以与 Chief 或专业 Bot 对话，让它们调用工具、协作和执行例行任务。会话、执行进度、审批、业务对象和计划都会持久化。
+Pidot 是运行在本机的多 Bot 个人助理系统：用户在网页中管理日历与定时任务（既有Todo数据/API保留），也可以与 Chief 或专业 Bot 对话，让它们调用工具、协作和执行例行任务。会话、执行进度、审批、业务对象和计划都会持久化。
 
 当前形态是 **React 网页 + 一个 Node.js 后端 + 一个 SQLite 数据库**。后端内部包含 Agent 执行、工作区业务、定时、同步、提醒和 MCP 接入，没有独立微服务集群。网页关闭后，只要后端进程仍在运行，后台工作就能继续；后端停机期间不会执行。
 
@@ -18,7 +18,7 @@ Pidot 是运行在本机的多 Bot 个人助理系统：用户在网页中管理
 | 模型适配 | `@earendil-works/pi-ai` 1.3.0 | OpenAI 兼容模型调用、工具调用消息转换 |
 | 运行基础 | `@earendil-works/chord` 1.3.0 | Context 等执行基础设施 |
 | 存储 | Node 内置 SQLite + pi-durable SQLite adapter | 同库保存执行记录与业务 Documents |
-| 工具协议 | JSON-RPC MCP，兼容基线 `2025-11-25` | 内部 Agent 工具会话及本机 stdio client |
+| 工具协议 | 入站MCP兼容基线 `2025-11-25`；官方SDK `1.32.2` | 内部工作区、对外本机stdio与独立外部MCP客户端 |
 | 外部业务 | 飞书应用日历 API | 一个显式绑定的日历来源 |
 | 工程 | pnpm 11.21.0、Node test、oxlint | 安装、测试、静态检查 |
 
@@ -35,7 +35,7 @@ flowchart TB
     Shell["UnifiedWorkspace.tsx<br/>导航、响应式侧栏、面板保持挂载"]
     Home["Chief 主会话<br/>MainSession、SystemCard"]
     Chat["Bot / 群聊 / 任务<br/>BotCreation、BotTemplatePage、TaskTimeline"]
-    Items["日历 / 待办<br/>CalendarBoard、LocalWorkspace"]
+    Items["日历 / 自动化<br/>旧Todo数据与API保留"]
     AutoUI["自动化 / 执行记录<br/>ScheduleWorkspace、BotRoutines"]
     Settings["收件箱 / 设置<br/>InboxPage、ReminderWorkspace、SettingsPage"]
     App --> Shell
@@ -271,21 +271,21 @@ flowchart TD
 | 功能 | 怎么用 | 简要实现 / 主要代码 |
 |---|---|---|
 | 连接本地服务 | 启动后打开网页，输入本机 API token；断开连接不会删除数据 | `App.tsx` 在当前标签页 sessionStorage 保存 token；`app.mjs` 校验 Bearer |
-| 事项默认视图 / 首页 | 在事项查看今日日历与到期待办；通知处理审批，首页向 Chief 发消息 | `CalendarBoard.tsx` 默认日视图，`todayDueTodos` 按上海日期筛选；首页复用 Chief 主会话 |
-| 创建 Bot | 侧栏新建 Bot，先填名字；高级设置调整职责与模型 | `BotCreation.tsx`、`bot-templates.mjs` 按名字确定性匹配职责，不调用模型 |
+| 事项默认视图 / 首页 | 事项打开今日日历，自动化另有入口；独立待办UI收起，首页向Chief发消息 | `CalendarBoard.tsx` 默认日视图；旧todos导航兼容落日历，数据/API保留 |
+| 创建 Bot | 只需名字；新Bot业务工具和来源空白，后续明确配置 | `BotCreation.tsx`、`bot-directory.mjs`；不按名字推人格/角色，不重启灌满旧分配 |
 | Bot 主会话 | 打开 Bot 持续交流，如“整理一下今天需要做的事” | `main-session.mjs` 确保每个 Bot 一个主会话；长任务可派生执行 |
 | 独立任务 | 在 Bot 下开始会话，或让主会话派生长任务；查看目标与完成标准 | `task-creation.mjs` 创建原生 Harness Task、Conversation 和 TaskCard |
 | 队列与插入 | 执行中继续发送会排队；需要改变当前方向时显式插入 | `ChatQueue` 持久 FIFO；`steering.mjs` 在安全边界应用 |
 | 时间线与历史 | 会话顶部切到时间线，看模型回合、工具、审批、补充和结果 | `TaskTimeline.tsx`、`timeline.mjs` 从持久事件构建视图 |
-| 归档、取消与提额 | 归档隐藏会话；取消停止后续工作；额度耗尽时明确提高上限 | `TaskArchive` 与 `cancellation.mjs` 分开；`CallUsage` 记录用量。主会话不能取消 |
+| 归档、删除、换新与提额 | 归档仅隐藏；普通删除先确认停止，主会话明确清空换新；额度耗尽显式提额 | `session-lifecycle.mjs`、`main-session.mjs`；旧详情410/审计保留/独立子Task不删除，`CallUsage`不清账 |
 
 ### 3.2 日程、待办和来源
 
 | 功能 | 怎么用 | 简要实现 / 主要代码 |
 |---|---|---|
-| 本地待办 | 在“待办”新增、编辑、完成或删除，填写截止时间和时区 | `LocalWorkspace.tsx` → `workspace-local.mjs`；版本检查与 Operation 同事务保存，无模型 |
-| 本地日程 | 在“日历”管理普通定时事件，填写起止时间和时区 | `CalendarBoard.tsx`、`workspace-local.mjs` 保存 Event；不支持全天/重复写 |
-| 待办关联日程 | 在待办关联区选择双方，核对具体对象后提交 | `workspace-links.mjs` 保存 ItemLink 与双方版本；删除不级联 |
+| 本地Todo兼容 | 独立待办UI收起，原数据/API和Agent业务服务保留 | `workspace-local.mjs`；版本检查与Operation保留，不把截止当占时 |
+| 本地日程 | 在日历卡片/弹窗选择日期和起止时间，使用本机时间创建 | `CalendarBoard.tsx`、`workspace-local.mjs` 保存 Event；不支持全天/重复写 |
+| Todo关联兼容 | 旧显式关联数据/API继续保留，不因收起UI级联删除 | `workspace-links.mjs` 保存 ItemLink 与双方版本；删除不级联 |
 | 飞书连接和许可 | “设置 → 来源与状态 → 飞书日历来源”查看绑定、启用同步并设置来源许可；凭证按运维文档在服务端配置 | `ExternalWorkspace.tsx`、`feishu-calendar.mjs`、`workspace-feishu.mjs`；当前仅一个显式绑定来源 |
 | 飞书读取和修改 | 为 Bot 勾选飞书来源资源，再问“查询这段时间的飞书日程”；新建、修改、删除默认直接执行，日历组关闭时先问 | `feishu-calendar.mjs`、`feishu-write.mjs`、`feishu-mutation.mjs`；真实 Provider 读写与回执 |
 | 窗口同步 | 在来源面板查看同步窗口、成功时间、coverage 和错误 | `workspace-sync.mjs` 只读重扫；失败有限退避。缓存不是外部写回 |
@@ -297,16 +297,20 @@ flowchart TD
 
 | 功能 | 怎么用 | 简要实现 / 主要代码 |
 |---|---|---|
-| Bot 工具与资源 | 每个 Bot 默认拥有全部工具组；侧栏「机器人」打开卡片目录，详情「规则」切换工具组、「设置」分配 `workspace:local` 等资源 | `BotConfiguration.tsx`、`bot-configuration.mjs`；更改从所有已有 Task 的下一次调用起生效 |
-| 直接做 / 先问 | 在 Bot 规则中每个工具组一个开关：开 = 组内写入全部直接做（含删除），关 = 全部先问 | `BotRules.tsx`、`tool-group-settings.mjs`、`policy.mjs`；工具和来源许可检查仍先执行 |
+| Bot 工具与资源 | 新Bot空白；在详情「工具」按工具/MCP/Skill明确启停，并配置所需来源 | `BotConfiguration.tsx`、`bot-configuration.mjs`；更改从所有已有 Task 的下一次调用起生效 |
+| 直接做 / 先问 | 传统业务工具写入确认与启停分开；外部MCP和能力配置采用精确确认 | `BotRules.tsx`、`tool-group-settings.mjs`、`policy.mjs`；工具和来源许可检查仍先执行 |
 | 审批与补充 | 从输入框上方、主会话镜像卡或收件箱处理；批准前查看精确内容 | `approvals.mjs`、`blockers.mjs`、`SystemCard.tsx`；同一操作身份持久化 |
 | 全局暂停 | 在设置暂停全部自动化；也可让有权限的 Bot 暂停 | `policy.mjs` 把写入 allow 降为 ask，停止例行任务与事件触发；恢复只由用户操作，不补跑 |
-| Skill 方法加载 | 输入 `/` 选择本条消息的方法，或由 Bot 按需选择 | `skills.mjs` 扫描本地 manifest，核对当前依赖，按输入激活/退出；Skill 不授予权限 |
+| Skill 方法加载 | 输入 `/` 选择本条消息的方法，或由 Bot 按需选择 | `skills.mjs` 合并内置与用户固定包，核对当前选择/依赖，按输入激活/退出；Skill 不授予权限 |
 | 模型配置与迁移 | 在 Bot 编辑模型；旧任务要改模型/提示词时，查看配置差异并显式迁移 | `task-migration.mjs` 在安全边界更新运行配置；工具、资源、规则实时生效，不用迁移 |
 
-当前默认（[ADR-015](decisions/README.md#adr-015-工具组默认开开即直接做)）：读取与内部协作直接允许；工具组默认开，组内写入（含删除）直接执行；组关闭或全局暂停时先问；“以后直接做”把该工具所在组设为开。未知工具/动作拒绝。暂停中及 unknown 后重做的审批不提供“以后直接做”。无人值守的 routine/event/detector 遇到 ask 会跳过并记录“这一步需要你来做”，不会一直挂审批。
+当前分配与确认独立：新Bot默认空白，legacy精确分配/撤销保留；传统已授权业务写入依当前allow/ask规则执行，外部MCP调用、能力配置及管理权转授需精确确认。普通组开关/Skill正文/其他Bot文字均不授予权限，unknown只核查原请求。历史ADR的默认全组迁移不再重放。
 
 仓库内置 Skill 为 **日程冲突分析**（`calendar-conflict-analysis`），面向日程 Bot 的模拟日程工具及 `mock:personal`，不是任意真实飞书日历的通用写入方法。
+
+### 3.3.1 外部能力接入
+
+受权Chief或配置Agent可通过mcp_manage/skill_manage登记来源、绑定指定Bot并查真实回执。缺凭据从安全设置入口输入后续办原setup，不能在聊天传Key；全局影响/Skill机制另有精确范围确认。对外stdio凭据与Pidot作为客户端接第三方MCP是两个方向；已安装executable/Streamable HTTP不等于任意npx安装或通用OAuth。配置登记、已绑定和ready分别显示，unknown不自动重派；详细端点见[HTTP](interfaces/http-api.md#agent-能力配置-host)与[MCP](interfaces/mcp.md)。
 
 ### 3.4 多 Bot、Chief 和群聊
 
@@ -316,7 +320,7 @@ flowchart TD
 | 跨 Bot 委派 | 在具备协作工具的任务中明确目标、执行者与完成标准 | `collaboration.mjs`、`collaboration-tools.mjs` 创建父子 Task 关系；目标 Bot 独立校验权限 |
 | 结果验收和返工 | 主管接受提交或给出修改意见；在协作面板跟踪 | `review-tools.mjs` 和协作记录保存结果与责任事件；最多两次返工，超限交用户 |
 | 阻塞上报 | Bot 缺信息或无法继续时报告 blocker，用户/主管补充或上报 | `blockers.mjs`、`blocker-actions.mjs`；解决关联等待后恢复原 Task，主管不能代替用户批准 |
-| 群聊及单目标 @ | 创建群并选择管理员和成员；普通消息交管理员，定向消息选择一个成员 | `groups.mjs`、`group-fork-context.mjs` 从明确消息点派生必要上下文 |
+| 群聊与定向 @ | 私聊明确换目标并带草稿、不自动发送；群内显式选择目标，按稳定ID/顺序派发 | `groups.mjs`、`mentions.mjs`与输入框接线，来源身份不因名字或正文扩大 |
 | 共享信息与来源追踪 | 通过共享信息和协作面板检查哪些资料被引用、结果来自谁 | `shared-information.mjs`、`group-result-provenance.mjs` 附带来源；回读实时检查，受限材料不广播给其他成员 |
 
 ### 3.5 自动化、提醒和 MCP
@@ -340,11 +344,11 @@ MCP 实际工作区工具为 `workspace.list`、`workspace.get`、`workspace.pre
 ## 4. 建议的上手顺序
 
 1. 按 [工程 README](../my-app/README.md) 配置本地 API token 并启动，先确认当前是真实模型还是测试模式。
-2. 在“待办”和“日历”手动建少量本地事项，理解 Todo、Event 及显式关联。
+2. 在日历手动建少量本地日程，理解Event与Todo数据/API的兼容边界。
 3. 回到首页向 Chief 提问；打开 Bot 主会话和时间线，观察输入、模型、工具与结果。
-4. 新建一个 Bot，在详情「设置」检查资源、「规则」检查工具组开关；先用本地来源验证开（直接做）与关（先问）。
+4. 新建空白Bot，先正常聊天；再明确启用所需工具/来源，区分能力开关与写入确认。
 5. 创建例行任务，先测试运行，再启用真实计划；在执行记录中找到原 Task。
-6. 需要真实外部日历时再接飞书；需要外部工具客户端时再发放独立 stdio 凭证。
+6. 需要飞书来源时按独立许可配置；接外部MCP/Skill使用受控配置Host，外部程序访问Pidot则另发放受限stdio凭据。
 
 启动、环境变量与凭证配置的唯一详细步骤见 [工程 README](../my-app/README.md)。生产式本地启动为在 `my-app` 下运行 `pnpm build`、`pnpm start:api`；开发时分别运行 `pnpm dev:api` 和 `pnpm dev`。
 
@@ -397,6 +401,8 @@ pidot/
 - 外部连接器只有当前飞书应用日历；没有邮件或外部待办。普通事件之外的邀请、会议室、重复/例外、全天写不支持。
 - 外部 unknown 必须保留并核查，不能盲重试；本地撤销有版本条件，外部写入不可撤销。
 - 对话摘要与上下文压缩已实现，但不等于完整长期记忆产品。
-- 部分旧专题正文仍含“八页导航”“能力池/档位/Task 权限快照”“主会话只读”“所有 prepare 都必须人工确认”等描述。当前界面以 `workspace-navigation.mjs` 为准（2026-10-29 T07）：首页是 Chief 主会话，左栏分会话 / 机器人，底部是事项（日历、待办、自动化三个常驻子标签，默认今日日视图和到期待办）、通知、设置；当前权限以 `policy.mjs`、`tool-group-settings.mjs`、`workspace-mcp-business.mjs` 及 ADR-014、ADR-015 为准。历史方案和历史测试数字不能当成当前重新验收结果。
+- 旧计划/ADR保留当时的导航、能力池、主会话只读等历史选择；当前R1界面以workspace-navigation为准，事项常驻日历/自动化，旧Todo数据/API保留。新Bot默认空白、权限实时、启停与确认分离；实际运行边界以本页、运行架构和HTTP/MCP契约为准。测试数字对应各次源码快照，最终验收见R1材料，不把历史结果当重新执行。
 
 继续查阅：[功能范围](product/mvp-scope.md)、[Agent 专题](architecture/agent-runtime.md)、[HTTP 契约](interfaces/http-api.md)、[运行手册](engineering/operations.md)。本文依据源码与现有测试用例梳理，没有启动真实模型、修改正式数据库或执行飞书写入，也未重新运行业务测试。
+
+R1逐票实现、实际失败及最终QA/用户验收状态见[验收材料](../plans/active/workspace-experience-r1/ACCEPTANCE.md)，本文不把历史测试数字当作本次重新执行。

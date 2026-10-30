@@ -64,9 +64,9 @@ export function migrationApi({ harness, context, TaskCard, ChatInput, ChatQueue,
     if (parameters.mode === 'model') {
       const policy = contextPolicy(parameters)
       if (!policy || policy.triggerTokens <= 0) fail(409, 'MIGRATION_CAPACITY_UNKNOWN', '目标模型容量未明确配置或输出预留无效；请先配置已核实容量，不会猜测或丢弃规则。')
-      const ctx = await buildTaskContext(tx, next, Number.MAX_SAFE_INTEGER, { preview: true })
+      const ctx = await buildTaskContext(tx, next, Number.MAX_SAFE_INTEGER, { preview: true, bots, skillDirectory })
       const skillCatalog = sets.authorized.includes('skill_activate') ? await skillCatalogForTask(tx, next, bots, skillDirectory) : []
-      const estimatedTokens = contextTokens({ systemPrompt: ctx.systemPrompt, tools: toolDefinitions(sets.authorized), messages: ctx.messages, skillCatalog }) + (skillCatalog.length ? 512 : 0)
+      const estimatedTokens = contextTokens({ systemPrompt: ctx.systemPrompt, tools: toolDefinitions(sets.authorized, sets), messages: ctx.messages, skillCatalog }) + (skillCatalog.length ? 512 : 0)
       // Conservative preflight, no migration-time compaction or extra model call.
       if (estimatedTokens + 4096 > policy.triggerTokens) fail(409, 'MIGRATION_CAPACITY_EXCEEDED', '现有历史、任务要求和固定Skill超出目标容量安全余量；未压缩或丢弃内容，请选择容量充足的模型。')
       capacity = { ...policy, estimatedTokens, nextInputReserveTokens: 4096 }
