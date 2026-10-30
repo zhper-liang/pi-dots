@@ -44,6 +44,8 @@ try {
   server.listen(config.port, config.host, () => {
     process.nextTick(() => console.log(memoryFileSummary ? `记忆文件：${memoryFileSummary.targets} 份，已同步 ${memoryFileSummary.synced}，被拒绝 ${memoryFileSummary.rejected}，待写入 ${memoryFileSummary.pending}` : '记忆文件：已关闭（PIDOT_MEMORY_FILES=0），仅使用内部记录。'))
     console.log(`Pidot：http://${config.host}:${config.port}（Task 持久化对话；新会话${modelConfig ? '使用真实模型' : '使用测试模式'}）`)
+    // Only an interactive terminal gets the token; redirected logs and service journals never do.
+    if (process.stdout.isTTY) console.log(`本地访问 token：${config.token}`)
   })
   function stop() {
     console.log('正在停止 Pidot…')
