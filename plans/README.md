@@ -4,18 +4,13 @@
 
 | 状态 | 目录 | 含义 |
 |---|---|---|
-| 进行中 | [`active/`](active/) | 已授权、正在实施或已完成实现但还没验收的计划 |
+| 进行中 | `active/` | 已授权、正在实施或已完成实现但还没验收的计划 |
 | 已完成 | [`done/`](done/) | 已实施并验收的计划，正文冻结，不再更新状态 |
 | 候选 | [`backlog/`](backlog/) | 想法和草案，未授权开工；不代表路线承诺 |
 
 ## 进行中
 
-| 计划 | 更新 | 状态 |
-|---|---|---|
-| [权限简化](active/permission-simplify/README.md) | 2026-10-24 | S1–S5 已实现并自测通过，等待用户验收 |
-| [Bot 工作区与 Hermes 风格统一](active-hermes-workspace-deepseek.md) | 2026-10-29 | T01–T11 已实现，T12 集成回归 1104/1104、lint/build 与临时库双宽度操作通过；真实外部供应商未验，等待用户最终验收 |
-| [第一轮：交互收口与 Agent 能力配置](active/workspace-experience-r1/README.md) | 2026-10-30 | 代码/受控本地核心验收/材料完成：最终1395/1395、lint13既有warning、build651.41kB提示；1440/375、Skill、目标MCP使用/停用及同库API重启通过，QA已清理；[逐票材料](active/workspace-experience-r1/ACCEPTANCE.md)，待用户验收、不移done |
-| [第二轮：文件式记忆](active/r2-file-memory/README.md) | 2026-10-30 | 用户授权开工，§8 已答复；按票派子 agent 实施中 |
+暂无。第三轮 Google Workspace 只有候选计划，未授权开工，见下方候选。
 
 ## 已完成
 
@@ -30,13 +25,17 @@
 | 2026-10-19 | [飞书应用日历](done/2026-10-19-feishu-calendar/README.md) | 6 票：只读连接、审批后创建/更新/删除、忙闲、图形日历与安全编辑 |
 | 2026-10-20 | [统一工作区 V2](done/2026-10-20-unified-workspace-v2/README.md) | 10 票：统一日程/待办、MCP 业务工具、持久计划、同步、提醒、定时 Agent |
 | 2026-10-23 | [可控自动代理](done/2026-10-23-controlled-automation/README.md) | 8 阶段：权限裁决层、主会话、检测器、审批"总是"、统一卡片、例行任务、帮我想办法 |
+| 2026-10-30 | [权限简化](done/2026-10-30-permission-simplify/README.md) | S1–S5：Bot 页勾选即可用、直接做/先问两档、无人值守遇先问跳过；删除默认先问后由 ADR-015 改为直接做 |
+| 2026-10-30 | [Bot 工作区与 Hermes 风格统一](done/2026-10-30-hermes-workspace/README.md) | T01–T12：工具组开关、模型连接实时生效、Hermes 外壳与视觉、Bot 目录、事项与日历、周/月例行任务、模型设置、人格与记忆 |
+| 2026-10-30 | [第一轮：交互收口与 Agent 能力配置](done/2026-10-30-workspace-experience-r1/README.md) | 12 票：会话删除、模型卡片、@ 菜单、日历与定时任务卡片、能力开关与空白 Bot、外部 MCP、Skill 导入、对话配置；ADR-018 去掉其确认关卡 |
+| 2026-10-30 | [第二轮：文件式记忆](done/2026-10-30-r2-file-memory/README.md) | 8 票：每 Bot PROFILE/MEMORY 与共享 USER.md 文件、对账与原子写回、迁移与回滚开关、记忆页文件状态（ADR-019） |
 
 ## 候选
 
 | 计划 | 状态 |
 |---|---|
 | [Grok 风格前端布局](backlog/frontend-layout-grok.md) | 草案，未授权开工 |
-| [2026-10-29 使用反馈：会话、卡片任务与可组合 Bot](backlog/2026-10-29-workspace-experience.md) | 11 项需求来源；第一轮由 active/workspace-experience-r1 承接，记忆/Google 分别留第二/三轮 |
+| [2026-10-29 使用反馈：会话、卡片任务与可组合 Bot](backlog/2026-10-29-workspace-experience.md) | 11 项需求来源；第一轮、第二轮已完成（见上方已完成），Google 为第三轮候选 |
 | [第三轮：Google Workspace](backlog/2026-10-30-r3-google-workspace.md) | 草案，推荐原生适配、无新依赖；D4–D9 已答复，D1–D3 开工前再定；第二轮验收后开工，未授权 |
 
 ## 约定

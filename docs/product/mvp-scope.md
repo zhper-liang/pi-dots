@@ -1,6 +1,6 @@
 # MVP 能力与限制
 
-早期MVP基线：2026-10-24（Asia/Shanghai）；本页已同步R1实际实现，本轮本地验收结果及待用户验收见[验收材料](../../plans/active/workspace-experience-r1/ACCEPTANCE.md)。权限已按 [ADR-014](../decisions/README.md#adr-014-实时权限与直接做先问) 简化，既有写入确认规则见 [ADR-015](../decisions/README.md#adr-015-工具组默认开开即直接做)；R1 已将新 Bot 改为空白业务能力，并分离启停与确认。本地单用户核心闭环 MVP 已交付；这不等于完整产品愿景或正式商用承诺。
+早期MVP基线：2026-10-24（Asia/Shanghai）；本页已同步R1实际实现，本轮本地验收结果及待用户验收见[验收材料](../../plans/done/2026-10-30-workspace-experience-r1/ACCEPTANCE.md)。权限已按 [ADR-014](../decisions/README.md#adr-014-实时权限与直接做先问) 简化，既有写入确认规则见 [ADR-015](../decisions/README.md#adr-015-工具组默认开开即直接做)；R1 已将新 Bot 改为空白业务能力，并分离启停与确认。本地单用户核心闭环 MVP 已交付；这不等于完整产品愿景或正式商用承诺。
 
 ## 多 Bot 与协作
 - 独立 Bot 与持续会话、版本化模型/提示词配置，工具、资源和规则按当前分配实时生效。
@@ -41,6 +41,6 @@
 
 外部 provider 不提供原子 CAS 或通用 exactly-once 保证；unknown 必须保留。通知 recorded/read 不代表用户实际收到。没有云端部署、手机 App、Web Push、邮件/外部待办连接器、支付和完整长期记忆系统。
 
-验收来源：本地工作区基线见 [V2 计划与验收摘要](../../plans/done/2026-10-20-unified-workspace-v2/README.md)（专项126/126、全量870/870、lint/build及真实模型/provider整链）；当前权限简化 S1–S5 状态见 [实施计划](../../plans/active/permission-simplify/PLAN.md)，双尺寸界面证据见 [S4 进度](../../plans/active/permission-simplify/progress.md)。验收数字对应各次记录，不表示每次阅读本文时重新执行。
+验收来源：本地工作区基线见 [V2 计划与验收摘要](../../plans/done/2026-10-20-unified-workspace-v2/README.md)（专项126/126、全量870/870、lint/build及真实模型/provider整链）；当前权限简化 S1–S5 状态见 [实施计划](../../plans/done/2026-10-30-permission-simplify/PLAN.md)，双尺寸界面证据见 [S4 进度](../../plans/done/2026-10-30-permission-simplify/progress.md)。验收数字对应各次记录，不表示每次阅读本文时重新执行。
 
 运行和故障处理见 [运行手册](../engineering/operations.md)。后续业务范围与授权只见 [当前交接](../../NEXT_STAGE.md)。

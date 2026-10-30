@@ -405,4 +405,4 @@ pidot/
 
 继续查阅：[功能范围](product/mvp-scope.md)、[Agent 专题](architecture/agent-runtime.md)、[HTTP 契约](interfaces/http-api.md)、[运行手册](engineering/operations.md)。本文依据源码与现有测试用例梳理，没有启动真实模型、修改正式数据库或执行飞书写入，也未重新运行业务测试。
 
-R1逐票实现、实际失败及最终QA/用户验收状态见[验收材料](../plans/active/workspace-experience-r1/ACCEPTANCE.md)，本文不把历史测试数字当作本次重新执行。
+R1逐票实现、实际失败及最终QA/用户验收状态见[验收材料](../plans/done/2026-10-30-workspace-experience-r1/ACCEPTANCE.md)，本文不把历史测试数字当作本次重新执行。

@@ -1,6 +1,6 @@
 # 第三轮计划：Google Workspace 账号授权与业务适配（草案）
 
-> 状态：2026-10-30 候选草案，等待用户批准。本文不授权实施，不连接任何真实 Google 账号，不安装依赖。来源：[INT-01](2026-10-29-workspace-experience.md#int-01--p3--未来--google-workspace-mcp-接入调研) 与该文 §5 的三轮顺序。票据格式沿用[第一轮分票](../active/workspace-experience-r1/PLAN.md)。
+> 状态：2026-10-30 候选草案，等待用户批准。本文不授权实施，不连接任何真实 Google 账号，不安装依赖。来源：[INT-01](2026-10-29-workspace-experience.md#int-01--p3--未来--google-workspace-mcp-接入调研) 与该文 §5 的三轮顺序。票据格式沿用[第一轮分票](../done/2026-10-30-workspace-experience-r1/PLAN.md)。
 >
 > 权限按 ADR-015：工具组开 = 组内写入直接执行（含删除）。本文不新增确认关卡；唯一可能需要的关卡放在 §9 由用户决定。
 

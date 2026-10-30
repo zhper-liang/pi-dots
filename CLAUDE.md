@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `NEXT_STAGE.md`：已交付状态与授权边界。新阶段、新连接器、新依赖需要用户另行授权。
 - 进行中的工作：`plans/active*`，以及本地未入库的 `.planning/<topic>/`、`.scratch/<topic>/`（被 gitignore，记录当前阶段的决策与进度，可能比 `NEXT_STAGE.md` 新）。
-- `docs/project-guide.md`：整体架构图和源码阅读顺序。其中部分旧描述已过时，当前权限以 `server/policy.mjs`、ADR-014 与 ADR-015 为准。
+- `docs/project-guide.md`：整体架构图和源码阅读顺序。其中部分旧描述已过时，当前权限以 `server/policy.mjs`、ADR-014、ADR-015 与 ADR-018 为准。
 - `my-app/README.md`：环境变量、启动方式、API 端点的唯一正文。
 
 ## 命令
@@ -42,6 +42,7 @@ pnpm build                                                 # tsc -b + vite build
 - **配置快照**：模型名、提示词等运行配置在创建 Task 时固定；连接地址和 key 每次调用实时读取（ADR-016），旧 Task 不随默认值变化；工具、资源、规则实时生效。
 - **Skill**：内置的 `server/skills/<id>/manifest.json` 存在即注册，每次使用时读取；用户导入的 Skill 走 `skill-import.mjs`，存放在数据库同级的 `skills/` 目录，不写进源码目录。Skill 不授予工具权限，正文里的 `allowed-tools` 只是声明。
 - **外部 MCP**：用官方 `@modelcontextprotocol/sdk` 连接远程 Streamable HTTP 或本机已安装的 stdio 程序（`external-mcp*.mjs`），凭据单独存储，不进聊天、日志或工具结果。现有内部 MCP client 不当作通用第三方连接器用。Agent 通过 `capability-management*.mjs` 的管理工具（`mcp_manage`/`skill_manage`，只给 Chief 或宿主明确赋权的配置 Agent）在对话里添加、绑定、停用 MCP 和 Skill，和 UI 走同一服务层。
+- **记忆**：每 Bot 的 `PROFILE.md`、`MEMORY.md` 和共享的 `shared/USER.md` 放在数据库同级的 `bot-workspaces/`，是内容真源；`pidot.bot-memory.*` Document 改作台账（版本、来源、防复活、提取水位）。只有 `memory-files.mjs` 的对账读写这些文件，读之前对账，不用 fs.watch。测试 store 默认只用台账，文件模式用 `openTaskStore({ memoryFiles: { enabled: true } })` 开启（ADR-019）。
 - **会话删除**：`session-lifecycle.mjs` 负责持久删除和主会话换新；读取时会过滤已删除的来源，不新增会话库。
 - **前端**：React 19 + React Compiler（babel 插件），没有 UI 框架和路由库，使用 hash 路由。纯逻辑放在 `src/*.mjs` 并配手写的 `*.d.mts` 类型声明，这样 `server/*.test.mjs` 能直接 import 测试。Hermes 风格外壳（T03–T07）已落地；开关用 `Switch.tsx`，弹窗和时间选择复用 `EditorDialog.tsx`、`LocalTimePicker.tsx`。
 
@@ -53,7 +54,7 @@ pnpm build                                                 # tsc -b + vite build
 
 ## 手测与数据安全
 
-- 不要碰 `my-app/data/pidot.sqlite` 和 `my-app/.env`（含真实 token 与飞书凭据）。手测时用 `PIDOT_DB_PATH` 指向 /tmp 的临时库、一次性 32–256 位 `PIDOT_API_TOKEN` 和单独端口，结束后清理。
+- 不要碰 `my-app/data/`（正式库 `pidot.sqlite`，以及同目录的 `bot-workspaces/` 记忆文件、`skills/`、`external-mcp/` 凭据）和 `my-app/.env`（含真实 token 与飞书凭据）。手测时用 `PIDOT_DB_PATH` 指向 /tmp 的临时库、一次性 32–256 位 `PIDOT_API_TOKEN` 和单独端口，结束后清理。
 - 模型配置从项目根 `.env` 读取（`OPENAI_BASE_URL`/`base_url`、`OPENAI_API_KEY`、`MODEL`），进程环境和 `my-app/.env` 优先；`PIDOT_REPLY_MODE=test` 强制测试回复。配置不完整会拒绝启动。
 - UI 改动要在 1440 和 375 两种宽度手测；没做就说没做，不能把自动测试通过写成已手测。
 - 新依赖先问用户。`pnpm-workspace.yaml` 设有发布冷却期策略，只对已批准的 `@earendil-works/*@1.3.0` 例外；`@modelcontextprotocol/sdk@1.32.2` 和 `zod@4.6.7` 是 2026-10-29 单独批准的固定版本。

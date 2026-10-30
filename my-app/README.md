@@ -26,6 +26,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 | `PIDOT_API_TOKEN` | 必填，32–256 位无空白 ASCII 字符。服务端配置；网页手动输入后仅保存在当前标签页 sessionStorage，断开即清除；不能加 `VITE_` 前缀。 |
 | `PIDOT_API_PORT` | 可选，默认 `3001`，范围 `1–65535`。 |
 | `PIDOT_DB_PATH` | 可选 SQLite 文件路径；默认 `my-app/data/pidot.sqlite`，不随启动 cwd 改变。相对自定义路径按 cwd 解析。 |
+| `PIDOT_MEMORY_FILES` | 可选 `1` / `0`，默认 `1`。`1` 时人格、记忆和共享偏好保存在数据库同目录的 `bot-workspaces/` 下，可直接编辑；`0` 回到只用内部记录，先导入一次未同步的手改。见[运行手册](../docs/engineering/operations.md#文件式记忆的开关与回滚r2)。 |
 | `PIDOT_REPLY_MODE` | 可选 `model` / `test`。有完整模型配置时为新 Task 启用真实模型；完全无配置时为测试。`model` 强制要求配置完整；`test` 禁用真实模型并拒绝模型设置保存，适用于离线测试。旧 Task 始终使用自己的模式。 |
 | `OPENAI_BASE_URL` / `base_url` | 服务端模型地址，前者优先。每次模型调用重新读取，修改地址无需迁移旧 Task。不接受带用户名、密码、查询串或片段的地址；远程必须 HTTPS，本地测试可用 loopback HTTP。 |
 | `MODEL` | 初次初始化/启用模型时的默认模型；既有 Bot 和 Task 的模型名保持固定，后续通过 Bot 配置显式选择。 |

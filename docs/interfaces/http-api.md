@@ -102,6 +102,8 @@ Todo data 允许title、status、due、timezone；创建必须有标题，status
 
 文档含版本、更新时间、来源 `{taskId,entryId}`、状态 ready/pending；人格含 content，记忆/偏好含 items。结果 `{data:{ok,code,version,changed,replayed,document}}`；版本/请求内容冲突返回 409，不自动覆盖。未知保存结果重试必须保留原 requestId；纠正/删除产生新版本，来源和历史可查，凭证不回显。用户编辑界面只添加/修改人格、纠正/删除既有记忆与偏好；新的偏好由有来源私聊的空闲批处理产生。
 
+文件模式（默认开启，见 ADR-019）下，GET 返回的 personality、memory、preferences 文档和编辑成功的 `data.document` 都多一个 `file`：`{path, state, code, syncedAt}`。`path` 相对数据目录，例如 `bot-workspaces/bots/chief/MEMORY.md`；`state` 为 `synced`/`rejected`/`pending`；`code` 为 `null` 或 `MEMORY_FILE_TOO_LONG`/`MEMORY_FILE_INVALID`/`MEMORY_FILE_UNAVAILABLE`/`MEMORY_FILE_WRITE_FAILED`；`syncedAt` 在文件生成前为 `null`。`PIDOT_MEMORY_FILES=0` 时 `file` 为 `null`。修订可能是 `actor: 'file'`（文件手改）；`sourceEntries: []` 的条目是手写条目，界面可以纠正，新增条目仍要求来源。
+
 ## Bot 能力启停
 
 `GET /api/bots/:botId/capabilities` 返回 `{data:{botId, revision, items}}`。items 为服务端合并的静态工具组与已登记 Skill 投影，含 `id/kind/name/description/status/revision/enabledForBot/partiallyEnabled/assignedToolNames/available`，不接收客户端目录。生产入口已合并受控 R1-09 外部 MCP 目录；配置未验证或绑定版本失效的工具不可运行。
