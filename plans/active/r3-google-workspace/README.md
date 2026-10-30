@@ -114,7 +114,7 @@ Google 官方远程 MCP（开发者预览）仍没有 Tasks，官方配置页 Ca
 | Calendar | `calendar.events`，`calendar.calendarlist.readonly` | 连接后列出的全部日历各为一个 Source（D7），accessRole 为 reader/freeBusyReader 的标 readOnly，（`google:<hash(accountKey, calendarId)>`），事件进 **Event**（authority=external，remoteId、remoteVersion=etag、readOnly、providerEvent）。Bot 通过现有 `workspace.list/get/prepare_change` 和 `workspace:<sourceId>` 资源使用，不新增日历工具名 | 新建：事件 id 由 `requestId` 派生（sha256 十六进制，符合 base32hex 字符集），结果不明时按 id 查询，已存在即成功，重复插入返回冲突而不是第二条。改/删：带 `If-Match: <etag>`，412 = 冲突。`sendUpdates=none`，第一版不设参会人。重复/全天事件只读，同飞书首轮 |
 | Tasks | `tasks` | 每个任务列表 = 一个 Source，任务进 **Todo**（authority=external）。`due` 只有日期（Google 会丢掉时间部分），映射为全天截止，在日历里按截止日显示、不占时段（D8）；`needsAction`/`completed` ↔ `open`/`completed`。子任务第一版平铺只读 | 改/删：写前比对 etag、写后回读；不承诺服务端 CAS。新建无客户端 id：结果不明时在该列表按标题 + 创建时间窗查找候选，找不到记 unknown，不自动重建 |
 
-| Gmail、Drive、Docs、Sheets | 统一授权时由 Pidot 一并申请，取 workspace-mcp 所选服务和工具层级需要的那组（开工时按固定版本核对） | 经第一轮外部 MCP 的 loopback HTTP 接入，作为一个外部 MCP 能力分给 Bot；工具名和参数以 workspace-mcp 为准。按 D3（读、草稿、发送）、D5（Drive 全盘读写）、D6（Docs 追加与替换）选 `--tool-tier` | 不映射文档。写入结果不明记 unknown、不自动重试；重复发信或重复建文件由用户核对 |
+| Gmail、Drive、Docs、Sheets | 统一授权时由 Pidot 一并申请：`openid`、`userinfo.email`、`gmail.readonly`、`gmail.compose`、`gmail.send`、`drive`、`drive.file`、`drive.readonly`、`documents`、`spreadsheets`（按 2.2.1 的 `--permissions` 映射） | 经第一轮外部 MCP 的 loopback HTTP 接入，作为一个外部 MCP 能力分给 Bot；工具名和参数以 workspace-mcp 为准。按 D3（读、草稿、发送）、D5（Drive 全盘读写）、D6（Docs 追加与替换）选 `--tool-tier` | 不映射文档。写入结果不明记 unknown、不自动重试；重复发信或重复建文件由用户核对 |
 
 **Todo 补字段**：`workspace-schema.mjs` 的 Todo 加可选 `remoteId`、`remoteVersion`、`authority`、`readOnly`、`observedAt`、`providerTask`，与 Event 现有字段同名同义；旧本地 Todo 不受影响，不需要迁移。
 
@@ -192,9 +192,9 @@ Google 官方远程 MCP（开发者预览）仍没有 Tasks，官方配置页 Ca
 **负责人：MCP Worker；复杂度 M；依赖：01、02；本机已有 uv，用户已批准安装固定版本的 workspace-mcp（D11）。**
 
 **交付**
-1. 先核实：按固定版本的源码确认“外部 OAuth provider”模式能否把 Pidot 的 Google 访问令牌当 bearer 使用，需要哪些环境变量和传输方式。结论写进交接契约；不成立时按 §4.5 的退回方案做，并告诉用户这会变成授权两次。
-2. 安装：`uv tool install workspace-mcp==<版本>`，固定版本，不用 `uvx`/`npx` 浮动启动。服务器上的安装由用户迁移时执行。
-3. 运行：`--transport streamable-http` 只监听 127.0.0.1，`--tools gmail drive docs sheets`（D10），按 D3/D5/D6 选 `--tool-tier`。给出本机启动命令和服务器 systemd 单元示例，两处参数相同。
+1. 已核实（主管 2026-10-30，按 2.2.1 源码）：`MCP_ENABLE_OAUTH21=true` + `EXTERNAL_OAUTH21_PROVIDER=true`，`--transport streamable-http`，只需 `GOOGLE_OAUTH_CLIENT_ID`（外部模式不要密钥）；`ya29.*` 访问令牌经 Google userinfo 校验，所以令牌必须带 `openid` 与 `userinfo.email`。还要核实：监听地址是否只限 127.0.0.1、`--permissions` 能否与 `--tool-tier` 同用、工具调用是否用该 bearer 访问 Google。不成立时按 §4.5 的退回方案做，并告诉用户这会变成授权两次。
+2. 安装：本机已装 `uv tool install workspace-mcp==2.2.1`（主管 2026-10-30），服务器迁移时用同一命令。不用 `uvx`/`npx` 浮动启动。
+3. 运行：`--transport streamable-http` 只监听 127.0.0.1，`--permissions gmail:readonly+drafts+send drive:full docs:full sheets:full --tool-tier extended`（D3、D5、D6、D10；`--permissions` 与 `--tools` 互斥，服务由它决定）。给出本机启动命令和服务器 systemd 单元示例，两处参数相同。
 4. 连接：第一轮外部 MCP 的 loopback HTTP 连接加一种凭据来源“取自 Google 连接”：每次调用带 Pidot 当前的访问令牌，不保存静态 bearer。用户对 Chief 说“接上 Google 邮件和文件”时，Chief 用 `mcp_manage` 按模板添加并分给指定 Bot，和第一轮的 MCP 接入同一条路。
 5. 设置页“连接 Google”区域显示 workspace-mcp 的运行和连接状态；没在运行时如实显示，不假装可用。
 
@@ -230,7 +230,7 @@ Google 官方远程 MCP（开发者预览）仍没有 Tasks，官方配置页 Ca
 | 项 | 是否需要批准 | 说明 |
 |---|---|---|
 | 新 npm 依赖 | 不需要 | 原生部分只用 Node 自带 `fetch`、`node:crypto`、`node:http`。`node_modules` 里已有的 `google-auth-library`、`gaxios` 只是 `@google/genai` 的传递依赖，不直接引用 |
-| uv 与固定版本的 workspace-mcp | 已批准（D11） | 本机已有 uv 0.11.11；workspace-mcp 固定版本，开工时核实（目前 2.2.1），服务器迁移时装同一版本；升级另行决定 |
+| uv 与固定版本的 workspace-mcp | 已批准（D11） | 本机已有 uv 0.11.11；workspace-mcp 2.2.1 已于 2026-10-30 装在本机（uv tool），服务器迁移时装同一版本；升级另行决定 |
 | Google Cloud 项目、OAuth 客户端、启用 API | 用户自己在 Google 控制台操作 | 不是代码依赖；R3-06 附操作说明 |
 | 真实账号手测 | 用户另行授权 | 本轮自动验收不依赖 |
 
@@ -248,11 +248,11 @@ Google 官方远程 MCP（开发者预览）仍没有 Tasks，官方配置页 Ca
 | D8 | Google 任务在日历里怎么显示 | 已选：按截止日显示，不占时段 |
 | D9 | 开工时机 | 已选：第二轮验收后；2026-10-30 用户授权开工 |
 | D10 | workspace-mcp 开哪些服务 | 已选：只开 Gmail、Drive、Docs、Sheets |
-| D11 | 安装固定版本的 workspace-mcp | 已批准；版本开工时核实后固定（目前 2.2.1），本机已有 uv |
+| D11 | 安装固定版本的 workspace-mcp | 已批准；2.2.1 已于 2026-10-30 用 uv tool 装在本机，固定此版本 |
 | D12 | 迁到服务器 | 已定：设计不假设浏览器与 Pidot 同机；Pidot 自身的服务器部署现在不做（用户原话：“只是让你有这个考虑。但是不是现在做”） |
-| D13 | workspace-mcp 的 Google 登录 | 已选：Pidot 统一授权，把访问令牌传给它；开工第一步核实，不成立时退回它自己登录 |
+| D13 | workspace-mcp 的 Google 登录 | 已选：Pidot 统一授权，把访问令牌传给它；2026-10-30 按 2.2.1 源码核实可行，余项见 R3-05 第 1 步 |
 
-D3、D5、D6 在 workspace-mcp 上落到 `--tool-tier` 的选择；层级不能精确对应时，取覆盖所选范围的最小层级，并在交接契约里列出多出来的工具。
+D3、D5、D6 在 workspace-mcp 2.2.1 上落到 `--permissions gmail:readonly+drafts+send drive:full docs:full sheets:full`（Gmail 不含整理标签与设置）；`--tool-tier extended` 是包含草稿与查找替换的最小层级，多出来的工具（如 Drive 共享与权限、Docs 样式）在交接契约里列出，需要时用 `--disabled-tools` 屏蔽。Sheets 未单独答复，按全读写。
 
 ## 10. 参考（核对日期 2026-10-30）
 
@@ -274,4 +274,4 @@ D3、D5、D6 在 workspace-mcp 上落到 `--tool-tier` 的选择；层级不能�
 - taylorwilsdon/google_workspace_mcp（README：外部 OAuth provider 模式、`WORKSPACE_EXTERNAL_URL`、`GOOGLE_OAUTH_REDIRECT_URI`、`--transport streamable-http`）：https://github.com/taylorwilsdon/google_workspace_mcp （此前固定提交 `c0bff66e` 的 scope 定义见 INT-01 §7）
 - google-workspace-suite-mcp（发布状态实践说明）：https://pypi.org/project/google-workspace-suite-mcp/0.6.0/
 
-未核实、实施时需用假服务契约先固定再找真实账号确认：Tasks API 是否支持 `If-Match`；Gmail 草稿发送后草稿 id 的确切行为；`calendar.events` 是否足以调用 freeBusy（第一版不用）；workspace-mcp 外部 OAuth provider 模式能否接受 Google 访问令牌作 bearer、需要的环境变量（README 只有一句描述）；退回方案下的令牌目录环境变量名和登录回调方式。
+未核实、实施时需用假服务契约先固定再找真实账号确认：Tasks API 是否支持 `If-Match`；Gmail 草稿发送后草稿 id 的确切行为；`calendar.events` 是否足以调用 freeBusy（第一版不用）；workspace-mcp 的监听地址、`--permissions` 与 `--tool-tier` 能否同用、工具调用是否以该 bearer 访问 Google（外部 OAuth provider 模式本身已按 2.2.1 源码核实）；退回方案下的令牌目录环境变量名和登录回调方式。
