@@ -20,6 +20,7 @@
 
 .message-tool { background:var(--c-surface); border-color:var(--c-border-strong); }
 .tool-calls pre, .tool-receipt pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.65; }
+.tool-calls summary { overflow-wrap:anywhere; }
 .tool-status { margin:16px 0; font-size:12px; overflow-wrap:anywhere; }
 
 .execution-controls { margin:18px 0; padding:16px; border:1px solid var(--c-border); border-radius:var(--radius-sm); overflow-wrap:anywhere; }
