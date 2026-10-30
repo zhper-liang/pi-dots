@@ -4,6 +4,24 @@ import { BotDirectory } from './bot-directory.mjs'
 import { externalSourceLive } from './workspace-providers.mjs'
 export const WorkspaceClients = defineDoc({ kind: 'pidot.workspace-clients', version: 1, scope: 'session', initial: () => ({ items: {} }) })
 export const sourceResource = sourceId => `workspace:${sourceId}`
+export const USER_GRANT_ID = 'user:authenticated-user'
+
+/**
+ * D14: a connected external source is usable at once; there is no per-source grant step. Call in the
+ * same transaction that (re)stamps the source's Connection with a new authEpoch (first connection,
+ * reconnect or rebind): the user grant becomes the source's full capabilities with a new epoch, so
+ * pending intents from the old connection go stale. Bots still need the `workspace:<sourceId>`
+ * resource on their capability page. A later explicit narrowing (grantExternal) holds until the next
+ * reconnect. `repo` is the workspace repository; `capabilities` are the Source's.
+ */
+export async function seedSourceGrant(repo, tx, { sourceId, capabilities }) {
+  const old = await repo.get(tx, 'Grant', LOCAL_OWNER, sourceId, USER_GRANT_ID)
+  const readable = capabilities.includes('read')
+  return repo.put(tx, 'Grant', { schemaVersion: 1, ownerId: LOCAL_OWNER, sourceId, id: USER_GRANT_ID, principalKind: 'user', subjectId: 'authenticated-user',
+    actions: readable ? [...capabilities] : [], readScope: readable ? 'full' : 'none', epoch: (old?.epoch ?? 0) + 1 })
+}
+/** A user grant that was seeded empty by the pre-D14 sync and never decided by the user. */
+export const undecidedGrant = grant => !!grant && grant.actions.length === 0 && grant.readScope === 'none'
 export async function rawWorkspaceRecord(tx, type, sourceId, id) {
   const record = (await tx.doc(WorkspaceRecords[type], identityKey(LOCAL_OWNER, sourceId, id), null)).record
   // Owner implicit local access (ADR-011); only the local source and only the owner principal.

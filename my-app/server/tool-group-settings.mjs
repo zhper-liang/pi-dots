@@ -1,7 +1,6 @@
-import { randomUUID } from 'node:crypto'
 import { TaskInputError } from './task-config.mjs'
-import { TOOL_GROUPS, groupOfTool, isToolGroup } from './tool-groups.mjs'
-import { WRITE_TOOLS, PolicyRules, groupRule } from './policy.mjs'
+import { TOOL_GROUPS, ITEM_WRITE_TOOL, groupOfTool, isToolGroup, itemTypesOfGroup } from './tool-groups.mjs'
+import { WRITE_TOOLS, PolicyRules, groupRule, groupWriteMatches, setGroupMode } from './policy.mjs'
 import { MAIN_TOOLS } from './main-tools.mjs'
 import { MANAGEMENT_TOOLS } from './management-tools.mjs'
 
@@ -12,11 +11,11 @@ const copy = (value) => JSON.parse(JSON.stringify(value))
 const writesOf = (group) => group.tools.filter((tool) => WRITE_TOOLS.has(tool))
 
 /**
- * Write confirmation only: ask if a covered write has an ask/deny rule.
- * Capability enabled/disabled is projected independently from ToolAccess.
+ * Write confirmation only: ask if a write the group decides has an ask/deny rule (D15: schedule writes
+ * through the workspace tool count for 日历与日程). Capability enabled/disabled is projected from ToolAccess.
  */
 export function groupMode(rules, botId, group) {
-  return rules.some((rule) => groupRule(rule, botId, writesOf(group)) && rule.effect !== 'allow') ? 'ask' : 'allow'
+  return rules.some((rule) => groupRule(rule, botId, group.id) && rule.effect !== 'allow') ? 'ask' : 'allow'
 }
 
 /** Tool status within a group, from live assignment/revocation and the Bot's session kind. */
@@ -36,12 +35,14 @@ export function describeGroups({ rules, botId, assigned, revoked, mainSession })
     const tools = group.tools.map((name) => ({ name, label: toolLabel(name), write: WRITE_TOOLS.has(name),
       enabled: assigned.includes(name) && !revoked.includes(name), status: toolStatus(name, { assigned, revoked, mainSession, chief }) }))
     const enabledCount = tools.filter((tool) => tool.enabled).length
-    // enabled includes read tools; switchable remains the legacy write-confirmation projection.
+    // D15: a group that decides item writes can be switched whenever the item write tool is usable,
+    // even if none of its own tools is enabled (enabling the group still grants only its own tools).
+    const itemWrites = itemTypesOfGroup(group.id).length > 0 && toolStatus(ITEM_WRITE_TOOL, { assigned, revoked, mainSession, chief }) === 'available'
     return copy({ id: group.id, label: group.label, description: group.description,
       enabled: enabledCount > 0, partiallyEnabled: enabledCount > 0 && enabledCount < tools.length,
       mode: groupMode(rules, botId, group), tools,
       available: tools.some((tool) => tool.status === 'available'),
-      switchable: tools.some((tool) => tool.write && tool.status === 'available') })
+      switchable: itemWrites || tools.some((tool) => tool.write && tool.status === 'available') })
   })
 }
 
@@ -55,9 +56,10 @@ export function validateGroupSwitch(input) {
 }
 
 /**
- * One transaction for the whole group: removes every rule this Bot has on the group's writes,
- * narrowed ones included, then 关 writes one ask per write tool and 开 writes nothing (the default
- * is direct). Idempotent by requestId; never a capability grant, so no tools or resources change.
+ * One transaction for the whole group: removes every rule this Bot has on the writes the group decides,
+ * narrowed ones included, then 关 writes one ask per write (typed for item writes, D15) and 开 writes
+ * nothing (the default is direct). A shared untyped item-write rule keeps its effect on the other item
+ * type. Idempotent by requestId; never a capability grant, so no tools or resources change.
  */
 export async function switchGroup(tx, botId, input, { audit }) {
   const request = validateGroupSwitch(input)
@@ -71,13 +73,10 @@ export async function switchGroup(tx, botId, input, { audit }) {
     return copy(prior.result)
   }
   const tools = writesOf(TOOL_GROUPS.find((group) => group.id === request.groupId))
-  const before = copy(doc.items.filter((rule) => groupRule(rule, botId, tools)))
-  doc.items = doc.items.filter((rule) => rule.origin === 'preset' || !groupRule(rule, botId, tools))
-  const createdAt = new Date().toISOString()
-  if (request.mode === 'ask') for (const tool of tools) doc.items.push({ id: randomUUID(), botId, match: { tool }, effect: 'ask', origin: 'group', createdAt })
-  const after = copy(doc.items.filter((rule) => groupRule(rule, botId, tools)))
-  const result = { botId, groupId: request.groupId, mode: request.mode, tools, before, after }
+  const writes = groupWriteMatches(request.groupId)
+  const { before, after } = setGroupMode(doc, botId, request.groupId, request.mode, { keepPresets: true })
+  const result = { botId, groupId: request.groupId, mode: request.mode, tools, writes, before, after }
   doc.switches[key] = { signature, result: copy(result) }
-  audit?.({ type: 'tool-group-switched', requestId: request.requestId, groupId: request.groupId, mode: request.mode, tools })
+  audit?.({ type: 'tool-group-switched', requestId: request.requestId, groupId: request.groupId, mode: request.mode, tools, writes })
   return copy(result)
 }

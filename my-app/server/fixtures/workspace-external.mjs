@@ -37,9 +37,9 @@ export async function externalFixture(fn, options = {}) {
   let store
   const open = async () => { store = await openTaskStore({ file: join(dir, 'isolated.sqlite'), feishuClient: client, modelReply: options.modelReply ?? (async () => { modelCalls++; throw Error('No model in manual path') }), ...(options.bots ? { bots: options.bots } : {}), ...(options.storeOptions ?? {}) }); return store }
   try {
+    // D14: binding is the whole setup; the source is usable without a per-source grant step.
     await open(); await store.feishuCalendar.manage({ action: 'bind', calendarId: calendar.calendar_id, confirm: true })
-    const source = (await store.workspace.externalSources({})).sources[0], sourceId = source.id
-    await store.workspace.grantExternal({ sourceId, expectedEpoch: source.epoch, confirmed: true, enabled: true, readScope: 'full' })
+    const sourceId = (await store.workspace.externalSources({})).sources[0].id
     await fn({ get store() { return store }, sourceId, events, writes, env, dir, lose: () => { lose = true }, restart: async () => { await store.close(); return open() }, modelCalls: () => modelCalls })
   } finally { await store?.close(); await rm(dir, { recursive: true, force: true }) }
 }

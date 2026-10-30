@@ -1,6 +1,7 @@
 import { copy, fail, object, validId, LOCAL_OWNER, payloadHash } from './workspace-schema.mjs'
 import { normalizeScheduleRule } from './workspace-schedule-rules.mjs'
 import { reminderPages, reminderDue, reminderBase as base, notificationKey } from './workspace-reminder-state.mjs'
+import { sourceItemType } from './workspace-providers.mjs'
 const iso = t => new Date(t).toISOString()
 const strict = (input, keys) => { if (!object(input) || Object.keys(input).some(k => !keys.includes(k))) fail(400, 'WORKSPACE_REMINDER_INPUT', '提醒参数无效；不接受请求主体。') }
 // Pure inbox channel: no model, chat, push, external write or new Task.
@@ -21,7 +22,8 @@ export function createWorkspaceReminders({ repository: repo, authority, service,
     try { const current = await snapshot(tx, s.actionSpec.sourceId); return payloadHash(current) === payloadHash(s.authorizationSnapshot) && s.executionPrincipal.kind === 'internal' && s.executionPrincipal.subjectId === 'authenticated-user' } catch (e) { if (e.status === 403 || e.statusCode === 403 || /FORBIDDEN|REVOKED|SCOPE/.test(e.code)) return false; throw e }
   }
   async function target(tx, ref) {
-    if (!object(ref) || !['Event', 'Todo'].includes(ref.type) || !validId(ref.sourceId) || !validId(ref.id) || ref.sourceId !== 'local' && ref.type !== 'Event' || Object.keys(ref).some(k => !['type', 'sourceId', 'id'].includes(k))) fail(400, 'WORKSPACE_REMINDER_TARGET', '需要精确来源、类型与目标ID。')
+    // External targets must match their source's item type: calendars → Event, Google task lists → Todo.
+    if (!object(ref) || !['Event', 'Todo'].includes(ref.type) || !validId(ref.sourceId) || !validId(ref.id) || ref.sourceId !== 'local' && ref.type !== sourceItemType(ref.sourceId) || Object.keys(ref).some(k => !['type', 'sourceId', 'id'].includes(k))) fail(400, 'WORKSPACE_REMINDER_TARGET', '需要精确来源、类型与目标ID。')
     await snapshot(tx, ref.sourceId)
     const t = await get(tx, ref.type, ref.id, ref.sourceId)
     if (!t || t.deletedAt || t.status === 'completed') fail(409, 'WORKSPACE_REMINDER_TARGET', '目标已删除、完成或尚未精确读取。')
@@ -71,7 +73,7 @@ export function createWorkspaceReminders({ repository: repo, authority, service,
     if (!data?.t || data.t.authority !== 'external') return null
     // Every external send does a fresh exact provider read (never cache-success).
     await boundary('before_external_verify', copy(row))
-    const result = await service.getExternal(authority.user(), { sourceId: data.t.sourceId, eventId: data.t.remoteId })
+    const result = await service.getExternal(authority.user(), { sourceId: data.t.sourceId, ...(data.r.targetRef.type === 'Todo' ? { taskId: data.t.remoteId } : { eventId: data.t.remoteId }) })
     const t = result.items.find(t => t.id === data.t.id && t.instanceKey === data.t.instanceKey)
     if (!t) throw Error('REMINDER_EXTERNAL_INSTANCE_UNVERIFIED')
     return { targetId: t.id, targetVersion: t.version, remoteVersion: t.remoteVersion }

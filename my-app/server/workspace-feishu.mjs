@@ -6,8 +6,18 @@ import { FEISHU_TOOLS, validFeishuArgs } from './feishu-calendar.mjs'
 import { FEISHU_CREATE_TOOL, normalizeFeishuCreate, feishuCreateHash, dispatchFeishuCreate } from './feishu-write.mjs'
 import { FEISHU_UPDATE_TOOL, FEISHU_DELETE_TOOL, normalizeFeishuMutation, feishuMutationHash, feishuBeforeHash, supportedFeishuTarget, dispatchFeishuMutation } from './feishu-mutation.mjs'
 import { projectWorkspaceRecord } from './workspace-policy.mjs'
+import { seedSourceGrant, undecidedGrant, sourceResource, USER_GRANT_ID } from './workspace-grants.mjs'
 
 const actions = ['read', 'create', 'update', 'delete']
+const FEISHU_WORKSPACE = 'workspace:feishu:'
+// ADR-014 §1 for the workspace path: a Bot keeps a Feishu workspace resource only while it names the
+// bound source. Disconnect and rebind to another calendar drop it from every Bot. Writes only on change.
+async function dropStaleResources(tx, sourceId) {
+  const { ToolAccess } = await import('./tools.mjs')
+  const access = await tx.doc(ToolAccess), keep = sourceId ? sourceResource(sourceId) : null
+  for (const assignment of Object.values(access.assignments ?? {}))
+    if ((assignment.resources ?? []).some(r => r.startsWith(FEISHU_WORKSPACE) && r !== keep)) assignment.resources = assignment.resources.filter(r => !r.startsWith(FEISHU_WORKSPACE) || r === keep)
+}
 const tools = { create: FEISHU_CREATE_TOOL, update: FEISHU_UPDATE_TOOL, delete: FEISHU_DELETE_TOOL }
 const notice = '仅本地串行、写前比较和写后核验；供应商无原子CAS，外部写者仍存在竞态，非exactly-once。'
 const opKey = requestId => payloadHash([LOCAL_OWNER, requestId])
@@ -19,16 +29,20 @@ export function createFeishuWorkspaceService({ repository: repo, authority, cale
   const user = actor => { authority.check(actor); if (actor.principalKind !== 'user') fail(403, 'WORKSPACE_CONFIRMATION_REQUIRED', '只有认证用户可以批准或执行外部操作。') }
   async function sync(tx) {
     const d = await calendar.sync(tx), b = d.binding
-    if (!b) return null
+    if (!b) { await dropStaleResources(tx, null); return null }
     // Stable object identity must NOT depend on the legacy authorization resource.
     const sourceId = `feishu:${payloadHash([b.connectionId, b.calendarId])}`, connectionId = `feishu:${b.connectionId}`
     const old = await repo.get(tx, 'Connection', LOCAL_OWNER, sourceId, connectionId)
-    if (!old || old.authEpoch !== b.authorizationVersion) {
+    const fresh = !old || old.authEpoch !== b.authorizationVersion
+    if (fresh) {
       await repo.put(tx, 'Connection', { schemaVersion: 1, ownerId: LOCAL_OWNER, sourceId, id: connectionId, provider: 'feishu', accountKey: b.connectionId, authEpoch: b.authorizationVersion, status: 'active' })
       await repo.put(tx, 'Source', { schemaVersion: 1, ownerId: LOCAL_OWNER, sourceId, id: sourceId, connectionId, providerContainerId: b.calendarId, authority: 'external', capabilities: actions })
-      const grant = await repo.get(tx, 'Grant', LOCAL_OWNER, sourceId, 'user:authenticated-user')
-      await repo.put(tx, 'Grant', { schemaVersion: 1, ownerId: LOCAL_OWNER, sourceId, id: 'user:authenticated-user', principalKind: 'user', subjectId: 'authenticated-user', actions: [], readScope: 'none', epoch: (grant?.epoch ?? 0) + 1 })
+      // D14: connected = usable; the new epoch still invalidates intents from the previous connection.
+      await seedSourceGrant(repo, tx, { sourceId, capabilities: actions })
     }
+    // A reconnect of a calendar seen before also drops its old assignments (fail closed: an assignment
+    // made between rebind and this first sync is dropped too and must be made again).
+    await dropStaleResources(tx, old && fresh ? null : sourceId)
     return { sourceId, binding: copy(b) }
   }
   async function permission(tx, actor, sourceId, action = 'read', full = false) {
@@ -106,11 +120,19 @@ export function createFeishuWorkspaceService({ repository: repo, authority, cale
     if (!repo.enabled) return
     await repo.transaction(async tx => {
       let cursor
+      const decided = new Set() // `${sourceId}:${epoch}` written by an explicit grantExternal
       do {
         const page = await repo.list(tx, 'Operation', LOCAL_OWNER, 'operations', { cursor: cursor ?? 0 })
-        for (const op of page.items) if (op.external && op.state === 'dispatching') await save(tx, op, { state: 'unknown', error: { code: 'WORKSPACE_RESTART_UNKNOWN', message: '派发中进程中断，不能证明未发送；不会自动重试。' } })
+        for (const op of page.items) {
+          if (op.external && op.state === 'dispatching') await save(tx, op, { state: 'unknown', error: { code: 'WORKSPACE_RESTART_UNKNOWN', message: '派发中进程中断，不能证明未发送；不会自动重试。' } })
+          if (op.normalizedArgs?.grant === true) decided.add(`${op.normalizedArgs.sourceId}:${op.grantEpoch}`)
+        }
         cursor = page.next
       } while (cursor !== undefined)
+      // D14 upgrade, once: a source connected before D14 whose empty seed grant the user never decided
+      // becomes usable. A grant the user narrowed or revoked on this connection is left as it is.
+      const a = await sync(tx), grant = a && await repo.get(tx, 'Grant', LOCAL_OWNER, a.sourceId, USER_GRANT_ID)
+      if (a && undecidedGrant(grant) && !decided.has(`${a.sourceId}:${grant.epoch}`)) await seedSourceGrant(repo, tx, { sourceId: a.sourceId, capabilities: actions })
     })
   }
   return {

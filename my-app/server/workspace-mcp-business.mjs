@@ -8,6 +8,7 @@ import { createMcpSession, createMcpClient } from './workspace-mcp-protocol.mjs'
 import { decide, unattended, openGroup } from './policy.mjs'
 import { summarizeAutoApplied, summarizeOperation } from './inbox.mjs'
 import { markDirty } from './detector-state.mjs'
+import { sourceItemType } from './workspace-providers.mjs'
 const ATTENDED_EXPIRY_MS = 300000
 const strict = (v, fields) => { if (!object(v) || Object.keys(v).some(k => !fields.includes(k))) fail(400, 'WORKSPACE_INPUT', '参数无效；不接受主体覆盖。') }
 const full = p => { if (p.readScope !== 'full') fail(403, 'WORKSPACE_FORBIDDEN', '正文或变更需要完整许可。') }
@@ -87,7 +88,10 @@ export function createWorkspaceMcpBusiness({ repository: repo, authority, servic
   }
   // Apply the same policy to local and external writes.
   async function policyGate(actor, tool, args, sourceAuthority) {
-    const verdict = await repo.transaction(async tx => decide(tx, { botId: actor.botId, tool, action: args.action, sourceId: args.sourceId, type: args.change?.type ?? args.type, sourceAuthority, origin: actor.taskId ? (await taskInput(tx, actor.taskId))?.origin ?? 'user' : 'user' }))
+    // R3-04: an external Todo source (Google Tasks) carries no change.type; pass 'Todo' so to-do rules apply.
+    // Event-type external sources keep the previous value (undefined) — R3-07 owns that matching.
+    const type = args.change?.type ?? args.type ?? (tool === 'workspace.prepare_change' && sourceAuthority === 'external' && sourceItemType(args.sourceId) === 'Todo' ? 'Todo' : undefined)
+    const verdict = await repo.transaction(async tx => decide(tx, { botId: actor.botId, tool, action: args.action, sourceId: args.sourceId, type, sourceAuthority, origin: actor.taskId ? (await taskInput(tx, actor.taskId))?.origin ?? 'user' : 'user' }))
     if (verdict.effect === 'deny') fail(403, 'POLICY_DENIED', '规则禁止该动作。')
     return verdict
   }
@@ -115,9 +119,12 @@ export function createWorkspaceMcpBusiness({ repository: repo, authority, servic
       const { sourceId, type, ...rest } = args
       result = await (name === 'workspace.list' ? service.query(actor, { sourceId, type, limit: rest.limit ?? 10, ...(rest.cursor === undefined ? {} : { cursor: rest.cursor }) }) : service.getLocalItem(actor, { sourceId, type, id: rest.id }))
     } else {
-      if (args.type !== 'Event') fail(400, 'WORKSPACE_INPUT', '外部来源只支持日程。')
+      // The source decides the item type: calendars hold Event, Google task lists hold Todo.
+      const itemType = sourceItemType(args.sourceId)
+      if (args.type !== itemType) fail(400, 'WORKSPACE_INPUT', itemType === 'Todo' ? '这个外部来源是任务列表，只支持 type:"Todo"。' : '外部来源只支持日程。')
       const { sourceId, type: _type, limit = 10, cursor = 0, ...rest } = args
-      result = await (name === 'workspace.list' ? service.queryExternal(actor, { sourceId, ...rest }) : service.getExternal(actor, { sourceId, eventId: rest.eventId }))
+      if (name === 'workspace.get' && itemType === 'Todo' && rest.taskId === undefined) fail(400, 'WORKSPACE_INPUT', '读取外部任务请用 taskId。')
+      result = await (name === 'workspace.list' ? service.queryExternal(actor, { sourceId, ...rest }) : itemType === 'Todo' ? service.getExternal(actor, { sourceId, taskId: rest.taskId }) : service.getExternal(actor, { sourceId, eventId: rest.eventId }))
       if (name === 'workspace.list') result = { ...result, items: result.items.slice(cursor, cursor + limit), ...(cursor + limit < result.items.length ? { next: cursor + limit } : {}) }
     }
     signal?.throwIfAborted(); const latest = await allowed(actor, name, args)

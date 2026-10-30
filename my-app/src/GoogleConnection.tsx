@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import Switch from './Switch'
+import GoogleWorkspaceMcpStatus from './GoogleWorkspaceMcpStatus'
 import { GOOGLE_SERVICE_ROWS, SERVICE_STATE_TEXT, publicGoogleStatus, serviceRowState, googleStatusText, googleResultText, disconnectText, googleErrorText, type GoogleStatus } from './google-connection-ui.mjs'
 import './google-connection.css'
 
@@ -95,6 +96,7 @@ export default function GoogleConnection({ token }: { token: string }) {
       </ul>
       <p className="shell-muted small">开关决定这次连接向 Google 申请哪些权限；实际以 Google 授予的为准。</p>
       {/* R3-05 slot: workspace-mcp running/connection status goes here. */}
+      <GoogleWorkspaceMcpStatus token={token} google={{ connected, services: status.services }} />
       <div className="google-connection-actions">
         <button type="button" className="primary" disabled={busy || waiting || !client.configured || client.invalid || !chosen.length} onClick={connect}>{connected || needsAuth ? '重新连接' : '连接 Google'}</button>
         {(connected || needsAuth) && <button type="button" className="pd-button" disabled={busy} onClick={disconnect}>断开</button>}

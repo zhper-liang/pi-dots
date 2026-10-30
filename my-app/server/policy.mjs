@@ -1,7 +1,8 @@
 import { defineDoc } from '@earendil-works/pi-durable'
 import { randomUUID } from 'node:crypto'
 import { TaskInputError } from './task-config.mjs'
-import { groupOfTool, groupTools } from './tool-groups.mjs'
+import { TOOL_GROUPS, ITEM_WRITE_TOOL, ITEM_TYPES, itemTypesOfGroup, writeGroupOf } from './tool-groups.mjs'
+import { providerOfSource } from './workspace-providers.mjs'
 
 // The only policy decision is whether an assigned write tool runs, asks, or is denied.
 // Tool assignment and source authorization are checked before this function is called.
@@ -39,6 +40,26 @@ export function pickRule(rules, call) {
 
 export const registeredPolicyTool = (name, sets = {}) => REGISTERED_TOOLS.includes(name) || Boolean(sets.externalTools?.some(tool => tool.name === name))
 
+// D15: the item type of a workspace write. An external source fixes it (Feishu and Google Calendar
+// are Event, Google Tasks is Todo), so a caller cannot route a schedule write to the todo switch.
+// null = unknown: the write is judged by the strictest of every item type's rules.
+export function itemTypeOf(call) {
+  const provider = providerOfSource(call.sourceId)
+  if (provider) return provider.itemType
+  return ITEM_TYPES.includes(call.type) ? call.type : null
+}
+function pickItemRule(rules, call) {
+  const type = itemTypeOf(call)
+  if (type) return pickRule(rules, { ...call, type })
+  // An unmatched type runs directly (allow), so the strongest matched rule is the strictest verdict.
+  let best = null
+  for (const candidate of ITEM_TYPES) {
+    const rule = pickRule(rules, { ...call, type: candidate })
+    if (rule && (!best || strength[rule.effect] > strength[best.effect])) best = rule
+  }
+  return best
+}
+
 export async function decide(tx, call, { externalTool } = {}) {
   const action = call.action ?? call.args?.action
   const verdict = (effect, reason, allowAlways = false) => ({ effect, reason, allowAlways,
@@ -49,7 +70,8 @@ export async function decide(tx, call, { externalTool } = {}) {
   if (!external && READ_AND_INTERNAL.has(call.tool)) return verdict('allow', 'read-or-internal')
   if (!external && !WRITE_TOOLS.has(call.tool) || call.tool === 'bot_manage' && !['create', 'configure', 'deactivate'].includes(action) ||
     call.tool === 'workspace.prepare_change' && !['create', 'update', 'delete'].includes(action)) return verdict('deny', 'unregistered')
-  const rule = pickRule((await tx.doc(PolicyRules)).items, { ...call, action })
+  const rules = (await tx.doc(PolicyRules)).items
+  const rule = !external && call.tool === ITEM_WRITE_TOOL ? pickItemRule(rules, { ...call, action }) : pickRule(rules, { ...call, action })
   // Tool groups default to on: an unmatched write, deletion included, runs directly.
   let effect = rule?.effect ?? 'allow'
   let reason = rule ? rule.origin + '-rule' : 'write-default'
@@ -77,17 +99,41 @@ export async function removeRules(tx, predicate) {
   const doc = await tx.doc(PolicyRules)
   doc.items = doc.items.filter(r => r.origin !== 'preset' && !predicate(r))
 }
-// Rules a group switch owns: every non-preset rule of this Bot on the group's write tools, at any specificity.
-export const groupRule = (rule, botId, tools) => rule.botId === botId && rule.origin !== 'preset' && rule.match && !Object.hasOwn(rule.match, 'risk') && tools.includes(rule.match.tool)
-export const groupWriteTools = (tool) => groupTools(groupOfTool(tool)).filter(name => WRITE_TOOLS.has(name))
-// "以后直接做" turns the tool's whole group on: drop the Bot's rules there so every write runs directly.
-export async function openGroup(tx, botId, tool) {
-  const tools = groupWriteTools(tool)
-  if (!tools.length) return []
-  const doc = await tx.doc(PolicyRules)
-  const removed = doc.items.filter(r => groupRule(r, botId, tools))
-  doc.items = doc.items.filter(r => r.origin !== 'preset' && !groupRule(r, botId, tools))
-  return JSON.parse(JSON.stringify(removed))
+// Group ownership (D15). A rule on an ordinary write tool belongs to that tool's group; a rule on the
+// item write tool belongs to the group of its `type` (Event → 日历与日程, Todo → 待办与事项). An untyped
+// item-write rule, as every rule written before D15, covers both item types, so both switches show it.
+const ownable = (rule, botId) => rule.botId === botId && rule.origin !== 'preset' && !!rule.match && !Object.hasOwn(rule.match, 'risk')
+const ruleGroups = match => match.tool !== ITEM_WRITE_TOOL ? [writeGroupOf(match.tool)] : match.type === undefined ? [...new Set(ITEM_TYPES.map(type => writeGroupOf(match.tool, type)))] : ITEM_TYPES.includes(match.type) ? [writeGroupOf(match.tool, match.type)] : []
+/** Rules a group switch owns: every non-preset rule of this Bot that decides one of the group's writes, at any specificity. */
+export const groupRule = (rule, botId, groupId) => ownable(rule, botId) && ruleGroups(rule.match).includes(groupId)
+/** What the group's 先问 writes: one tool-level ask per ordinary write tool, one typed ask per item type it decides. */
+export const groupWriteMatches = groupId => [
+  ...(TOOL_GROUPS.find(group => group.id === groupId)?.tools ?? []).filter(tool => WRITE_TOOLS.has(tool) && tool !== ITEM_WRITE_TOOL).map(tool => ({ tool })),
+  ...itemTypesOfGroup(groupId).map(type => ({ tool: ITEM_WRITE_TOOL, type })),
+]
+/**
+ * Sets one group to 直接做 (allow) or 先问 (ask) for one Bot inside the caller's transaction. Removes every
+ * rule the group owns; an untyped item-write rule it shares is first narrowed to the other item types, so
+ * the other group keeps its effect. 先问 then writes the group's asks. Returns the owned rules before/after.
+ */
+export function setGroupMode(doc, botId, groupId, mode, { keepPresets = false, createdAt = new Date().toISOString() } = {}) {
+  const before = doc.items.filter(rule => groupRule(rule, botId, groupId))
+  const items = []
+  for (const rule of doc.items) {
+    if (rule.origin === 'preset') { if (keepPresets) items.push(rule); continue }
+    if (!groupRule(rule, botId, groupId)) { items.push(rule); continue }
+    if (rule.match.tool === ITEM_WRITE_TOOL && rule.match.type === undefined)
+      for (const type of ITEM_TYPES) if (writeGroupOf(ITEM_WRITE_TOOL, type) !== groupId) items.push({ ...rule, id: randomUUID(), match: { ...rule.match, type }, splitFrom: rule.id })
+  }
+  if (mode === 'ask') for (const match of groupWriteMatches(groupId)) items.push({ id: randomUUID(), botId, match, effect: 'ask', origin: 'group', createdAt })
+  doc.items = items
+  return { before: JSON.parse(JSON.stringify(before)), after: JSON.parse(JSON.stringify(items.filter(rule => groupRule(rule, botId, groupId)))) }
+}
+// "以后直接做" turns on the group that decides this write (type routes the item write tool).
+export async function openGroup(tx, botId, tool, type) {
+  const groupId = writeGroupOf(tool, type)
+  if (!groupId || !groupWriteMatches(groupId).length) return []
+  return setGroupMode(await tx.doc(PolicyRules), botId, groupId, 'allow').before
 }
 export async function listRules(tx, botId) {
   return JSON.parse(JSON.stringify((await tx.doc(PolicyRules)).items.filter(r => r.origin !== 'preset' && !Object.hasOwn(r.match ?? {}, 'risk') && (botId === undefined || r.botId === botId))))

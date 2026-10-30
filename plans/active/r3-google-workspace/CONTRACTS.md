@@ -210,3 +210,28 @@ type GoogleStatus = {
 - **D-B 日历写入归哪个工具组**：`workspace.prepare_change` 属于「待办与事项」组，所以飞书和 Google 日历经工作区工具的写入由这个组的开关控制，而不是「日历与日程」组。现状对组开（直接执行）没有影响，但把「日历与日程」设为先问挡不住经工作区工具的日历写入。改 `decide()` / `tool-groups.mjs` 属于 R3-06，需要先定。
 - **D-C Chief 的“去设置页连接”卡片**（§4.2 第 1 步）：没有做。需要新的系统卡类型，还要改 `tasks.mjs` 和前端卡片渲染，建议放到 R3-06。
 - **未核实**：Tasks API 是否支持 `If-Match`（fake 默认不校验）；带时刻的 `due` 被 Google 截成哪一天（fake 取字面日期，写入时一律发 UTC 零点）。
+
+## 8. R3-07 ADR 草稿
+
+> 编号由 R3-06 分配（下称 ADR-0xx）。依据：D14、D15，用户原话“权限权重降级，飞书日历日程降级为普通工具，只是优化更好”。同时回答 §7 的 D-A 与 D-B。
+
+### ADR-0xx 外部来源连上即可用，日程与事项写入各归其组
+
+**替代关系**
+- **ADR-014 第 2 条**：外部来源的“用户 Grant/readScope 须逐个来源授权”改为连接即授权。Grant 与 readScope 仍保留，只用于用户主动收窄（`grantExternal`）和 epoch 失效。
+- **ADR-015 第 2 条**：“一组一个开关”对启停不变；写入确认改为按被改对象裁决：`workspace.prepare_change` 改 Event 归「日历与日程」，改 Todo 归「待办与事项」，用 PolicyRules 已有的 `type` 匹配。
+- **ADR-011** 中“外部来源（飞书）仍按用户 grant + readScope”同样改为连接即授权。
+- 不变：ADR-006（requestId、expectedVersion、unknown 不自动重试、恢复复用原 Operation）、ADR-014 的实时能力、Bot 按资源分配、暂停、无人值守遇 ask 跳过、ADR-018。
+
+**决定**
+1. **连上即可用（D14）**：来源的 Connection 以新 authEpoch 写入（首次连接、重连、换绑）时，同一事务调用 `seedSourceGrant(repo, tx, { sourceId, capabilities })`（`workspace-grants.mjs`）：用户 Grant 设为来源能力的完整读写（只读来源只给 read），epoch +1，旧连接上的待确认意图随之失效。飞书在 `workspace-feishu.mjs` 的 `sync()` 调用；Google 由 R3-03/R3-04 在写 Connection 的同一事务调用，替代 §2.1 的“待定”（D-A 结论：发现即授予，不加步骤）。
+2. **Bot 分配不变**：哪个 Bot 能用仍在 Bot 能力页分配 `workspace:<sourceId>`，新 Bot 仍是空白。飞书断开或换绑另一日历时，所有 Bot 的 `workspace:feishu:*` 资源都被撤下（此前只撤 `feishu:*` 日历工具资源）；同一日历断开后重连，旧分配也不恢复。Google 照旧由 `applyGoogleAccount` 撤 `workspace:google-*`。
+3. **已有授权继续有效**：已有的完整、仅忙闲或已撤销的授权都不改。唯一例外是一次性升级：D14 前已连接、用户从未点过授权（空 Grant 且没有对应 epoch 的授权操作）的飞书来源，启动时补成完整授权；用户明确撤销过的保持撤销。不改 schema，不删数据。
+4. **按对象裁决（D15）**：`decide()` 取对象类型时，外部来源由 provider 定（飞书、Google 日历 = Event，Google 任务 = Todo），调用方传的 `type` 改不了；本地来源用 `change.type`；无法确定时取两类中最严格的结果。「日历与日程」设为先问写入 4 条日历工具 ask 加 `{ tool: 'workspace.prepare_change', type: 'Event' }`；「待办与事项」写入 `routine_propose`、`workspace.prepare_schedule` 两条 ask 加 `type: 'Todo'` 那条。
+5. **旧规则照常生效**：R3-07 之前写入的无类型 `workspace.prepare_change` 规则同时作用于两类对象，所以两个开关都显示它；切换其中一个组时，先把它收窄为另一类对象的带类型副本（`splitFrom` 记原规则 id），另一组的效果不变。
+6. **飞书没有特例**：飞书日历工具走普通写工具的同一条路：组开即直接执行（含删除），组设为先问才确认，暂停时改为先问；requestId、写前比较、unknown 不重发照旧。
+
+**原因与代价**
+用户嫌关卡多；连上来源本身就是用户的明确意图，按 Bot 分配已经限定了谁能用。代价：已分配该来源的 Bot 在连接后立即能读取并直接写入外部日历，对外写入无法撤销；同一日历重连时，在重连与第一次同步之间做的分配会被撤下，需要重新分配（宁可多撤一次，也不让旧分配复活）。旧的无类型规则在两个开关上都显示，切换时会拆成一条带类型的规则。引入多用户、远程访问或改变来源信任边界前，要恢复逐个来源授权，并另记决策。
+
+**待接线（集成负责人）**：见 R3-07 交付记录。`workspace-mcp-business.mjs` 的 `confirmLocal` 要把对象类型传给 `openGroup`；`BotRules.tsx` 的写入确认下拉按服务端 `switchable` 显示；飞书来源界面去掉“明确授权”按钮；`task-context.mjs` 里“删除默认先问”的模型提示要删掉。

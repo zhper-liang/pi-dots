@@ -103,7 +103,7 @@ function ConnectionPanel({ token, client: provided }: Props) {
       : <button type="button" disabled={busy} onClick={() => void verify()}>核查原 MCP 请求</button>}
   </div>
   return <div className="external-mcp-connections">
-    <p className="shell-muted small">就绪表示握手和工具发现成功；外部工具默认每次调用先确认。目标 Bot 仍需在工具列表单独启用，保存配置或凭据不会授权工具。</p>
+    <p className="shell-muted small">就绪表示握手和工具发现成功。保存配置或凭据不会给任何 Bot 启用工具；在 Bot 的工具列表启用后，调用直接执行，暂停自动化期间改为先问你。</p>
     <div className="external-mcp-actions"><button type="button" disabled={locked} onClick={() => edit()}>添加 MCP 连接</button><button type="button" disabled={busy} onClick={() => void load()}>重新读取连接</button></div>
     {items === null && !listError && <p role="status">正在读取 MCP 连接…</p>}
     {items?.length === 0 && <p className="shell-muted small">尚未添加外部 MCP 连接。</p>}

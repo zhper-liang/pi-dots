@@ -20,6 +20,11 @@ const codes = Object.freeze({
   MCP_INVALID_ARGUMENTS: 'MCP 工具参数不符合已登记 schema。', MCP_INVALID_RESULT: 'MCP 工具返回值不符合已登记 schema。',
   MCP_NOT_AUTHORIZED: '当前 Bot 未获准调用此 MCP 工具。', MCP_INVOCATION_UNKNOWN: 'MCP 调用结果未核实；不会自动重试，请核对原执行。',
   MCP_CONFIG_CONFLICT: 'MCP 配置已变更或 requestId 被用于不同操作。', MCP_STORAGE_FAILED: 'MCP 配置或凭据文件无法安全读写。',
+  // R3-05: connections whose bearer is the live Google access token (credentialSource 'google').
+  MCP_GOOGLE_NOT_CONNECTED: 'Google 未连接或未授予 Gmail、Drive、Docs、Sheets，请到设置页连接 Google；本次没有调用外部工具。',
+  MCP_GOOGLE_TOKEN_UNAVAILABLE: '暂时取不到 Google 访问令牌，请稍后重试；本次没有调用外部工具。',
+  MCP_GOOGLE_TOKEN_REJECTED: 'workspace-mcp 拒绝了 Google 访问令牌（令牌无效，或它暂时无法向 Google 核验）；本次没有执行工具。',
+  MCP_GOOGLE_SOURCE_CONFLICT: '已有一个取自 Google 连接的 MCP 连接；请修改或移除原连接。',
 })
 export class ExternalMcpError extends Error {
   constructor(code, status = 400) { super(codes[code] ?? 'MCP 操作未确认成功。'); this.name = 'ExternalMcpError'; this.code = code; this.status = status }
@@ -123,8 +128,31 @@ export function validateMcpResolvedAddresses(config, answers) {
   return [...new Set(result)]
 }
 
+// R3-05 template: workspace-mcp over loopback HTTP, bearer = Pidot's current Google access token.
+// The stored config carries no URL: the endpoint comes from server configuration at connect time,
+// so a model or UI request can never point the Google token at another host.
+export const GOOGLE_WORKSPACE_MCP_TEMPLATE = 'google-workspace'
+export const GOOGLE_WORKSPACE_SERVICES = Object.freeze(['gmail', 'drive', 'docs', 'sheets'])
+export const GOOGLE_WORKSPACE_DEFAULTS = Object.freeze({ connectionId: 'google-workspace', name: 'Google 邮件与文件',
+  description: '经本机 workspace-mcp 使用 Gmail、Drive、Docs、Sheets；使用设置页连接的 Google 账号，Pidot 不另存令牌。' })
+function validateGoogleMcpConfig(v) {
+  const keys = ['template', 'credentialSource', 'googleServices', 'connectionId', 'name', 'description', 'transport', 'credentialRequired', 'timeoutMs']
+  if (!allowedKeys(v, keys) || v.template !== undefined && v.template !== GOOGLE_WORKSPACE_MCP_TEMPLATE ||
+    v.credentialSource !== undefined && v.credentialSource !== 'google' || v.transport !== undefined && v.transport !== 'streamable-http' ||
+    v.credentialRequired !== undefined && v.credentialRequired !== false) fail('MCP_INVALID_CONFIG')
+  const services = v.googleServices ?? GOOGLE_WORKSPACE_SERVICES
+  if (!Array.isArray(services) || !services.length || new Set(services).size !== services.length || services.some(item => !GOOGLE_WORKSPACE_SERVICES.includes(item))) fail('MCP_INVALID_CONFIG')
+  const connectionId = v.connectionId ?? GOOGLE_WORKSPACE_DEFAULTS.connectionId, name = v.name ?? GOOGLE_WORKSPACE_DEFAULTS.name
+  const description = v.description ?? GOOGLE_WORKSPACE_DEFAULTS.description
+  if (!validId(connectionId) || !text(name, 200) || name !== name.trim() || typeof description !== 'string' || description.length > 4000 || hasControl(description) ||
+    v.timeoutMs !== undefined && (!Number.isInteger(v.timeoutMs) || v.timeoutMs < 1000 || v.timeoutMs > MCP_LIMITS.maxTimeoutMs)) fail('MCP_INVALID_CONFIG')
+  return { connectionId, name, description, transport: 'streamable-http', credentialRequired: false, timeoutMs: v.timeoutMs ?? MCP_LIMITS.timeoutMs,
+    credentialSource: 'google', googleServices: GOOGLE_WORKSPACE_SERVICES.filter(item => services.includes(item)) }
+}
+
 export function validateMcpConfig(input) {
   const v = boundedMcpJson(input, { maxBytes: MCP_LIMITS.configBytes })
+  if (plain(v) && (v.template !== undefined || v.credentialSource !== undefined)) return validateGoogleMcpConfig(v)
   if (!plain(v) || !validId(v.connectionId) || !text(v.name, 200) || v.name !== v.name.trim() ||
     v.description !== undefined && (typeof v.description !== 'string' || v.description.length > 4000 || hasControl(v.description)) ||
     !['streamable-http', 'stdio'].includes(v.transport) || v.credentialRef !== undefined && !validMcpCredentialRef(v.credentialRef) ||
@@ -173,7 +201,8 @@ export function buildMcpStdioEnvironment(config, inherited = {}, secrets = {}) {
 
 export function mcpSourceRevision(input) {
   const config = validateMcpConfig(input)
-  const source = config.transport === 'streamable-http'
+  const source = config.credentialSource ? { transport: config.transport, credentialSource: config.credentialSource, googleServices: config.googleServices }
+    : config.transport === 'streamable-http'
     ? { transport: config.transport, url: config.url, allowLoopback: config.allowLoopback }
     : { transport: config.transport, executable: config.executable, args: config.args,
       envKeys: [...config.envKeys].sort(), secretEnvKeys: [...config.secretEnvKeys].sort() }
@@ -183,7 +212,8 @@ export function mcpSourceRevision(input) {
 export function projectMcpConfig(input) {
   const config = validateMcpConfig(input)
   return { connectionId: config.connectionId, name: config.name, description: config.description,
-    transport: config.transport, hasCredential: Boolean(config.credentialRef), credentialRequired: config.credentialRequired }
+    transport: config.transport, hasCredential: Boolean(config.credentialRef), credentialRequired: config.credentialRequired,
+    ...(config.credentialSource ? { credentialSource: config.credentialSource, googleServices: [...config.googleServices] } : {}) }
 }
 export function mcpToolAlias(connectionId, originalName) {
   if (!validId(connectionId) || !text(originalName, 256)) fail('MCP_INVALID_TOOLS')

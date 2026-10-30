@@ -14,8 +14,7 @@ const store = await openTaskStore({ file: `${dir}/isolated.sqlite`, feishuClient
 setInterval(() => {}, 1000)
 if (mode === 'run') {
   await store.feishuCalendar.manage({ action: 'bind', calendarId: 'kill-calendar', confirm: true })
-  const source = (await store.workspace.externalSources({})).sources[0]
-  await store.workspace.grantExternal({ sourceId: source.id, expectedEpoch: source.epoch, confirmed: true, enabled: true, readScope: 'full' })
+  const source = (await store.workspace.externalSources({})).sources[0] // D14: no grant step
   const op = await store.workspace.prepareExternal({ sourceId: source.id, requestId: 'kill', action: 'create', arguments: eventArgs })
   await store.workspace.confirmExternal({ requestId: op.requestId, payloadHash: op.payloadHash, confirmed: true })
   if (boundary === 'ready') await writeFile(`${dir}/paused.json`, JSON.stringify({ point: 'ready' }))

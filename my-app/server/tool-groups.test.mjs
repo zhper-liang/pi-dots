@@ -162,7 +162,9 @@ test('R1 marker migration preserves live assignments, revocations, narrowed rule
   assert.deepEqual(todo.assigned, before.assignments.todo)
   assert.deepEqual(calendar.revoked, ['calendar_read_event'])
   assert.equal(calendar.toolGroups.find((group) => group.id === 'todos').mode, 'ask')
-  assert.equal(calendar.toolGroups.find((group) => group.id === 'calendar').mode, 'allow')
+  // R3-07 (D15): the untyped deny on workspace deletion also stops schedule deletions, which 日历与日程 now
+  // decides, so that switch shows it too (was 'allow' while the same rule already denied them).
+  assert.equal(calendar.toolGroups.find((group) => group.id === 'calendar').mode, 'ask')
   for (const action of ['create', 'update', 'delete'])
     assert.equal((await store.harness.commit((tx) => decide(tx, { botId: 'calendar', tool: 'workspace.prepare_change', action }), context)).effect, action === 'delete' ? 'deny' : 'allow', action)
   const access = await store.harness.snapshot(ToolAccess, undefined, context)

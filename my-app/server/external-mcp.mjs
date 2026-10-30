@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js'
 import { boundedMcpJson, projectMcpConfig, validateMcpConfig, validMcpCredentialRef, mapMcpTools, publicMcpError, mcpSourceRevision, ExternalMcpError, MCP_LIMITS } from './external-mcp-config.mjs'
 import { externalMcpTransportStatus, createExternalMcpTransport } from './external-mcp-transport.mjs'
+import { resolveWorkspaceMcpEndpoint, probeWorkspaceMcp, googleBearer, WORKSPACE_MCP_VERSION } from './external-mcp-google.mjs'
 
 const copy = value => JSON.parse(JSON.stringify(value))
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
@@ -14,7 +15,8 @@ const fail = (code, status = 400) => { throw new ExternalMcpError(code, status) 
 const requestIdValid = value => typeof value === 'string' && /^[\w:-]{1,160}$/.test(value)
 const revisionOf = record => hash([record.config, record.tools, record.enabled, record.version])
 const catalogRevisionOf = record => hash([{ transport: record.config.transport, url: record.config.url, executable: record.config.executable,
-  args: record.config.args, envKeys: record.config.envKeys, secretEnvKeys: record.config.secretEnvKeys }, [...record.tools].sort((a, b) => a.name.localeCompare(b.name))])
+  args: record.config.args, envKeys: record.config.envKeys, secretEnvKeys: record.config.secretEnvKeys,
+  credentialSource: record.config.credentialSource, googleServices: record.config.googleServices }, [...record.tools].sort((a, b) => a.name.localeCompare(b.name))])
 const plain = value => value && typeof value === 'object' && !Array.isArray(value)
 const hasControl = value => [...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
 const emptyState = () => ({ version: 1, connections: {}, removed: {}, requests: {} })
@@ -66,10 +68,26 @@ export function externalMcpCatalog(configurations) {
   })
 }
 
-/** Single-user configuration service. The caller's Harness still owns all execution/grant receipts. */
+/**
+ * Single-user configuration service. The caller's Harness still owns all execution/grant receipts.
+ * R3-05: `googleAccessToken` / `googleRejectToken` are the frozen Google token API (CONTRACTS §4);
+ * connections with credentialSource 'google' use them per request and store no bearer.
+ * `workspaceMcpUrl` overrides PIDOT_WORKSPACE_MCP_URL (tests); it is never read from a connection.
+ */
 export async function createExternalMcpService({ dataDirectory, inheritedEnv = process.env, lookup,
-  transportFactory = createExternalMcpTransport } = {}) {
-  if (typeof dataDirectory !== 'string' || !dataDirectory || typeof transportFactory !== 'function') fail('MCP_INVALID_CONFIG')
+  transportFactory = createExternalMcpTransport, googleAccessToken, googleRejectToken, workspaceMcpUrl } = {}) {
+  if (typeof dataDirectory !== 'string' || !dataDirectory || typeof transportFactory !== 'function' ||
+    googleAccessToken !== undefined && typeof googleAccessToken !== 'function' || googleRejectToken !== undefined && typeof googleRejectToken !== 'function') fail('MCP_INVALID_CONFIG')
+  const workspaceEndpoint = resolveWorkspaceMcpEndpoint({ url: workspaceMcpUrl, env: inheritedEnv })
+  // Short-lived Google tokens seen this process: redacted from results, never persisted.
+  const googleTokens = []
+  const rememberGoogleToken = token => { if (!googleTokens.includes(token)) { googleTokens.push(token); if (googleTokens.length > 8) googleTokens.shift() } }
+  const googleOptions = config => config.credentialSource !== 'google' ? undefined : {
+    url: workspaceEndpoint.url ?? undefined,
+    bearer: googleAccessToken ? googleBearer({ accessToken: googleAccessToken, rejectToken: googleRejectToken, services: config.googleServices, remember: rememberGoogleToken }) : undefined,
+  }
+  const knownSecrets = (config, credential) => config.credentialSource === 'google'
+    ? [...new Set([...secretValues(credential), ...googleTokens])].sort((a, b) => b.length - a.length) : secretValues(credential)
   await mkdir(dataDirectory, { recursive: true, mode: 0o700 })
   if (!(await lstat(dataDirectory)).isDirectory() || (await lstat(dataDirectory)).isSymbolicLink()) fail('MCP_STORAGE_FAILED', 500)
   await chmod(dataDirectory, 0o700)
@@ -167,6 +185,8 @@ export async function createExternalMcpService({ dataDirectory, inheritedEnv = p
       else if (req.value.expectedRevision !== undefined || Object.keys(state.connections).length >= 64) fail('MCP_CONFIG_CONFLICT', 409)
       // Credential refs belong to this registration; JSON cannot bind another connection's secret.
       if (config.credentialRef && config.credentialRef !== existing?.config.credentialRef) fail('MCP_INVALID_CREDENTIAL')
+      // One Google-sourced connection: the settings slot and the Google token have a single owner.
+      if (config.credentialSource === 'google' && Object.values(state.connections).some(item => item.config.credentialSource === 'google' && item.config.connectionId !== id)) fail('MCP_GOOGLE_SOURCE_CONFLICT', 409)
       if (existing?.config.credentialRef) config.credentialRef = existing.config.credentialRef
       if (containsSecret(config, secretValues(secrets.items[config.credentialRef]))) fail('MCP_INVALID_CONFIG')
       await invalidate(id)
@@ -181,6 +201,8 @@ export async function createExternalMcpService({ dataDirectory, inheritedEnv = p
       if (prior) return prior
       if (closed) fail('MCP_CONNECTION_UNAVAILABLE', 409)
       const record = get(req.value.connectionId); compare(record, req.value.expectedRevision)
+      // The Google connection is the only credential of a Google-sourced connection.
+      if (record.config.credentialSource) fail('MCP_INVALID_CREDENTIAL')
       const credential = checkCredential(record, req.value.credential), ref = record.config.credentialRef ?? `mcpcred_${randomUUID().replaceAll('-', '')}`
       if (!validMcpCredentialRef(ref) || containsSecret([record.config, record.tools], secretValues(credential))) fail('MCP_INVALID_CREDENTIAL')
       await invalidate(record.config.connectionId)
@@ -237,16 +259,17 @@ export async function createExternalMcpService({ dataDirectory, inheritedEnv = p
       })
       if (previous) return previous
       let transport, validators
-      const credential = copy(secrets.items[snapshot.config.credentialRef] ?? {}), known = secretValues(credential)
+      const credential = copy(secrets.items[snapshot.config.credentialRef] ?? {}), known = () => knownSecrets(snapshot.config, credential)
       const deadline = setTimeout(() => controller.abort(new ExternalMcpError('MCP_TIMEOUT', 504)), snapshot.config.timeoutMs)
       try {
         signal.throwIfAborted()
-        transport = await transportFactory(snapshot.config, { credential, inheritedEnv, lookup, signal })
+        const google = googleOptions(snapshot.config)
+        transport = await transportFactory(snapshot.config, { credential, inheritedEnv, lookup, signal, ...(google ? { google } : {}) })
         const tools = [], cursors = new Set()
         let cursor
         for (let page = 0; page < MCP_LIMITS.maxPages; page++) {
           const result = boundedMcpJson(await transport.listTools(cursor ? { cursor } : {}, { signal }), { maxBytes: MCP_LIMITS.catalogBytes })
-          if (containsSecret(result.tools, known)) fail('MCP_INVALID_TOOLS')
+          if (containsSecret(result.tools, known())) fail('MCP_INVALID_TOOLS')
           if (!Array.isArray(result.tools) || result.tools.length > MCP_LIMITS.maxPageTools) fail('MCP_INVALID_TOOLS')
           tools.push(...result.tools)
           if (tools.length > MCP_LIMITS.maxTools) fail('MCP_LIMIT_EXCEEDED')
@@ -292,7 +315,6 @@ export async function createExternalMcpService({ dataDirectory, inheritedEnv = p
     const record = get(connectionId), entry = channels.get(connectionId)
     if (closed || effectiveStatus(record) !== 'ready' || !entry || entry.version !== record.version) fail('MCP_CONNECTION_UNAVAILABLE', 409)
     const tool = record.tools.find(tool => tool.name === toolName), validator = entry.validators.get(toolName)
-    const known = secretValues(secrets.items[record.config.credentialRef])
     if (!tool || !validator) fail('MCP_INVALID_TOOLS')
     const input = boundedMcpJson(args ?? {}, { maxBytes: MCP_LIMITS.resultBytes })
     if (!validator.input(input).valid) fail('MCP_INVALID_ARGUMENTS')
@@ -302,8 +324,11 @@ export async function createExternalMcpService({ dataDirectory, inheritedEnv = p
     try {
       const result = boundedMcpJson(await entry.transport.callTool({ name: tool.originalName, arguments: input }, { signal }), { maxBytes: MCP_LIMITS.resultBytes })
       if (validator.output && !result.isError && (!result.structuredContent || !validator.output(result.structuredContent).valid)) fail('MCP_INVALID_RESULT')
-      return boundedMcpJson(redactResult(result, known), { maxBytes: MCP_LIMITS.resultBytes })
+      // Known secrets are read after the call: a Google token is only fetched while the request is sent.
+      return boundedMcpJson(redactResult(result, knownSecrets(record.config, secrets.items[record.config.credentialRef])), { maxBytes: MCP_LIMITS.resultBytes })
     } catch (error) {
+      // Definite: the request never reached a tool (no Google token, or a pre-dispatch 401 twice).
+      if (error instanceof ExternalMcpError && error.notSent === true) throw error
       const unknown = new ExternalMcpError('MCP_INVOCATION_UNKNOWN', 409)
       unknown.unknown = true; unknown.retryable = false; unknown.causeCode = error?.code === -32001 ? 'MCP_TIMEOUT' : signal?.aborted || entry.controller.signal.aborted ? 'MCP_CANCELLED' : publicMcpError(error).code
       throw unknown
@@ -318,6 +343,19 @@ export async function createExternalMcpService({ dataDirectory, inheritedEnv = p
       toolNames: record.tools.map(tool => tool.name), requirements: effectiveStatus(record) === 'needs_auth' ? ['credential'] : [], lastCheck: copy(record.lastCheck) })),
     toolCatalog: async ({ connectionId } = {}) => Object.values(state.connections).filter(record => (!connectionId || record.config.connectionId === connectionId) && effectiveStatus(record) === 'ready')
       .flatMap(record => record.tools.map(tool => ({ ...copy(tool), catalogRevision: catalogRevisionOf(record), writeMode: 'ask' }))),
+    /**
+     * Settings slot (R3-05): is workspace-mcp running at the configured address, and what is the
+     * Google-sourced connection's live state. Read-only: never sends a token, never changes a record.
+     */
+    async googleWorkspaceStatus() {
+      const runtime = workspaceEndpoint.invalid ? { state: 'invalid_config', version: null } : await probeWorkspaceMcp(workspaceEndpoint.url, { lookup })
+      const record = Object.values(state.connections).find(item => item.config.credentialSource === 'google')
+      return { runtime: { state: runtime.state, version: runtime.version, expectedVersion: WORKSPACE_MCP_VERSION, customAddress: workspaceEndpoint.custom },
+        googleTokenSource: Boolean(googleAccessToken),
+        connection: record ? { connectionId: record.config.connectionId, name: record.config.name, revision: record.revision, enabled: record.enabled,
+          status: effectiveStatus(record), toolCount: record.tools.length, googleServices: [...record.config.googleServices],
+          lastCheck: record.lastCheck ? { status: record.lastCheck.status, checkedAt: record.lastCheck.checkedAt, ...(record.lastCheck.error?.code ? { error: { code: record.lastCheck.error.code } } : {}) } : null } : null }
+    },
     requestStatus: async requestId => {
       if (!requestIdValid(requestId)) fail('MCP_INVALID_CONFIG')
       const record = state.requests[`request:${requestId}`]
@@ -329,3 +367,4 @@ export async function createExternalMcpService({ dataDirectory, inheritedEnv = p
 
 export { validateMcpConfig, projectMcpConfig, mapMcpTools, publicMcpError, mcpSourceRevision } from './external-mcp-config.mjs'
 export { createExternalMcpTransport, externalMcpTransportStatus } from './external-mcp-transport.mjs'
+export { googleWorkspaceMcpTemplate, resolveWorkspaceMcpEndpoint, WORKSPACE_MCP_URL_ENV, WORKSPACE_MCP_DEFAULT_URL } from './external-mcp-google.mjs'

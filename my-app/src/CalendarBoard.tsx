@@ -7,8 +7,8 @@ import LocalTimePicker from './LocalTimePicker'
 import { getLocalTimezone, localInstant, type LocalDateTime } from './local-time.mjs'
 import { type Mode, type EventTimeDraft, eventTimeDraft, eventTimeData, addDays, weekday, dayKey as calendarDayKey, dayStart as calendarDayStart, dueDay as calendarDueDay, eventDays as calendarEventDays, hm as calendarHm, layoutDay as calendarLayoutDay, periodDays, shiftAnchor, toOffsetIso as calendarIso } from './calendar-layout.mjs'
 
-type Item = { id: string; sourceId: string; title: string; version: number; due?: string | null; timezone?: string; start?: string; end?: string; description?: string; deletedAt?: string | null; status?: string }
-type Ev = Item & { key: string; s: number; e: number; local: boolean }
+type Item = { id: string; sourceId: string; title: string; version: number; due?: string | null; timezone?: string; start?: string; end?: string; description?: string; deletedAt?: string | null; status?: string; readOnly?: boolean }
+type Ev = Item & { key: string; s: number; e: number; local: boolean; allDay: boolean }
 type Receipt = { requestId: string; state: string; receipt?: { target?: { id: string }; version?: number; deletedAt?: string | null } }
 type Draft = EventTimeDraft & { title: string; description: string }
 type Pop =
@@ -20,7 +20,14 @@ type Pop =
 const HOUR = 48 // px per hour
 const WEEK = ['一', '二', '三', '四', '五', '六', '日']
 const PALETTE = ['var(--c-text-2)', 'var(--c-muted)', 'var(--c-text-4)']
-const sourceName = (id: string) => id === 'local' ? '本地日程' : id.startsWith('feishu') ? '飞书日历' : `外部日历 ${id}`
+const PROVIDER_NAMES: Record<string, string> = { feishu: '飞书日历', 'google-calendar': 'Google 日历', 'google-tasks': 'Google 任务' }
+// R3-03: external sources show the provider and the calendar's own name (Google lists many calendars).
+const sourceName = (id: string, info?: PermissionSource) => {
+  if (id === 'local') return '本地日程'
+  const kind = PROVIDER_NAMES[info?.provider ?? (id.startsWith('feishu') ? 'feishu' : id.split(':')[0])] ?? '外部日历'
+  return info?.title ? `${kind} · ${info.title}` : kind
+}
+const isDate = (v?: string) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
 const label = (d: string) => `${Number(d.slice(5, 7))}月${Number(d.slice(8))}日`
 
 export default function CalendarBoard({ token, initialMode = 'week', active = true, refreshKey, onChanged }: { token: string; initialMode?: Mode; active?: boolean; refreshKey?: number; onChanged?: () => void }) {
@@ -35,6 +42,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
   const [authorized, setAuthorized] = useState<boolean | null>(null)
   const [local, setLocal] = useState<Item[]>([]), [todos, setTodos] = useState<Item[]>([]), [external, setExternal] = useState<Item[]>([])
   const [extSources, setExtSources] = useState<string[]>([]), [extWarning, setExtWarning] = useState('')
+  const [sourceInfo, setSourceInfo] = useState<Record<string, PermissionSource>>({})
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
   const [pop, setPop] = useState<Pop | null>(null), [unconfirmed, setUnconfirmed] = useState(false)
   const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 719px)').matches)
@@ -58,7 +66,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
     return body.data as T
   }, [token])
   function clearProjection(sensitive = false) {
-    setLocal([]); setTodos([]); setExternal([]); setExtSources([]); setAuthorized(null)
+    setLocal([]); setTodos([]); setExternal([]); setExtSources([]); setSourceInfo({}); setAuthorized(null)
     if (sensitive) { generation.current++; setPop(null); setNotice(''); permission.current = ''; running.current = false; setBusy(false); if (pending.current) setUnconfirmed(true) }
   }
   const load = async ({ signal, isCurrent }: WorkspaceRead) => {
@@ -95,12 +103,12 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       }
       const [ev, td] = await Promise.all([pageAll('Event'), pageAll('Todo')])
       if (!current()) return
-      const ext: Item[] = [], extTodos: Item[] = [], names: string[] = []; let warn = ''
+      const ext: Item[] = [], extTodos: Item[] = [], names: string[] = [], info: Record<string, PermissionSource> = {}; let warn = ''
       const sources = before.external
       const start = toOffsetIso(dayStart(days[0])), end = toOffsetIso(dayStart(addDays(days[days.length - 1], 1)))
       for (const source of sources.filter(x => x.authorized && x.readScope === 'full')) {
         if (!current()) return
-        names.push(source.id)
+        names.push(source.id); info[source.id] = source
         try {
           const page = await api<{ items: Item[]; complete: boolean; stale?: boolean }>('external-query', { sourceId: source.id, start, end, timezone }, signal)
           if (!current()) return
@@ -118,7 +126,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       const after = await permissions()
       if (!current()) return
       if (after.key !== before.key) { clearProjection(true); permission.current = after.key; void refresh(); return }
-      setLocal(ev); setTodos([...td, ...extTodos]); setExternal(ext); setExtSources(names); setExtWarning(warn); setAuthorized(true); setRefreshError('')
+      setLocal(ev); setTodos([...td, ...extTodos]); setExternal(ext); setExtSources(names); setSourceInfo(info); setExtWarning(warn); setAuthorized(true); setRefreshError('')
     } catch (error) {
       if (!current()) return
       // No permission proof is preferable to keeping a potentially revoked cached projection.
@@ -154,11 +162,15 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
   }, [mode, pop, active, busy])
 
   const colors = useMemo(() => { const m: Record<string, string> = { local: 'var(--c-text-2)' }; extSources.forEach((s, i) => { m[s] = PALETTE[i % PALETTE.length] }); return m }, [extSources])
+  // All-day external events carry Google/Feishu dates (end exclusive): map them to local day bounds and
+  // show them as day chips, never as a UTC-midnight timed block.
   const events = useMemo<Ev[]>(() => [...local.map(i => ({ ...i, local: true })), ...external.map(i => ({ ...i, local: false }))]
     .filter(i => !i.deletedAt && i.start && i.end)
-    .map(i => ({ ...i, key: `${i.sourceId}|${i.id}`, s: Date.parse(i.start!), e: Date.parse(i.end!) }))
-    .filter(i => !Number.isNaN(i.s) && !Number.isNaN(i.e)), [local, external])
-  const byDay = useMemo(() => { const m: Record<string, Ev[]> = {}; for (const ev of events) for (const d of calendarEventDays(ev.s, ev.e, timezone)) (m[d] ??= []).push(ev); for (const d in m) m[d].sort((a, b) => a.s - b.s); return m }, [events, timezone])
+    .map(i => { const allDay = isDate(i.start) && isDate(i.end); return { ...i, allDay, key: `${i.sourceId}|${i.id}`, s: allDay ? dayStart(i.start!) : Date.parse(i.start!), e: allDay ? dayStart(i.end!) : Date.parse(i.end!) } })
+    .filter(i => !Number.isNaN(i.s) && !Number.isNaN(i.e)), [local, external, dayStart])
+  const byDay = useMemo(() => { const m: Record<string, Ev[]> = {}; for (const ev of events) if (!ev.allDay) for (const d of calendarEventDays(ev.s, ev.e, timezone)) (m[d] ??= []).push(ev); for (const d in m) m[d].sort((a, b) => a.s - b.s); return m }, [events, timezone])
+  const allDayByDay = useMemo(() => { const m: Record<string, Ev[]> = {}; for (const ev of events) if (ev.allDay) for (let d = ev.start!, n = 0; d < ev.end! && n < 62; d = addDays(d, 1), n++) (m[d] ??= []).push(ev); return m }, [events])
+  const sourceLabel = (id: string) => sourceName(id, sourceInfo[id])
   const dueByDay = useMemo(() => { const m: Record<string, Item[]> = {}; for (const t of todos) { const d = !t.deletedAt && calendarDueDay(t.due, timezone); if (d) (m[d] ??= []).push(t) } return m }, [todos, timezone])
 
   async function command(input: object, done: string) {
@@ -186,7 +198,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
           const detail = await api<{ items: Item[] }>('get', { type: 'Event', sourceId: 'local', id })
           if (!current()) return
           const latest = detail.items[0]
-          if (latest) setPop({ kind: 'conflict', ev: { ...latest, key: `${latest.sourceId}|${latest.id}`, local: true, s: Date.parse(latest.start!), e: Date.parse(latest.end!) } })
+          if (latest) setPop({ kind: 'conflict', ev: { ...latest, key: `${latest.sourceId}|${latest.id}`, local: true, allDay: false, s: Date.parse(latest.start!), e: Date.parse(latest.end!) } })
           else { setPop(null); setError('这条日程已不存在，将自动更新。') }
         } catch { if (current()) setError('版本冲突，未覆盖日程；当前版本读取失败，请稍后重新确认。') }
       }
@@ -259,10 +271,14 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       onDragStart={e => { drag.current = { key: ev.key, offset: e.clientY - e.currentTarget.getBoundingClientRect().top }; e.dataTransfer.effectAllowed = 'move' }}
       onClick={e => { e.stopPropagation(); if (busy || pending.current) return; rememberOpener(); setError(''); if (narrow && ev.local) void openEdit(ev); else setPop({ kind: 'detail', ev }) }}
       onDragEnd={() => { drag.current = null }}
-      aria-label={`${ev.title || '无标题'}，${hm(ev.s)} 到 ${hm(ev.e)}，${sourceName(ev.sourceId)}`}>
+      aria-label={`${ev.title || '无标题'}，${hm(ev.s)} 到 ${hm(ev.e)}，${sourceLabel(ev.sourceId)}`}>
       <span className="cal-event-time">{hm(ev.s)}</span><span className="cal-event-title">{ev.title || '无标题'}</span>
     </button>)
-  const dueChips = (d: string) => (dueByDay[d] ?? []).map(t => <span key={t.id} className={`cal-due${t.status === 'completed' ? ' is-done' : ''}`} title={`截止：${t.title}`}>截止 · {t.title}</span>)
+  const allDayChip = (ev: Ev) => (
+    <button key={ev.key} type="button" className="cal-due" style={{ border: 0, borderLeft: `3px solid ${colors[ev.sourceId] ?? '#888'}`, background: `color-mix(in srgb, ${colors[ev.sourceId] ?? '#888'} 13%, var(--c-bg))`, color: 'var(--c-text)', cursor: 'pointer', font: 'inherit', fontSize: 11 }}
+      title={`全天：${ev.title || '无标题'}`} aria-label={`${ev.title || '无标题'}，全天，${sourceLabel(ev.sourceId)}`}
+      onClick={e => { e.stopPropagation(); if (busy || pending.current) return; rememberOpener(); setError(''); setPop({ kind: 'detail', ev }) }}>{ev.title || '无标题'}</button>)
+  const dueChips = (d: string) => [...(allDayByDay[d] ?? []).map(allDayChip), ...(dueByDay[d] ?? []).map(t => <span key={t.id} className={`cal-due${t.status === 'completed' ? ' is-done' : ''}`} title={`截止：${t.title}`}>截止 · {t.title}</span>)]
 
   function timeGrid() {
     return <div className="cal-grid-wrap">
@@ -332,8 +348,8 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       const ev = pop.ev
       body = <>
         <h3 className="cal-dialog-heading">{ev.title || '无标题'}</h3>
-        <p className="cal-pop-time">{label(dayKey(ev.s))} {hm(ev.s)} – {dayKey(ev.e - 1) !== dayKey(ev.s) ? `${label(dayKey(ev.e - 1))} ` : ''}{hm(ev.e)}</p>
-        <p className="cal-pop-source"><i style={{ background: colors[ev.sourceId] ?? '#888' }} />{sourceName(ev.sourceId)}{!ev.local && ' · 只读'}</p>
+        <p className="cal-pop-time">{ev.allDay ? `${label(ev.start!)}${addDays(ev.start!, 1) !== ev.end ? ` – ${label(addDays(ev.end!, -1))}` : ''} 全天` : <>{label(dayKey(ev.s))} {hm(ev.s)} – {dayKey(ev.e - 1) !== dayKey(ev.s) ? `${label(dayKey(ev.e - 1))} ` : ''}{hm(ev.e)}</>}</p>
+        <p className="cal-pop-source"><i style={{ background: colors[ev.sourceId] ?? '#888' }} />{sourceLabel(ev.sourceId)}{!ev.local && (sourceInfo[ev.sourceId]?.readOnly ? ' · 只读日历' : ' · 只读')}</p>
         {ev.description && <p className="cal-pop-desc">{ev.description}</p>}
         <div className="cal-pop-actions">
           {ev.local && <><button type="button" className="cal-btn" disabled={busy} onClick={() => void openEdit(ev)}>编辑</button><button type="button" className="cal-btn is-danger" disabled={busy} onClick={() => setPop({ kind: 'delete', ev })}>删除</button></>}
@@ -387,7 +403,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
     </header>
     <div className="cal-legend" aria-label="来源图例">
       {authorized && <span><i style={{ background: colors.local }} />本地日程</span>}
-      {extSources.map(s => <span key={s}><i style={{ background: colors[s] }} />{sourceName(s)}</span>)}
+      {extSources.map(s => <span key={s}><i style={{ background: colors[s] }} />{sourceLabel(s)}{sourceInfo[s]?.readOnly && <em className="cal-legend-ro" style={{ fontStyle: 'normal', marginLeft: 4, padding: '0 4px', border: '1px solid var(--c-line)', borderRadius: 'var(--radius-sm)' }}>只读</em>}</span>)}
       {todos.some(t => t.due) && <span><i className="is-due" />待办截止</span>}
     </div>
     {loading && authorized === null && <p role="status">正在读取日程…</p>}

@@ -12,8 +12,7 @@ const store = await openTaskStore({ file, feishuClient: client, workspaceSchedul
 try {
   if (phase === 'seed') {
     await store.feishuCalendar.manage({ action: 'bind', calendarId: 'sync-crash-isolated', confirm: true })
-    const s = (await store.workspace.externalSources({})).sources[0]
-    await store.workspace.grantExternal({ sourceId: s.id, expectedEpoch: s.epoch, enabled: true, confirmed: true, readScope: 'full' })
+    const s = (await store.workspace.externalSources({})).sources[0] // D14: no grant step
     await store.workspace.configureSync({ sourceId: s.id, expectedRevision: 0, enabled: true, confirmed: true })
     process.send?.({ seeded: true })
   } else {

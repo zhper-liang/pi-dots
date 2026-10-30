@@ -36,13 +36,20 @@ test('03 busy scope has no title/description/receipt; disconnect and rebind inva
   const created = await execute(f, await prepare(f, 'seed')), eventId = created.receipt.providerReceipt.eventId
   let s = (await f.store.workspace.externalSources({})).sources[0]
   await f.store.workspace.grantExternal({ sourceId: s.id, expectedEpoch: s.epoch, confirmed: true, enabled: true, readScope: 'busy' })
+  const narrowed = (await f.store.workspace.externalSources({})).sources[0].epoch
   const data = await f.store.workspace.getExternal({ sourceId: s.id, eventId })
   assert.equal(JSON.stringify(data).includes('secret-text'), false); assert.equal(JSON.stringify(data).includes('V2-03 isolated'), false); assert.deepEqual(Object.keys(data.items[0]), ['start', 'end', 'timezone'])
   await assert.rejects(f.store.workspace.getExternalOperation({ requestId: 'seed' }), err('WORKSPACE_FORBIDDEN'))
+  const { WORKSPACE_TOOLS } = await import('./workspace-tools.mjs'), { bot } = await f.store.getBotConfiguration('calendar')
+  await f.store.updateBotConfiguration('calendar', { requestId: 'r3-07-assign-before-disconnect', expectedVersion: bot.configRef.version, description: bot.description, tools: WORKSPACE_TOOLS, resources: [`workspace:${s.id}`] })
   await f.store.feishuCalendar.manage({ action: 'disconnect', confirm: true })
   await assert.rejects(f.store.workspace.getExternal({ sourceId: s.id, eventId }), err('WORKSPACE_EXTERNAL_REVOKED'))
   await f.store.feishuCalendar.manage({ action: 'bind', calendarId: 'isolated-calendar', confirm: true })
-  s = (await f.store.workspace.externalSources({})).sources[0]; assert.equal(s.id, f.sourceId); assert.equal(s.authorized, false)
+  // R3-07 (D14): a rebind is a fresh connection, usable at once with a new epoch; was `authorized === false`.
+  s = (await f.store.workspace.externalSources({})).sources[0]; assert.equal(s.id, f.sourceId)
+  assert.deepEqual([s.authorized, s.readScope], [true, 'full']); assert.ok(s.epoch > narrowed)
+  // R3-07: the Bot lost the source with the disconnect, even with no sync in between; the rebind revives nothing.
+  assert.deepEqual((await f.store.getBotConfiguration('calendar')).assigned.resources, [])
 }))
 
 test('03 beforeHash conflict prevents provider mutation; changed request payload and unsupported fields rejected', async () => externalFixture(async f => {
@@ -103,9 +110,8 @@ test('03 confirmation expiry, forged actor, bot permissions, and cached bypass a
   const service = createWorkspaceService({ repository: f.repo, authority, external: { calendar, client, now: () => now } })
   try {
     await calendar.manage({ action: 'bind', calendarId: 'authority-calendar', confirm: true })
-    const source = (await service.externalSources(actor)).sources[0]
-    await service.grantExternal(actor, { sourceId: source.id, expectedEpoch: source.epoch, enabled: true, readScope: 'full', confirmed: true })
-    const op = await service.prepareExternal(actor, { sourceId: source.id, requestId: 'expire', action: 'create', arguments: eventArgs })
+    const source = (await service.externalSources(actor)).sources[0] // D14: no grant step
+    const op =await service.prepareExternal(actor, { sourceId: source.id, requestId: 'expire', action: 'create', arguments: eventArgs })
     now += 300001
     await assert.rejects(service.confirmExternal(actor, { requestId: op.requestId, payloadHash: op.payloadHash, confirmed: true }), err('WORKSPACE_CONFIRMATION_STALE'))
     await assert.rejects(service.externalSources({ ...actor }), err('WORKSPACE_ACTOR'))
@@ -133,7 +139,9 @@ test('03 source rotation fails closed and new source never inherits old grants o
   await assert.rejects(f.store.workspace.getExternalOperation({ requestId: 'old-account' }), err('WORKSPACE_EXTERNAL_REVOKED'))
   await f.store.feishuCalendar.manage({ action: 'bind', calendarId: 'isolated-calendar', confirm: true })
   const current = (await f.store.workspace.externalSources({})).sources[0]
-  assert.notEqual(current.id, f.sourceId); assert.equal(current.authorized, false)
+  // R3-07 (D14): the new source is usable at once (was `authorized === false`); old receipts stay out of reach.
+  assert.notEqual(current.id, f.sourceId); assert.equal(current.authorized, true)
+  await assert.rejects(f.store.workspace.getExternalOperation({ requestId: 'old-account' }), err('WORKSPACE_EXTERNAL_REVOKED'))
 }))
 
 test('03 unsupported readonly types and imprecise windows never write', async () => externalFixture(async f => {
