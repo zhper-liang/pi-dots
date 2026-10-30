@@ -36,7 +36,7 @@
 |---|---|
 | [Grok 风格前端布局](backlog/frontend-layout-grok.md) | 草案，未授权开工 |
 | [2026-10-29 使用反馈：会话、卡片任务与可组合 Bot](backlog/2026-10-29-workspace-experience.md) | 11 项需求来源；第一轮、第二轮已完成（见上方已完成），Google 为第三轮候选 |
-| [第三轮：Google Workspace](backlog/2026-10-30-r3-google-workspace.md) | 混合路线：日历和任务原生，Gmail、Drive、Docs、Sheets 经 workspace-mcp；D1–D9 已答复，开工需另行授权并批准安装 uv 与 workspace-mcp |
+| [第三轮：Google Workspace](backlog/2026-10-30-r3-google-workspace.md) | 混合路线：日历和任务原生，Gmail、Drive、Docs、Sheets 经 workspace-mcp；D1–D9 已答复，开工需另行授权（workspace-mcp 安装已批准），设计要能迁到服务器 |
 
 ## 约定
 

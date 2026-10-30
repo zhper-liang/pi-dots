@@ -14,7 +14,7 @@
 
 ## 下一步候选
 
-[第三轮：Google Workspace](plans/backlog/2026-10-30-r3-google-workspace.md)：混合路线，Calendar、Tasks 原生，Gmail、Drive、Docs、Sheets 经 workspace-mcp。用户 2026-10-30 已答复 D1–D9，选择“只改好计划，先不开工”；开工需要用户另行授权，并批准安装 uv 与固定版本的 workspace-mcp。
+[第三轮：Google Workspace](plans/backlog/2026-10-30-r3-google-workspace.md)：混合路线，Calendar、Tasks 原生，Gmail、Drive、Docs、Sheets 经 workspace-mcp。用户 2026-10-30 已答复 D1–D9，选择“只改好计划，先不开工”；开工需要用户另行授权；固定版本 workspace-mcp 的安装已批准。设计要能原样迁到服务器，服务器部署本身现在不做。
 
 ## 授权边界
 
