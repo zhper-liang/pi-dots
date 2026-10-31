@@ -65,14 +65,14 @@ export default function SessionActions({ target, onAction, onVerify, onComplete,
       requestId.current ??= crypto.randomUUID()
       const input = { requestId: requestId.current, confirmed: true as const }
       const response = uncertain && onVerify && !retryOriginal ? await onVerify(target, input) : await onAction(target, input)
-      if (!isSessionActionReceipt(response, target, requestId.current)) throw new Error('删除结果未核实，请用原请求核实后重试。')
+      if (!isSessionActionReceipt(response, target, requestId.current)) throw new Error('没确认删除成功，点「核对删除结果」。')
       result = response
     } catch (failure) {
       if (mounted.current) {
         // Keep the original request across dismissal/reopening. Never hide a row on failed/unknown.
         setUncertain(true)
         setRetryable(failure instanceof SessionActionRecoveryError && failure.retryable)
-        setError(failure instanceof Error ? failure.message : '删除结果未知，请用原请求核实后重试。')
+        setError(failure instanceof Error ? failure.message : '没确认删除成功，点「核对删除结果」。')
       }
       return
     } finally {
@@ -92,23 +92,23 @@ export default function SessionActions({ target, onAction, onVerify, onComplete,
     {menuOpen && <div id={`${id}-menu`} className="session-actions-menu" role="menu" aria-label={`${target.title} 的操作`} ref={menu} onKeyDown={menuKeys}
       onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setMenuOpen(false) }}>
       {onTogglePin && <button type="button" role="menuitem" onClick={() => { onTogglePin(); setMenuOpen(false); trigger.current?.focus() }}>{pinned ? '取消置顶' : '置顶'}</button>}
-      <button type="button" role="menuitem" className="session-action-danger" disabled={!onAction} title={!onAction ? '会话删除服务尚未接线' : undefined}
+      <button type="button" role="menuitem" className="session-action-danger" disabled={!onAction} title={!onAction ? '暂时不能删除会话' : undefined}
         onClick={() => { setMenuOpen(false); setConfirmOpen(true) }}>{label}</button>
-      {!onAction && <p className="session-action-hint">会话删除服务尚未接线</p>}
+      {!onAction && <p className="session-action-hint">暂时不能删除会话</p>}
     </div>}
     <EditorDialog open={confirmOpen} title={label} returnFocus={trigger} pending={pending} error={error}
       initialFocus="[data-session-cancel]" onClose={() => { if (!inFlight.current) setConfirmOpen(false) }}
-      description={target.kind === 'main' ? '清空当前聊天上下文，并为同一个 Bot 开始新主会话。' : '会话将从列表、置顶、搜索和历史入口移除，刷新后不会恢复。'}
+      description={target.kind === 'main' ? '清空当前聊天，和这个机器人开始新会话。' : '删除后，会话会从列表、置顶、搜索和历史中移除。'}
       footer={<>
         <button type="button" data-session-cancel className="editor-control-button" onClick={() => setConfirmOpen(false)} disabled={pending}>{uncertain ? '暂时关闭' : '取消'}</button>
-        <button type="button" className="editor-control-button session-action-confirm" onClick={() => void confirm()} disabled={pending || !onAction}>{pending ? '正在处理…' : uncertain ? onVerify ? '核查原请求' : '核实原请求并重试' : label}</button>
-        {uncertain && retryable && onVerify && <button type="button" className="editor-control-button session-action-confirm" onClick={() => void confirm(true)} disabled={pending || !onAction}>重试原请求</button>}
+        <button type="button" className="editor-control-button session-action-confirm" onClick={() => void confirm()} disabled={pending || !onAction}>{pending ? '正在处理…' : uncertain ? onVerify ? '核对删除结果' : '重试' : label}</button>
+        {uncertain && retryable && onVerify && <button type="button" className="editor-control-button session-action-confirm" onClick={() => void confirm(true)} disabled={pending || !onAction}>重试</button>}
       </>}>
       <p className="session-action-name">{target.title}</p>
-      <p>{target.kind === 'main' ? 'Bot 和派出的子任务不会删除；后台结果由当前主会话接续，旧聊天不会带入新上下文。' : '如有运行中的工作，将先停止后续执行；停止失败或结果未知时，不会标为删除成功。'}</p>
-      <p>审计记录和已有私有记忆默认保留，这不是彻底擦除。已发生的外部操作不会回滚。</p>
-      {target.kind === 'group' && <p>这里只删除群会话，不删除 Bot、子任务或外部日程。</p>}
-      {uncertain && <p role="status">结果尚未核实；核查只读取原请求状态。只有你明确选择重试时才会再次提交同一请求，仍不会改换会话或请求标识。</p>}
+      <p>{target.kind === 'main' ? '机器人和派出的任务都保留，后台结果会发到新会话。' : '正在做的事会先停止，停下后再删除会话。'}</p>
+      <p>已有记忆和操作记录保留，已经做过的事保持不变。</p>
+      {target.kind === 'group' && <p>只删除群会话，机器人、派出的任务和日程都保留。</p>}
+      {uncertain && <p role="status">还没确认删除结果，可以核对后再重试。</p>}
     </EditorDialog>
   </div>
 }

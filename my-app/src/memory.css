@@ -42,9 +42,9 @@
 .memory-file dd { margin: 0; min-width: 0; color: var(--c-text-2); overflow-wrap: anywhere; }
 .memory-file code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: inherit; overflow-wrap: anywhere; }
 .memory-tag { display: inline-block; margin-left: var(--space-2); padding: 0 var(--space-2); border: 1px solid var(--c-border); border-radius: var(--radius); font-size: var(--fs-small); line-height: 1.6; color: var(--c-muted); white-space: nowrap; vertical-align: 1px; }
-.memory-diagnostics { font-size: var(--fs-small); color: var(--c-muted); }
-.memory-diagnostics dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); }
-.memory-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
+.memory-section > .tech-info { font-size: var(--fs-small); color: var(--c-muted); }
+.memory-section > .tech-info dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); }
+.memory-section > .tech-info dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 480px) {
   .memory-section { padding: var(--space-4) 0; }
   .memory-section-head { align-items: flex-start; }

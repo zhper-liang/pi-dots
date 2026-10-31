@@ -31,7 +31,7 @@ test('last activity is the newest message, else creation; bad dates are ignored'
   assert.equal(lastActivity({ createdAt: 'nope' }), 0)
 })
 
-test('search matches title or Bot name, ignoring case and outer spaces', () => {
+test('search matches title or robot name, ignoring case and outer spaces', () => {
   const item = { title: 'Weekly 复盘', botName: '日程助理' }
   assert.equal(matchesQuery(item, '  weekly '), true)
   assert.equal(matchesQuery(item, '日程'), true)
@@ -111,10 +111,14 @@ test('sidebar confirmation uses shared EditorDialog, stable retry identity and n
   assert.match(source, /<EditorDialog/)
   assert.match(source, /requestId\.current \?\?= crypto\.randomUUID\(\)/)
   assert.match(source, /isSessionActionReceipt\(response, target, requestId\.current\)/)
-  assert.match(source, /核实原请求并重试/)
+  assert.match(source, /核对删除结果/)
+  assert.match(source, /uncertain \? onVerify \? '核对删除结果' : '重试'/)
   assert.match(source, /uncertain && onVerify && !retryOriginal \? await onVerify\(target, input\) : await onAction\(target, input\)/)
   assert.match(sidebar, /onVerify=\{props.onVerifySessionAction\}/)
-  assert.match(source, /审计记录和已有私有记忆默认保留/)
+  assert.match(source, /已有记忆和操作记录保留/)
+  assert.match(sidebar, /title="机器人设置"/)
+  assert.match(sidebar, />新建机器人</)
+  assert.match(sidebar, />派活和验收</)
   assert.doesNotMatch(source, /fetch\(|\/archive|\.send\(/)
   assert.match(sidebar, /sessions\.filter\(item => !deletedIds\.includes\(item.id\)\)/)
   assert.match(sidebar, /removeSessionPin\(previous, result.taskId\)/)

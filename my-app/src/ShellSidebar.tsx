@@ -78,13 +78,13 @@ export default function ShellSidebar(props: Props) {
       <div className="pd-tabs" role="tablist" aria-label="侧栏内容">
         {(['sessions', 'bots'] as const).map((id) => <button key={id} type="button" role="tab" id={`side-tab-${id}`} aria-selected={tab === id} aria-controls={`side-panel-${id}`} onClick={() => { setTab(id); if (id === 'bots') { props.onOpenDirectory(); onClose() } }}>{id === 'sessions' ? '会话' : '机器人'}</button>)}
       </div>
-      <label className="pd-search"><SearchIcon /><span className="sr-only">搜索会话和 Bot</span>
-        <input type="search" placeholder={tab === 'sessions' ? '搜索会话…' : '搜索 Bot…'} value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+      <label className="pd-search"><SearchIcon /><span className="sr-only">搜索会话和机器人</span>
+        <input type="search" placeholder={tab === 'sessions' ? '搜索会话…' : '搜索机器人…'} value={query} onChange={(e) => setQuery(e.target.value)} /></label>
 
       <div id="side-panel-sessions" role="tabpanel" aria-labelledby="side-tab-sessions" hidden={tab !== 'sessions'} className="pd-side-list">
         {chief && !query.trim() && <div className="pd-row-wrap"><button type="button" className="pd-session" aria-current={view === 'home' ? 'page' : undefined} onClick={act(props.onHome)}>
           <BotAvatar name={chief.name} look={loadLook('chief')} size={20} />
-          <span className="pd-session-text"><span className="pd-session-title">{chief.name}</span><span className="pd-session-meta">主会话 · 派活和验收</span></span>
+          <span className="pd-session-text"><span className="pd-session-title">{chief.name}</span><span className="pd-session-meta">派活和验收</span></span>
         </button>{chief.mainTaskId !== null && actions({ taskId: chief.mainTaskId, title: chief.name, botId: chief.id, kind: 'main', running: chief.mainRunning })}</div>}
         {sections.length === 0 && <p className="pd-side-empty">{query.trim() ? '没有匹配的会话' : '还没有其他会话'}</p>}
         {sections.map((section) => <section key={section.id} className="pd-side-section" aria-label={section.label}>
@@ -105,13 +105,13 @@ export default function ShellSidebar(props: Props) {
         <ul>{shownBots.map((bot) => <li key={bot.id} className="pd-row-wrap">
           <button type="button" className="pd-session" aria-current={(bot.id === 'chief' ? view === 'home' : view === 'chats' && bot.mainTaskId !== null && selectedId === bot.mainTaskId) ? 'page' : undefined} onClick={act(() => props.onOpenBot(bot))}>
             <BotAvatar name={bot.name} look={loadLook(bot.id)} size={20} />
-            <span className="pd-session-text"><span className="pd-session-title">{bot.name}</span><span className="pd-session-meta">{bot.inactive ? '已停用 · 只读' : bot.mainTaskId !== null ? '对话与详情' : '打开详情'}</span></span>
+            <span className="pd-session-text"><span className="pd-session-title">{bot.name}</span><span className="pd-session-meta">{bot.inactive ? '已停用 · 只读' : bot.id === 'chief' ? '派活和验收' : '开始对话'}</span></span>
           </button>
-          <button type="button" className={`pd-pin pd-bot-settings${botPage === bot.id ? ' is-pinned' : ''}`} aria-current={botPage === bot.id ? 'page' : undefined} aria-label={`${bot.name} 的设置`} title="Bot 设置" onClick={act(() => props.onBotSettings(bot.id))}><GearIcon size={13} /></button>
+          <button type="button" className={`pd-pin pd-bot-settings${botPage === bot.id ? ' is-pinned' : ''}`} aria-current={botPage === bot.id ? 'page' : undefined} aria-label={`${bot.name} 的设置`} title="机器人设置" onClick={act(() => props.onBotSettings(bot.id))}><GearIcon size={13} /></button>
           {bot.mainTaskId !== null && actions({ taskId: bot.mainTaskId, title: bot.name, botId: bot.id, kind: 'main', running: bot.mainRunning })}
         </li>)}</ul>
-        {shownBots.length === 0 && <p className="pd-side-empty">没有匹配的 Bot</p>}
-        <button type="button" className="pd-nav-row pd-quiet" onClick={act(props.onNewBot)}><PlusIcon /><span>新建 Bot</span></button>
+        {shownBots.length === 0 && <p className="pd-side-empty">没有匹配的机器人</p>}
+        <button type="button" className="pd-nav-row pd-quiet" onClick={act(props.onNewBot)}><PlusIcon /><span>新建机器人</span></button>
         <button type="button" className="pd-nav-row pd-quiet" aria-current={botPage === 'groups' ? 'page' : undefined} onClick={act(props.onNewGroup)}><GroupIcon /><span>新建群聊</span></button>
       </div>
     </div>
