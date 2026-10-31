@@ -43,24 +43,23 @@ export default function ReminderWorkspace({ token, onOpenTask }: { token: string
     try { result = await api('reminder-manage', request.current.input) } catch (e) { if (e && typeof e === 'object' && 'status' in e && Number(e.status) < 500) { request.current = null; setPending(false) } throw e }
     request.current = null; setPending(false); setReceipt(`${result.id} / ${result.state}`); await reload()
   }
-  return <section className="local-workspace" aria-label="提醒与例行任务结果">
-    <h3>提醒与例行任务结果</h3>
-    <p className="shell-muted">仅应用内记录；recorded / read 不代表微信、QQ、系统推送或用户实际收到。</p>
+  return <section className="local-workspace" aria-label="到点提醒与定时任务结果">
+    <h3>到点提醒与定时任务结果</h3>
     <button disabled={busy} onClick={() => void action(reload)}>刷新提醒和通知</button>
     {error && <p role="alert">{error}</p>}
     {data === null ? <p role="status">正在读取提醒…</p> : <>
       {data.items.length === 0 && <p>暂无通知记录</p>}
       {data.items.map(n => <article key={n.id} className="inbox-card">
-        <h4>{n.redacted ? '目标正文授权失效，内容隐藏' : n.title ?? '事项提醒'}</h4>
-        <p><time dateTime={n.recordedAt}>{n.recordedAt ? new Date(n.recordedAt).toLocaleString('zh-CN') : '记录时间未提供'}</time> · {n.status === 'read' ? '已读 · read' : n.status === 'recorded' ? '已记录（未读）· recorded' : n.status === 'unread' ? '已记录（未读）· unread' : n.status}</p>
-        <p>{n.redacted ? '当前权限不允许查看旧正文与原任务。' : n.taskId ? '例行任务执行结果，请到原任务核对；记录不代表执行成功。' : '关联事项到达提醒时间，请核对当前安排。'}</p>
-        {!n.redacted && n.taskId && <a href={`#task=${n.taskId}`} onClick={e => { if (onOpenTask) { e.preventDefault(); onOpenTask(n.taskId!, n.botId ?? 'chief') } }}>打开原任务</a>}
+        <h4>{n.redacted ? '目标正文授权失效，内容隐藏' : n.title ?? '提醒'}</h4>
+        <p><time dateTime={n.recordedAt}>{n.recordedAt ? new Date(n.recordedAt).toLocaleString('zh-CN') : '记录时间未提供'}</time> · {n.status === 'read' ? '已读' : '未读'}</p>
+        <p>{n.redacted ? '当前权限不允许查看旧正文与原任务。' : n.taskId ? '定时任务运行完了，打开原会话看结果。' : '到提醒时间了，看一下这件事。'}</p>
+        {!n.redacted && n.taskId && <a href={`#task=${n.taskId}`} onClick={e => { if (onOpenTask) { e.preventDefault(); onOpenTask(n.taskId!, n.botId ?? 'chief') } }}>打开原会话</a>}
         {n.status !== 'read' && <button disabled={busy} onClick={() => void action(async () => { await api('notification-read', { id: n.id }); await reload() })}>标记已读</button>}
-        <details className="inbox-detail"><summary>诊断</summary><pre>{JSON.stringify({ id: n.id, deliveryId: n.deliveryId, occurrenceId: n.occurrenceId, taskId: n.taskId, status: n.status, recordedAt: n.recordedAt, readAt: n.readAt, notice: n.notice }, null, 2)}</pre></details>
+        <details className="tech-info"><summary>技术信息</summary><pre>{JSON.stringify({ id: n.id, deliveryId: n.deliveryId, occurrenceId: n.occurrenceId, taskId: n.taskId, status: n.status, recordedAt: n.recordedAt, readAt: n.readAt, notice: n.notice }, null, 2)}</pre></details>
       </article>)}
       {data.next !== undefined && <button disabled={busy} onClick={() => void action(async () => { const next = await api<Inbox>('reminder-list', { cursor: data.next }); setData({ ...next, items: [...data.items, ...next.items] }) })}>加载更多通知</button>}
     </>}
-    <details className="shell-more"><summary>管理关联提醒与执行记录</summary>
+    <details className="tech-info"><summary>管理提醒</summary>
       <p>提醒绑定精确目标和版本；普通提醒不调用模型。审批、阻塞与跳过的动作在“需要你处理”中，保留原 Task 身份。</p>
     <form onSubmit={e => { e.preventDefault(); void action(async () => { if (!confirmed) throw Error('请确认时间与授权范围'); await execute({ command: 'create', targetRef: { type, id: targetId, sourceId }, targetVersion: Number(targetVersion), channel: 'inbox', confirmed: true, ...(mode === 'at' ? { at: value } : { offset: Number(value) }) }) }) }}>
       <label>提醒来源ID<input value={sourceId} onChange={e => { setSourceId(e.target.value); setConfirmed(false) }} required /></label>

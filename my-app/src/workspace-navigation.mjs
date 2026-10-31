@@ -1,18 +1,19 @@
 // Top-level destinations of the shell. "Home" is the Chief main session; 今天 moved into 事项.
 export const workspaceViews = [
-  { id: 'home', label: 'Chief', description: '和 Chief 对话，派活给其他 Bot' },
-  { id: 'chats', label: '会话', description: '和 Bot 或群聊对话' },
-  { id: 'items', label: '事项', description: '日历、自动化与执行记录；默认查看今天' },
-  { id: 'inbox', label: '通知', description: '需要你处理的事和事项提醒' },
-  { id: 'settings', label: '设置', description: '数据来源、连接状态与模型说明' },
+  { id: 'home', label: 'Chief', description: '和 Chief 对话，派活给其他机器人' },
+  { id: 'chats', label: '会话', description: '和机器人或群聊对话' },
+  { id: 'items', label: '事项', description: '日历、定时任务和执行记录' },
+  { id: 'inbox', label: '通知', description: '需要你处理的事和提醒' },
+  { id: 'settings', label: '设置', description: '连接、模型、自动化和偏好' },
 ]
 // Sub-tabs of 事项. Each stays mounted while hidden so drafts and pending requests survive a switch.
 export const itemTabs = [
   { id: 'calendar', label: '日历' },
-  { id: 'automation', label: '自动化' },
+  { id: 'routines', label: '定时任务' },
+  { id: 'runs', label: '执行记录' },
 ]
 /** Old Todo hashes remain valid but now land on the calendar without mounting a hidden Todo UI. */
-export const resolveItemTab = tab => tab === 'todos' ? 'calendar' : tab
+export const resolveItemTab = tab => tab === 'todos' ? 'calendar' : tab === 'automation' ? 'routines' : tab
 
 /** Narrow compatibility for old Todo links; never override a Bot/Task destination. */
 export function isLegacyTodoHash(hash) {

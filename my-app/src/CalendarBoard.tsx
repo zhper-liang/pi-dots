@@ -61,7 +61,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
     let response: Response
     try { response = await fetch(`/api/workspace/${path}`, { signal, method: input ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, ...(input ? { 'Content-Type': 'application/json' } : {}) }, ...(input ? { body: JSON.stringify(input) } : {}) }) }
     catch { const err = new Error('network'); err.name = 'NetworkError'; throw err }
-    const body = await response.json().catch(() => { const err = new Error('回执读取中断'); err.name = 'NetworkError'; throw err })
+    const body = await response.json().catch(() => { const err = new Error('结果读取中断，请核对上次操作。'); err.name = 'NetworkError'; throw err })
     if (!response.ok) { const err = new Error(body.error?.message ?? '操作没有成功，请稍后再试。'); err.name = response.status >= 500 ? 'NetworkError' : body.error?.code ?? String(response.status); if (isWorkspacePermissionError(Object.assign(err, { status: response.status })) && latestToken.current === token && !signal?.aborted) { clearProjection(true); setRefreshError('权限已失效，已隐藏旧数据。') }; throw err }
     return body.data as T
   }, [token])
@@ -89,7 +89,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       }
       permission.current = before.key
       if (before.local.find(source => source.id === 'local')?.authorized === false) {
-        clearProjection(true); setAuthorized(false); setRefreshError('当前来源权限已失效，已隐藏旧数据。'); return
+        clearProjection(true); setAuthorized(false); setRefreshError('这个日历的权限已失效，旧内容已隐藏。'); return
       }
       // The owner has implicit local access. Pagination and external full-scope rules remain unchanged.
       const pageAll = async (type: 'Event' | 'Todo') => {
@@ -112,7 +112,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
         try {
           const page = await api<{ items: Item[]; complete: boolean; stale?: boolean }>('external-query', { sourceId: source.id, start, end, timezone }, signal)
           if (!current()) return
-          if (!page.complete || page.stale) warn = '外部日程不完整，不代表空闲'
+          if (!page.complete || page.stale) warn = '外部日程未读全，请到原日历核对安排。'
           // R3: Todo-type sources (Google Tasks) show as due-day chips, never as timed blocks (D8).
           ;(source.itemType === 'Todo' ? extTodos : ext).push(...page.items.filter(item => !item.deletedAt).map(item => ({ ...item, sourceId: source.id })))
         } catch (error) {
@@ -120,7 +120,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
           if (isWorkspacePermissionError(error)) throw error
           // A failed source must not leave its previously authorized body on screen.
           setExternal(items => items.filter(item => item.sourceId !== source.id))
-          warn = '外部日程暂时无法核验，不代表空闲'
+          warn = '外部日程暂时没读到，请到原日历核对安排。'
         }
       }
       const after = await permissions()
@@ -214,7 +214,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
     try {
       const op = await api<Receipt | null>('operation', { requestId: pending.current.requestId, sourceId: 'local' })
       if (!current()) return
-      if (!op) { setCanRetry(true); setError('未查到原请求。可再次查询，或按原请求标识和原参数重试，不会重复创建。'); return }
+      if (!op) { setCanRetry(true); setError('没找到上次操作，点「按原请求重试」再试。'); return }
       if (op.state !== 'succeeded') { setError(`原请求状态：${op.state}，尚不能确认完成；请继续查询，勿新建请求。`); return }
       pending.current = null; setUnconfirmed(false); setPop(null); setNotice('已确认上次操作完成。'); onChanged?.(); void refresh(true)
     } catch (e) { if (current()) setError((e as Error).name === 'NetworkError' ? '仍无法连接，请稍后再查询。' : (e as Error).message) }
@@ -358,7 +358,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
     } else if (pop.kind === 'delete') {
       body = <>
         <h3 className="cal-dialog-heading">删除这条日程？</h3>
-        <p>「{pop.ev.title || '无标题'}」 {label(dayKey(pop.ev.s))} {hm(pop.ev.s)}–{hm(pop.ev.e)}。删除后不会影响关联的待办。</p>
+        <p>「{pop.ev.title || '无标题'}」 {label(dayKey(pop.ev.s))} {hm(pop.ev.s)}–{hm(pop.ev.e)}。删除后，关联的待办仍会保留。</p>
         <div className="cal-pop-actions"><button type="button" className="cal-btn is-danger-solid" disabled={busy || unconfirmed} onClick={() => void command({ sourceId: 'local', type: 'Event', action: 'delete', id: pop.ev.id, expectedVersion: pop.ev.version, confirmedDelete: true }, '已删除日程。')}>确认删除</button><button type="button" className="cal-btn" onClick={close}>取消</button></div></>
     } else {
       const p = pop
@@ -376,7 +376,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
         {unconfirmed && <button type="button" className="cal-btn" disabled={busy} onClick={() => void lookup()}>查询原请求结果</button>}
         {unconfirmed && canRetry && <button type="button" className="cal-btn" disabled={busy} onClick={() => { if (pending.current) void command(JSON.parse(pending.current.key), '已按原请求确认保存。') }}>按原请求重试</button>}
         <div className="cal-pop-actions"><button type="submit" className="cal-btn is-primary" disabled={busy || unconfirmed}>{busy ? '正在保存…' : '保存'}</button><button type="button" className="cal-btn" onClick={close}>取消</button></div>
-        <p className="cal-pop-hint">按本机时间显示；编辑保留日程原时区。普通日程不会自动执行 Bot。</p>
+        <p className="cal-pop-hint">按本机时间显示，编辑时保留日程原时区。</p>
       </form>
     }
     const title = pop.kind === 'create' ? '新建日程' : pop.kind === 'edit' ? (pop.moved ? '确认调整时间' : '编辑日程') : pop.kind === 'delete' ? '删除这条日程？' : pop.kind === 'conflict' ? '日程已变更，请重新确认' : pop.ev.title || '无标题'
@@ -401,7 +401,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
         {(['day', 'week', 'month'] as Mode[]).map(m => <button key={m} type="button" className={`cal-mode${mode === m ? ' is-active' : ''}`} aria-pressed={mode === m} onClick={() => setMode(m)}>{m === 'day' ? '日' : m === 'week' ? '周' : '月'}</button>)}
       </div>
     </header>
-    <div className="cal-legend" aria-label="来源图例">
+    <div className="cal-legend" aria-label="日历图例">
       {authorized && <span><i style={{ background: colors.local }} />本地日程</span>}
       {extSources.map(s => <span key={s}><i style={{ background: colors[s] }} />{sourceLabel(s)}{sourceInfo[s]?.readOnly && <em className="cal-legend-ro" style={{ fontStyle: 'normal', marginLeft: 4, padding: '0 4px', border: '1px solid var(--c-line)', borderRadius: 'var(--radius-sm)' }}>只读</em>}</span>)}
       {todos.some(t => t.due) && <span><i className="is-due" />待办截止</span>}

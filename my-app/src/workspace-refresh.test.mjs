@@ -169,6 +169,9 @@ const board = await readFile(new URL('./CalendarBoard.tsx', import.meta.url), 'u
 const local = await readFile(new URL('./LocalWorkspace.tsx', import.meta.url), 'utf8')
 const shell = await readFile(new URL('./UnifiedWorkspace.tsx', import.meta.url), 'utf8')
 const hook = await readFile(new URL('./useWorkspaceRefresh.ts', import.meta.url), 'utf8')
+const routines = await readFile(new URL('./BotRoutines.tsx', import.meta.url), 'utf8')
+const inbox = await readFile(new URL('./InboxPage.tsx', import.meta.url), 'utf8')
+const reminders = await readFile(new URL('./ReminderWorkspace.tsx', import.meta.url), 'utf8')
 
 test('consumers use one shared hook, preserve mounted drafts and scroll, and remove normal manual refresh', () => {
   for (const source of [board, local]) {
@@ -184,7 +187,10 @@ test('consumers use one shared hook, preserve mounted drafts and scroll, and rem
   assert.match(local, /await refresh\(true\); setReceipt\(op\)/)
   assert.doesNotMatch(local, /if \(await refresh\(/)
   assert.match(shell, /<BotRoutines bots=\{routineChoices\} refreshKey=\{refreshKey\} onChanged=\{onChanged\}/)
-  assert.match(shell, /hidden=\{routineBot !== bot.id\}/)
+  assert.equal((shell.match(/<BotRoutines /g) ?? []).length, 1)
+  assert.doesNotMatch(shell, /routineBot|items-panel-automation|自动化视图/)
+  assert.match(shell, /<ScheduleWorkspace token=\{token\} view="runs"/)
+  assert.match(shell, /<details className="tech-info"><summary>技术信息<\/summary><ScheduleWorkspace token=\{token\} view="schedules"/)
   assert.doesNotMatch(shell, /setInterval|refreshRoutines/)
 })
 
@@ -197,4 +203,33 @@ test('hook scopes reads to render identity and cleans up visibility/focus/online
   assert.match(hook, /instance.dispose\(\)/)
   assert.match(hook, /document.visibilityState !== 'hidden'/)
   assert.match(hook, /navigator.onLine !== false/)
+})
+
+
+test('one routine list spans robots, defaults new routines to Chief, and opens runs with their robot identity', () => {
+  assert.equal((routines.match(/data\.items\.filter\(item => item\.actionSpec\?\.botId\)/g) ?? []).length, 2)
+  assert.doesNotMatch(routines, /item\.actionSpec\?\.botId === botId|props\.botId|botName/)
+  assert.match(routines, /routine\?\.actionSpec\?\.botId \?\? 'chief'/)
+  assert.match(routines, /已删除的机器人/)
+  assert.match(routines, /const readOnly = bot\?\.status === 'inactive'/)
+  assert.match(routines, /disabled=\{busy \|\| !!pending \|\| readOnly/)
+  assert.match(routines, /onOpenTask\(o\.taskId!, r\.actionSpec!\.botId\)/)
+  assert.match(routines, /onOpenTask\(data\.receipt\.taskId, routine\.actionSpec!\.botId\)/)
+  assert.match(routines, /key=\{props\.token\}/)
+})
+
+test('notifications keep attention and reminders, collapse technical details, and preserve proposal-only reuse', () => {
+  assert.match(inbox, />需要你处理\{/)
+  assert.match(inbox, />提醒<\/h2>/)
+  assert.match(inbox, /proposalTaskId === undefined && <section/)
+  assert.match(inbox, /proposalTaskId !== undefined && items\.length === 0/)
+  assert.match(inbox, /<ReminderWorkspace token=\{token\} onOpenTask=\{onOpenTask\}/)
+  for (const source of [inbox, reminders]) {
+    assert.match(source, /<details className="tech-info"><summary>技术信息<\/summary>/)
+    assert.doesNotMatch(source, /<summary>诊断<\/summary>|仅应用内记录|工具组允许直接执行/)
+  }
+  assert.match(reminders, /<details className="tech-info"><summary>管理提醒<\/summary>/)
+  assert.match(reminders, /定时任务运行完了，打开原会话看结果。/)
+  assert.match(reminders, /到提醒时间了，看一下这件事。/)
+  assert.doesNotMatch(shell, /关于通知状态/)
 })

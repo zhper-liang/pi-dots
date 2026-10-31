@@ -41,7 +41,7 @@ test('calendar phone controls retain 44px targets, stack pickers, and respect re
 })
 
 test('Todo navigation and today block are hidden without deleting queries, due chips or backend data', () => {
-  assert.deepEqual(itemTabs.map(tab => tab.id), ['calendar', 'automation'])
+  assert.deepEqual(itemTabs, [{ id: 'calendar', label: '日历' }, { id: 'routines', label: '定时任务' }, { id: 'runs', label: '执行记录' }])
   assert.doesNotMatch(board, /LocalWorkspace|items-due-today|todayDueTodos|cal-pane-switch/)
   assert.doesNotMatch(shell, /LocalWorkspace|items-panel-todos/)
   assert.match(board, /pageAll\('Todo'\)/)
@@ -49,19 +49,26 @@ test('Todo navigation and today block are hidden without deleting queries, due c
   assert.match(board, /while \(cursor !== undefined\)/)
 })
 
-test('legacy Todo hashes land on a selected and active calendar with an explicit compatibility message', () => {
+test('three item tabs retain keyboard navigation and old Todo links select the calendar without extra notice', () => {
   assert.equal(resolveItemTab('todos'), 'calendar')
-  assert.equal(resolveItemTab('automation'), 'automation')
-  assert.equal(nextItemTab('todos', 'ArrowRight'), 'automation')
-  assert.equal(nextItemTab('calendar', 'ArrowLeft'), 'automation')
-  assert.equal(nextItemTab('automation', 'Home'), 'calendar')
-  assert.equal(nextItemTab('calendar', 'End'), 'automation')
+  assert.equal(resolveItemTab('automation'), 'routines')
+  assert.equal(resolveItemTab('runs'), 'runs')
+  assert.equal(nextItemTab('todos', 'ArrowRight'), 'routines')
+  assert.equal(nextItemTab('calendar', 'ArrowLeft'), 'runs')
+  assert.equal(nextItemTab('routines', 'ArrowRight'), 'runs')
+  assert.equal(nextItemTab('runs', 'ArrowRight'), 'calendar')
+  assert.equal(nextItemTab('runs', 'Home'), 'calendar')
+  assert.equal(nextItemTab('calendar', 'End'), 'runs')
   assert.match(shell, /const visibleItemTab = resolveItemTab\(itemTab\)/)
-  assert.match(shell, /legacyTodoHash && visibleItemTab === 'calendar'/)
+  assert.doesNotMatch(shell, /legacyTodoHash|独立待办入口已收起/)
   assert.match(shell, /onItemTab\('calendar'\); onView\('items'\)/)
   assert.match(shell, /hidden=\{visibleItemTab !== 'calendar'\}/)
   assert.match(shell, /active=\{view === 'items' && visibleItemTab === 'calendar'\}/)
   assert.match(shell, /aria-selected=\{visibleItemTab === tab.id\}/)
+  for (const tab of itemTabs) {
+    assert.ok(shell.includes(`id="items-panel-${tab.id}" role="tabpanel" aria-labelledby="items-tab-${tab.id}"`))
+    assert.ok(shell.includes(`hidden={visibleItemTab !== '${tab.id}'}`))
+  }
 })
 
 test('calendar retains requestId recovery, source filtering, pagination and expected-version conflict handling', () => {

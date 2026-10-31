@@ -80,38 +80,37 @@ export default function InboxPage({ token, active, onCount, onOpenTask, proposal
         const card = inboxCard(item), actions = cardActions(card)
         return <li key={key} className="inbox-card">
           <SystemCard card={card} title={item.summary} meta={`${item.botName}${item.createdAt ? ` · ${new Date(item.createdAt).toLocaleString('zh-CN')}` : ''}`}
-            state={outcome?.state === 'busy' ? '正在提交…' : item.kind === 'skipped' ? '已跳过' : undefined} error={outcome?.state === 'unknown' ? '结果未确认，请打开任务查看。' : outcome?.state === 'error' ? outcome.message : undefined}
+            state={outcome?.state === 'busy' ? '正在提交…' : item.kind === 'skipped' ? '已跳过' : undefined} error={outcome?.state === 'unknown' ? '没确认结果，打开会话看一下。' : outcome?.state === 'error' ? outcome.message : undefined}
             actions={<>
               {actions.includes('answer') && hash && <button type="button" className="primary" onClick={() => onOpenTask(item.taskId!, item.botId)}>去补充</button>}
               {actions.includes('approve') && <button type="button" className="primary" disabled={locked} onClick={() => void act(item, true)}>同意</button>}
               {actions.includes('always') && <button type="button" disabled={locked} onClick={() => { if (window.confirm(ALWAYS_WARNING)) void act(item, true, true) }}>以后直接做</button>}
               {actions.includes('reject') && <button type="button" disabled={locked} onClick={() => void act(item, false)}>拒绝</button>}
-              {hash && <a href={hash} onClick={e => { e.preventDefault(); onOpenTask(item.taskId!, item.botId) }}>打开任务</a>}
+              {hash && <a href={hash} onClick={e => { e.preventDefault(); onOpenTask(item.taskId!, item.botId) }}>打开会话</a>}
             </>}>
             <p>{notificationReason(item)}</p>
-            <details className="inbox-detail"><summary>诊断</summary><pre>{JSON.stringify({ taskId: item.taskId, botId: item.botId, approvalId: item.approvalId, blockerId: item.blockerId, entryId: item.entryId, requestId: item.requestId, ...item.detail }, null, 2)}</pre></details>
+            <details className="tech-info"><summary>技术信息</summary><pre>{JSON.stringify({ taskId: item.taskId, botId: item.botId, approvalId: item.approvalId, blockerId: item.blockerId, entryId: item.entryId, requestId: item.requestId, ...item.detail }, null, 2)}</pre></details>
           </SystemCard>
         </li>
       })}</ul>}
     </section>
     {proposalTaskId === undefined && <section aria-labelledby={`${sectionId}-reminders`}>
-      <h2 id={`${sectionId}-reminders`} className="inbox-heading">事项提醒</h2>
+      <h2 id={`${sectionId}-reminders`} className="inbox-heading">提醒</h2>
     {findings.length > 0 && <>
-      <h3 id={`${sectionId}-findings`}>主动提醒</h3>
+      <h3 id={`${sectionId}-findings`}>日程与待办提醒</h3>
       <ul className="inbox-list" aria-labelledby={`${sectionId}-findings`}>{findings.map(item => <li key={keyOf(item)} className="inbox-card">
         <FindingCard compact token={token} finding={{ id: item.findingId!, detector: String(item.detail.detector ?? ''), summary: item.summary, lines: item.detail.lines as string[] | undefined, state: item.detail.state as string | undefined, assist: item.detail.assist === true, assistTaskId: (item.detail.assistTaskId as number | null | undefined) ?? null }} onOpenTask={onOpenTask} />
         <p className="shell-muted">{item.createdAt ? new Date(item.createdAt).toLocaleString('zh-CN') : '记录时间未提供'}</p>
-        <details className="inbox-detail"><summary>诊断</summary><pre>{JSON.stringify({ taskId: item.taskId, findingId: item.findingId, ...item.detail }, null, 2)}</pre></details>
-        {item.taskId !== null && <a href={taskHash(item)!} onClick={e => { e.preventDefault(); onOpenTask(item.taskId!, item.botId) }}>打开相关任务</a>}
+        <details className="tech-info"><summary>技术信息</summary><pre>{JSON.stringify({ taskId: item.taskId, findingId: item.findingId, ...item.detail }, null, 2)}</pre></details>
+        {item.taskId !== null && <a href={taskHash(item)!} onClick={e => { e.preventDefault(); onOpenTask(item.taskId!, item.botId) }}>打开相关会话</a>}
       </li>)}</ul>
     </>}
     {records.length > 0 && <>
-      <h3 id={`${sectionId}-auto`}>最近自动执行</h3>
+      <h3 id={`${sectionId}-auto`}>机器人自动做的事</h3>
       <ul className="inbox-list" aria-labelledby={`${sectionId}-auto`}>{records.map(item => <li key={keyOf(item)} className="inbox-card">
-        <p>工具组允许直接执行；撤销仍需核验当前版本。</p>
-        <details className="inbox-detail"><summary>诊断</summary><pre>{JSON.stringify({ taskId: item.taskId, requestId: item.requestId, ...item.detail }, null, 2)}</pre></details>
+        <details className="tech-info"><summary>技术信息</summary><pre>{JSON.stringify({ taskId: item.taskId, requestId: item.requestId, ...item.detail }, null, 2)}</pre></details>
         <AutoAppliedCard token={token} requestId={item.requestId!} summary={item.summary} undone={item.detail.undone === true} createdAt={item.createdAt} />
-        {item.taskId !== null && <a href={taskHash(item)!} onClick={e => { e.preventDefault(); onOpenTask(item.taskId!, item.botId) }}>打开任务</a>}
+        {item.taskId !== null && <a href={taskHash(item)!} onClick={e => { e.preventDefault(); onOpenTask(item.taskId!, item.botId) }}>打开会话</a>}
       </li>)}</ul>
     </>}
       <ReminderWorkspace token={token} onOpenTask={onOpenTask} />
