@@ -1,3 +1,4 @@
+import { assignMockResource } from './fixtures/authorized-task-store.mjs'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import test from 'node:test'
@@ -356,6 +357,7 @@ test('03 new capability is not applied by Bot edit or ordinary message; fresh co
   const { store: s } = await fixture(t)
   await edit(s, { tools: [], resources: [] })
   const task = await s.create({ botId: 'calendar' })
+  await assignMockResource(s, 'calendar')
   await edit(s, { tools: [CALENDAR_TOOL], resources: ['mock:personal'] })
   await s.send(task.taskId, '请用最新配置并授权'); const before = await idle(s, task.taskId)
   assert.deepEqual(before.parameters.tools, []); assert.deepEqual(before.configRef, task.configRef)

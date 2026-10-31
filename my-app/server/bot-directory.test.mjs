@@ -1,3 +1,5 @@
+import { assignMockResource } from './fixtures/authorized-task-store.mjs'
+import { groupTools } from './tool-groups.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -40,6 +42,7 @@ async function fixture(t, options = {}) {
   return { dir, file, open, close, store: await open() }
 }
 async function assignBotTools(store, botId, tools, resources) {
+  if (resources.includes('mock:personal')) await assignMockResource(store, botId)
   const { bot } = await store.getBotConfiguration(botId)
   return store.updateBotConfiguration(botId, { requestId: `fixture-tools-${botId}`, expectedVersion: bot.configRef.version, description: bot.description, tools, resources })
 }
@@ -115,7 +118,7 @@ test('SQLite failed Bot commit publishes neither identity nor receipt; retry aft
   assert.equal(next.bots().length, 4)
 })
 
-test('creation accepts bounded ordinary settings but legacy profiles grant no capabilities; no credentials persist', async (t) => {
+test('creation accepts bounded ordinary settings but legacy profiles use the same default capabilities; no credentials persist', async (t) => {
   const { store } = await fixture(t, { bots: listBots(config) })
   for (const invalid of [null, [], {}, { ...creation(), tools: [] }, { ...creation(), credentials: 'secret' }, { ...creation(), name: ' ' }, { ...creation(), description: 'x'.repeat(2001) }, { ...creation(), requestId: '__proto__' }, { ...creation(), requestId: 'constructor' }, { ...creation(), profile: 'chief' }, { ...creation(), parameters: { tools: [] } }, { ...creation(), parameters: { toolResources: ['other'] } }, { ...creation(), parameters: { model: { id: 'x', baseUrl: 'https://evil.invalid' } } }, { ...creation(), parameters: { maxOutputTokens: 0 } }]) await assert.rejects(store.createBot(invalid))
   assert.equal(store.bots().length, 3)
@@ -123,8 +126,8 @@ test('creation accepts bounded ordinary settings but legacy profiles grant no ca
   const calendar = (await store.createBot(creation('模拟日程专家', 'request-0002', 'mock-calendar'))).bot
   for (const bot of [general, calendar]) {
     assert.equal(bot.capabilityDefaultsVersion, 2)
-    assert.deepEqual(bot.defaults.tools, [])
-    assert.deepEqual(bot.defaults.toolResources, [])
+    assert.deepEqual(bot.defaults.tools, [...groupTools('todos'), ...groupTools('history')])
+    assert.deepEqual(bot.defaults.toolResources, ['workspace:local'])
   }
   assert.equal(general.defaults.maxOutputTokens, 128)
   assert.equal(JSON.stringify(await store.harness.snapshot(BotDirectory, context)).includes(config.apiKey), false)
@@ -137,8 +140,8 @@ test('general specialists cannot inherit Chief management tools; reordered setti
   const first = await store.createBot(input)
   const retry = await store.createBot({ ...input, parameters: { callLimits: { toolCalls: 2, modelCalls: 3 }, maxOutputTokens: 128, thinkingLevel: 'off' } })
   assert.equal(retry.created, false); assert.equal(retry.bot.id, first.bot.id)
-  assert.deepEqual(first.bot.defaults.tools, [])
-  assert.deepEqual(first.bot.defaults.toolResources, [])
+  assert.deepEqual(first.bot.defaults.tools, [...groupTools('todos'), ...groupTools('history')])
+  assert.deepEqual(first.bot.defaults.toolResources, ['workspace:local'])
 })
 
 test('authenticated Bot HTTP creation, idempotent retry, filtering and every scoped Task control reject wrong Bot', async (t) => {

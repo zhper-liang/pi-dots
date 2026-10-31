@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto'
 import { assertBotActive, BotDirectory, createDirectoryBot } from './bot-directory.mjs'
 import { ToolAccess, toolCatalog } from './tools.mjs'
 import { TaskInputError, taskParameters } from './task-config.mjs'
-import { PolicyRules } from './policy.mjs'
+import { DEFAULT_CAPABILITIES, enableAtCreation } from './capability-assignments.mjs'
+import { MOCK_RESOURCE } from './resource-sharing.mjs'
 import { describeGroups, toolLabel } from './tool-group-settings.mjs'
 
 const copy = (x) => JSON.parse(JSON.stringify(x))
@@ -16,9 +17,9 @@ const object = (x) => x && typeof x === 'object' && !Array.isArray(x)
 const names = (access) => toolCatalog({ externalTools: access?.externalMcp?.tools ?? [] }).map((t) => t.name).filter(n => !MANAGEMENT_TOOLS.includes(n))
 export const supportedResources = ['mock:personal', 'workspace:local']
 // S1 + R3: assignable = supported + Feishu binding + live multi-source providers (Google), with titles.
-async function availableResourceList(tx) {
+export async function availableResourceList(tx) {
   const binding = (await tx.doc(FeishuCalendar)).binding, external = await externalWorkspaceResources(tx)
-  const resources = [...supportedResources, ...(binding ? [binding.resource, `workspace:feishu:${hash([binding.connectionId, binding.calendarId])}`] : []), ...external.map(e => e.resource)]
+  const resources = [...supportedResources.filter(resource => resource !== MOCK_RESOURCE), ...(binding ? [binding.resource, `workspace:feishu:${hash([binding.connectionId, binding.calendarId])}`] : []), ...external.map(e => e.resource)]
   return { resources, ...(external.length ? { resourceLabels: Object.fromEntries(external.map(e => [e.resource, { title: e.title || e.label, note: e.readOnly ? `${e.label} · 只读` : e.label }])) } : {}) }
 }
 export function initializeConfiguration(directory, access) {
@@ -72,7 +73,7 @@ export async function changeConfiguration(tx, botId, input, { models }) {
       await assertBotActive(tx, botId)
       if (typeof input.expectedVersion !== 'string' || input.expectedVersion !== bot.configRef.version) fail(409, 'CONFIG_VERSION_CONFLICT', '配置已更新；请重新加载并比较后再保存。')
       // S1: available tools = installed tools; available resources = supportedResources + feishu binding.
-      const availableTools = names(a), availableResources = (await availableResourceList(tx)).resources
+      const availableTools = names(a), availableResources = [...new Set([...(await availableResourceList(tx)).resources, ...a.assignments[botId].resources])]
       if (typeof input.description !== 'string' || input.description.length > 2000 || !subset(input.tools, availableTools) || !subset(input.resources, availableResources)) fail(400, 'CAPABILITY_NOT_GRANTED', '职责无效或工具/资源不可用。')
       const defaults = taskParameters(input.parameters, copy(bot.defaults))
       if (defaults.mode === 'model' && !models.some((m) => m.id === defaults.model.id)) fail(400, 'MODEL_NOT_CONFIGURED', '仅可选择服务端已配置的模型。')
@@ -80,6 +81,11 @@ export async function changeConfiguration(tx, botId, input, { models }) {
       const history = d.configurations[botId]
       const next = { ...copy(bot), description: input.description.trim(), defaults,
         configRef: { botId, version: `config-${history.length + 1}-${hash({ input, previous: bot.configRef }).slice(0, 12)}` } }
+      const previousResources = a.assignments[botId].resources
+      const removed = previousResources.filter(resource => resource !== MOCK_RESOURCE && !input.resources.includes(resource))
+      const added = input.resources.filter(resource => !previousResources.includes(resource))
+      a.excludedResources ??= {}
+      a.excludedResources[botId] = [...new Set([...(a.excludedResources[botId] ?? []), ...removed])].filter(resource => !added.includes(resource))
       a.assignments[botId] = { tools: [...input.tools], resources: [...input.resources] }
       d.items[d.items.findIndex((b) => b.id === botId)] = next
       history.push({ ...copy(next), source: 'authenticated-user', requestId: input.requestId, savedAt: new Date().toISOString() })
@@ -108,9 +114,9 @@ export function configurationApi({ harness, context, catalog, models, refreshMod
       initializeConfiguration(d, a)
       const bot = d.items.find((b) => b.id === botId)
       if (!bot) fail(404, 'BOT_NOT_FOUND', '指定的Bot不存在。')
-      const rules = (await tx.doc(PolicyRules)).items, assigned = a.assignments[botId], revoked = a.revoked[botId] ?? []
+      const assigned = a.assignments[botId], revoked = a.revoked[botId] ?? []
       return copy({ bot, versions: d.configurations[botId], installed: names(a), toolLabels: Object.fromEntries(names(a).map((n) => [n, toolLabel(n)])),
-        toolGroups: describeGroups({ rules, botId, assigned: assigned.tools, revoked, mainSession: botId !== 'group' }),
+        toolGroups: describeGroups({ botId, assigned: assigned.tools, revoked, mainSession: botId !== 'group' }),
         assigned, revoked,
         models: models.map((m) => ({ id: m.id, provider: m.provider })), ...await availableResourceList(tx),
         audit: d.managementAudit.filter((e) => !e.botId || e.botId === botId) })
@@ -129,14 +135,14 @@ export function configurationApi({ harness, context, catalog, models, refreshMod
   return { getBotConfiguration: read, updateBotConfiguration: (id, input) => change(id, input) }
 }
 
-export async function createConfiguredBot(tx, parsed, configuredModels) {
+export async function createConfiguredBot(tx, parsed, configuredModels, catalog = []) {
   const liveDirectory = await tx.doc(BotDirectory)
   const directory = copy(liveDirectory)
   const access = await tx.doc(ToolAccess)
   const created = createDirectoryBot(directory, parsed)
   if (created.created && created.bot.defaults.mode === 'model' && !configuredModels.some((m) => m.id === created.bot.defaults.model.id)) throw new TaskInputError(400, 'MODEL_NOT_CONFIGURED', '仅可选择已配置模型。')
   if (created.created) {
-    // Creation is blank; subsequent authenticated capability assignments are explicit.
+    // Seed version 1 before applying the selected capabilities to the live directory.
     directory.items[directory.items.findIndex((b) => b.id === created.bot.id)] = JSON.parse(JSON.stringify(created.bot))
     directory.requests[parsed.requestId].bot = JSON.parse(JSON.stringify(created.bot))
     initializeConfiguration(directory, access)
@@ -144,5 +150,14 @@ export async function createConfiguredBot(tx, parsed, configuredModels) {
     directory.managementAudit.push({ id: directory.managementAudit.length + 1, botId: created.bot.id, type: 'bot-created', source: 'authenticated-user', createdAt: new Date().toISOString(), configRef: JSON.parse(JSON.stringify(created.bot.configRef)) })
   }
   Object.assign(liveDirectory, directory)
-  return JSON.parse(JSON.stringify(created))
+  if (created.created) {
+    for (const id of parsed.capabilities ?? DEFAULT_CAPABILITIES) await enableAtCreation(tx, created.bot.id, id, catalog)
+    const bot = liveDirectory.items.find(item => item.id === created.bot.id), assigned = access.assignments[bot.id]
+    bot.defaults.tools = [...assigned.tools]
+    bot.defaults.toolResources = [...assigned.resources]
+    liveDirectory.requests[parsed.requestId].bot.defaults = copy(bot.defaults)
+    liveDirectory.configurations[bot.id][0].defaults = copy(bot.defaults)
+    created.bot = bot
+  }
+  return copy(created)
 }

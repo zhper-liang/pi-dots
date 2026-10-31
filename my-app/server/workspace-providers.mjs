@@ -1,3 +1,4 @@
+import { shareWithBots } from './resource-sharing.mjs'
 import { defineDoc } from '@earendil-works/pi-durable'
 import { payloadHash } from './workspace-schema.mjs'
 
@@ -25,6 +26,7 @@ export async function registerExternalSource(tx, { sourceId, title, accountKey, 
   const index = await tx.doc(ExternalSourceIndex)
   if (!index.items[sourceId] && Object.keys(index.items).length >= 1000) throw new Error('External source index is full')
   index.items[sourceId] = { provider: provider.id, title: label(title), accountKey, authEpoch, readOnly }
+  await shareWithBots(tx, ['workspace:' + sourceId])
   return { ...index.items[sourceId] }
 }
 export async function dropExternalSources(tx, predicate) {

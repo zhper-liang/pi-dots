@@ -27,7 +27,7 @@ test('T09 inbox weekly/monthly summaries match the actual approval card labels',
     assert.equal(ruleText(rule), expected)
     assert.equal(ruleText(rule), ruleLabel(rule))
     const args = { title: '周期整理', rule }
-    const summary = `日程助理想新建例行任务「周期整理」（${expected}）`
+    const summary = `日程助理想新建定时任务「周期整理」（${expected}）`
     assert.equal(summarizeApproval('日程助理', 'routine_propose', args), summary)
     const inbox = await buildInbox({ bots: [{ id: 'calendar', name: '日程助理' }], pendingOperations: async () => ({ items: [] }), listTasks: async () => [{ taskId: 17, bot: { id: 'calendar', name: '日程助理' }, approvals: { items: [{ id: 23, toolName: 'routine_propose', status: 'pending', arguments: args }] } }] })
     assert.equal(inbox.items.length, 1)
@@ -139,7 +139,7 @@ for (const [name, rule, dueAt] of [
   const [mirror] = mirrorRows(main, originalId)
   assert.equal(mirrorRows(main, originalId).length, 1)
   assert.deepEqual([mirror.botId, mirror.mirrorKind, mirror.live], ['calendar', 'finished', 'succeeded'])
-  assert.match(mirror.summary, /例行任务已完成/)
+  assert.match(mirror.summary, /定时任务已完成/)
   assert.equal(mirrorRows((await f.request(`/api/tasks/${mainIds.chief}`)).task, originalId).length, 0)
   assert.equal(mirrorRows((await f.request(`/api/tasks/${mainIds.todo}`)).task, originalId).length, 0)
   // Only a link card crosses conversations; source content stays permission-filtered in its Task.

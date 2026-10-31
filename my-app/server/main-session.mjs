@@ -26,7 +26,7 @@ const digestSource = card => ({ bot: { id: card.bot.id }, kind: card.kind,
   workspaceUsedTools: workspaceUsedTools(card), workspaceUsedResources: workspaceUsedResources(card),
   workspaceUsedReadScopes: copy(card.workspaceUsedReadScopes ?? {}), externalMcpUsedRefs: copy(card.externalMcpUsedRefs ?? []) })
 
-export const MAIN_SYSTEM_PROMPT = '\n这是你的主会话：可直接使用当前Bot已分配的工具完成工作。较长执行或需要等待的工作，用task_create派给自己的独立任务，不要在这里等待结果；进度用task_status查看。用户想定期或在某事发生时自动做某事，用routine_propose为自己创建例行任务；默认直接执行，规则或全局暂停可能要求确认。没有工具回执不得声称已执行。'
+export const MAIN_SYSTEM_PROMPT = '\n这是你的主会话：可直接使用当前Bot已分配的工具完成工作。较长执行或需要等待的工作，用task_create派给自己的独立任务，不要在这里等待结果；进度用task_status查看。用户想定期或在某事发生时自动做某事，用routine_propose为自己创建例行任务；直接执行，全局暂停时要求确认。没有工具回执不得声称已执行。'
 
 // D-18: added only when this Bot has collaborators_list + task_assign (Chief hands work to a Bot it just created).
 export const MAIN_DELEGATION_PROMPT = '\n要把工作交给另一个Bot（包括刚用bot_manage新建的）：先用collaborators_list确认对方botId，再用task_create派一个任务，目标里写明交给哪个Bot（botId）和要它做什么；若当前工具集中有task_assign，可用它收取结果。只能声称工具回执确认的执行结果。'

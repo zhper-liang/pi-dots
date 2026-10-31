@@ -1,3 +1,4 @@
+import { groupTools } from './tool-groups.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -55,7 +56,7 @@ test('T6-01 a name alone creates a Bot, on the page and through Chief, with no c
       assert.equal(response.status, 201); assert.equal((await response.json()).bot.description, '')
     }
   } finally { server.closeAllConnections(); await new Promise(r => server.close(r)) }
-  // Chief can still create by name alone; business capabilities remain unassigned.
+  // Chief uses the same default capabilities as HTTP creation.
   const chiefMain = (await s.mainSessions()).chief
   state.byTask.set(chiefMain, [turn(['bot_manage', { action: 'create', name: '周报小助手' }]), text('建好了')])
   await s.send(chiefMain, '建一个写周报的 Bot')
@@ -63,8 +64,8 @@ test('T6-01 a name alone creates a Bot, on the page and through Chief, with no c
   const receipt = chief.messages.find(m => m.toolName === 'bot_manage').result
   assert.equal(receipt.ok, true); assert.equal(receipt.data.created, true)
   assert.equal(receipt.data.bot.description, '')
-  assert.deepEqual(receipt.data.bot.defaults.tools, [])
-  assert.deepEqual(receipt.data.bot.defaults.toolResources, [])
+  assert.deepEqual(receipt.data.bot.defaults.tools, [...groupTools('todos'), ...groupTools('history')])
+  assert.deepEqual(receipt.data.bot.defaults.toolResources, ['workspace:local'])
   assert.equal(chief.approvals.items.length, 0)
   assert.ok((await s.mainSessions())[receipt.data.bot.id])
 }))
@@ -82,7 +83,7 @@ test('R1 names never infer a personality or capabilities, and blank creation ret
 }))
 
 test('R1 a new Bot starts blank and uses local tools only after explicit configuration', () => fixture(async ({ s }) => {
-  const bot = (await s.createBot({ name: '本地助理', requestId: 'onboard-no-pool' })).bot
+  const bot = (await s.createBot({ capabilities: [], name: '本地助理', requestId: 'onboard-no-pool' })).bot
   assert.equal(bot.capabilityDefaultsVersion, 2)
   assert.deepEqual(bot.defaults.tools, []); assert.deepEqual(bot.defaults.toolResources, [])
   const task = await s.create({ botId: bot.id })
@@ -100,8 +101,8 @@ test('T6-04 creation returns the Bot\'s main session; it opens empty (no suggest
   const main = await s.get(mainTaskId)
   assert.deepEqual([main.kind, main.bot.id], ['main', bot.id])
   assert.deepEqual(main.messages, [])
-  assert.deepEqual(main.toolSets.authorized, [])
-  assert.deepEqual(main.toolSets.resources, [])
+  assert.deepEqual([...main.toolSets.authorized].sort(), [...bot.defaults.tools].sort())
+  assert.deepEqual(main.toolSets.resources, ['workspace:local'])
   assert.equal((await s.createBot({ name: '会议助手', requestId: 'onboard-main' })).mainTaskId, mainTaskId)
 }))
 

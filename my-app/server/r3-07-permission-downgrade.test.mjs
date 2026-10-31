@@ -10,8 +10,7 @@ import { GoogleAccount } from './google-account.mjs'
 import { createWorkspaceRepository } from './workspace-repository.mjs'
 import { seedSourceGrant, workspaceSourceReadable } from './workspace-grants.mjs'
 import { externalSourceId, registerExternalSource } from './workspace-providers.mjs'
-import { decide, addRule, setGroupMode, PolicyRules, itemTypeOf } from './policy.mjs'
-import { describeGroups } from './tool-group-settings.mjs'
+import { decide, addRule, itemTypeOf } from './policy.mjs'
 import { TOOL_GROUPS } from './tool-groups.mjs'
 import { ToolAccess } from './tools.mjs'
 import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
@@ -50,12 +49,12 @@ test('R3-07 D14 Feishu: bound = usable by an assigned Bot (read and write, no gr
   assert.deepEqual((await s.workspace.externalSources({})).sources, [])
   assert.ok((await resourcesOf(s)).every(r => !r.startsWith('workspace:feishu:')), 'every Bot loses the Feishu source')
   assert.equal((await call('workspace.list', { sourceId, type: 'Event', limit: 5, ...window })).error.message, 'Tool not available', 'the open session loses the tool')
-  // Rebind: the source is usable again at once, but no Bot gets it back without a new assignment.
+  // Rebind: schedule-enabled Bots regain the source without a separate assignment.
   await s.feishuCalendar.manage({ action: 'bind', calendarId: 'isolated-calendar', confirm: true })
   assert.equal((await s.workspace.externalSources({})).sources[0].authorized, true)
-  assert.ok((await resourcesOf(s)).every(r => !r.startsWith('workspace:feishu:')))
-  assert.equal((await call('workspace.prepare_change', { sourceId, requestId: rid('after-rebind'), action: 'create', change: { arguments: eventArgs } })).error.message, 'Tool not available')
-  assert.equal(writes.length, 1)
+  assert.ok((await resourcesOf(s)).includes(`workspace:${sourceId}`))
+  assert.equal((await call('workspace.prepare_change', { sourceId, requestId: rid('after-rebind'), action: 'create', change: { arguments: eventArgs } })).state, 'succeeded')
+  assert.equal(writes.length, 2)
 }))
 
 test('R3-07 D14 Feishu upgrade: an undecided pre-D14 grant becomes usable on restart; a revoked one stays revoked', async () => {
@@ -110,55 +109,17 @@ test('R3-07 D14 Google: a discovered source seeded through the hook is usable at
   } finally { await s.close(); await google.close(); await fake.close(); await rm(dir, { recursive: true, force: true }) }
 })
 
-test('R3-07 D15: with 日历与日程 on 先问, a schedule change through the workspace tools waits; todo writes are unaffected', async () => externalFixture(async ({ store: s, sourceId, writes }) => {
-  await assign(s, 'calendar', [`workspace:${sourceId}`, 'workspace:local'])
-  await s.switchGroup('calendar', { groupId: 'calendar', mode: 'ask', requestId: rid('calendar-ask') })
-  const view = (await s.getBotConfiguration('calendar')).toolGroups, group = id => view.find(g => g.id === id)
-  assert.deepEqual([group('calendar').mode, group('calendar').switchable, group('todos').mode], ['ask', true, 'allow'])
-  const feishu = await client(s, 'calendar', sourceId), local = await client(s, 'calendar', 'local')
-  const waiting = await feishu('workspace.prepare_change', { sourceId, requestId: rid('feishu-ask'), action: 'create', change: { arguments: eventArgs } })
-  assert.equal(waiting.state, 'awaiting_confirmation'); assert.equal(writes.length, 0)
-  const event = await local('workspace.prepare_change', { sourceId: 'local', requestId: rid('local-event'), action: 'create', change: { type: 'Event', data: { title: '会前准备', start: '2026-10-22T14:30:00+08:00', end: '2026-10-22T15:00:00+08:00', timezone: 'Asia/Shanghai' } } })
-  assert.equal(event.state, 'awaiting_confirmation', 'a local schedule follows the same switch')
-  const todo = await local('workspace.prepare_change', { sourceId: 'local', requestId: rid('local-todo'), action: 'create', change: { type: 'Todo', data: { title: '交报告' } } })
-  assert.equal(todo.state, 'succeeded', 'todo writes still run directly')
-  // The waiting external write runs once after the user confirms; requestId and the Operation are unchanged.
-  await s.workspace.confirmExternal({ requestId: waiting.requestId, payloadHash: waiting.payloadHash, confirmed: true })
-  assert.equal((await s.workspace.executeExternal({ requestId: waiting.requestId })).state, 'succeeded'); assert.equal(writes.length, 1)
-  // The other way round: todos on 先问 leaves schedule writes direct.
-  await s.switchGroup('calendar', { groupId: 'calendar', mode: 'allow', requestId: rid('calendar-allow') })
-  await s.switchGroup('calendar', { groupId: 'todos', mode: 'ask', requestId: rid('todos-ask') })
-  assert.equal((await feishu('workspace.prepare_change', { sourceId, requestId: rid('feishu-direct'), action: 'create', change: { arguments: { ...eventArgs, title: 'direct' } } })).state, 'succeeded'); assert.equal(writes.length, 2)
-  assert.equal((await local('workspace.prepare_change', { sourceId: 'local', requestId: rid('todo-ask'), action: 'create', change: { type: 'Todo', data: { title: '再交' } } })).state, 'awaiting_confirmation')
-  // An external source fixes the item type: a caller cannot route a schedule write to the todo switch.
-  await s.switchGroup('calendar', { groupId: 'todos', mode: 'allow', requestId: rid('todos-allow') })
-  await s.switchGroup('calendar', { groupId: 'calendar', mode: 'ask', requestId: rid('calendar-ask-2') })
-  assert.equal(itemTypeOf({ sourceId, type: 'Todo' }), 'Event')
-  assert.equal((await s.harness.commit(tx => decide(tx, { botId: 'calendar', tool: 'workspace.prepare_change', action: 'create', sourceId, type: 'Todo' }), context)).effect, 'ask')
-}))
-
-test('R3-07 D15: rules written before the split keep their effect; a switch narrows a shared rule instead of dropping it', async () => {
-  const docs = new Map(), tx = { async doc(token) { const key = token.definition.kind; if (!docs.has(key)) docs.set(key, token.definition.initial()); return docs.get(key) } }
-  const verdict = async (type, extra = {}) => (await decide(tx, { botId: 'calendar', tool: 'workspace.prepare_change', action: 'delete', sourceId: 'local', type, ...extra })).effect
-  const modes = async () => Object.fromEntries(describeGroups({ rules: (await tx.doc(PolicyRules)).items, botId: 'calendar', assigned: ['workspace.prepare_change'], revoked: [], mainSession: true }).filter(g => ['calendar', 'todos'].includes(g.id)).map(g => [g.id, [g.mode, g.switchable]]))
-  await addRule(tx, { botId: 'calendar', match: { tool: 'workspace.prepare_change', action: 'delete' }, effect: 'ask', origin: 'group' })
-  assert.deepEqual([await verdict('Event'), await verdict('Todo'), await verdict(undefined, { sourceId: 'feishu:abc' })], ['ask', 'ask', 'ask'])
-  assert.deepEqual(await modes(), { calendar: ['ask', true], todos: ['ask', true] }, 'a shared rule shows on both switches; the item write tool makes 日历与日程 switchable')
-  setGroupMode(await tx.doc(PolicyRules), 'calendar', 'calendar', 'allow')
-  assert.deepEqual([await verdict('Event'), await verdict('Todo')], ['allow', 'ask'], 'the todo half of the old rule is kept')
-  const narrowed = (await tx.doc(PolicyRules)).items
-  assert.deepEqual(narrowed.map(r => [r.match, r.effect]), [[{ tool: 'workspace.prepare_change', action: 'delete', type: 'Todo' }, 'ask']]); assert.ok(narrowed[0].splitFrom)
-  assert.deepEqual(await modes(), { calendar: ['allow', true], todos: ['ask', true] })
-  // Unknown item type (no source, no type): the strictest of both item types decides.
-  assert.equal((await decide(tx, { botId: 'calendar', tool: 'workspace.prepare_change', action: 'delete' })).effect, 'ask')
-  setGroupMode(await tx.doc(PolicyRules), 'calendar', 'todos', 'allow')
-  assert.deepEqual((await tx.doc(PolicyRules)).items, [])
-  setGroupMode(await tx.doc(PolicyRules), 'calendar', 'calendar', 'ask')
-  assert.deepEqual((await tx.doc(PolicyRules)).items.map(r => r.match), [...TOOL_GROUPS.find(g => g.id === 'calendar').tools.filter(t => /create|update|delete|reschedule/.test(t)).map(tool => ({ tool })), { tool: 'workspace.prepare_change', type: 'Event' }])
-  assert.deepEqual([await verdict('Event'), await verdict('Todo')], ['ask', 'allow'])
-})
-
 test('R3-07 stale text: capability configuration no longer claims every change needs confirmation (ADR-018)', () => {
   const capabilities = TOOL_GROUPS.find(g => g.id === 'capabilities').description
-  assert.ok(!capabilities.includes('仍需精确确认')); assert.match(capabilities, /直接执行/)
+  assert.equal(capabilities, '在对话里添加、更新和停用 MCP 与 Skill。')
+})
+
+test('R3-07 source item types remain provider-defined after merging schedule and todo groups', async () => {
+  assert.equal(itemTypeOf({ sourceId: 'feishu:abc', type: 'Todo' }), 'Event')
+  assert.equal(itemTypeOf({ sourceId: 'google-calendar:abc', type: 'Todo' }), 'Event')
+  assert.equal(itemTypeOf({ sourceId: 'google-tasks:abc', type: 'Event' }), 'Todo')
+  const docs = new Map(), tx = { async doc(token) { const key = token.definition.kind; if (!docs.has(key)) docs.set(key, token.definition.initial()); return docs.get(key) } }
+  await addRule(tx, { botId: 'calendar', match: { tool: 'workspace.prepare_change', type: 'Event' }, effect: 'ask' })
+  assert.equal((await decide(tx, { botId: 'calendar', tool: 'workspace.prepare_change', action: 'create', sourceId: 'feishu:abc', type: 'Todo' })).effect, 'ask')
+  assert.equal((await decide(tx, { botId: 'calendar', tool: 'workspace.prepare_change', action: 'create', sourceId: 'local', type: 'Todo' })).effect, 'allow')
 })

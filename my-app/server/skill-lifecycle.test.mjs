@@ -345,6 +345,7 @@ test('R1-10 imported versions consume real assignment service; update/rollback/r
   await assignment(store, 'calendar', cap, true, selected)
   let pinned
   await store.harness.commit(async tx => {
+    before.revoked.calendar = []
     assert.deepEqual(await tx.doc(ToolAccess), before)
     const card = await tx.doc(TaskCard, task.taskId)
     assert.equal((await activateCommandSkill(tx, card, listBots(config), 201, first.id, selected)).ok, true)
@@ -387,6 +388,8 @@ test('R1-10 new blank Bot does not inherit registered Skill selections; enabling
     const before = copy(access)
     await setCapabilityAssignment(tx, 'r1-10-blank', { requestId: 'r1-10-blank-enable', expectedRevision: view.revision,
       expectedCatalogRevision: catalog[0].revision, capabilityId: `skill:${skillId}`, enabled: true }, { catalog })
+    before.assignments['r1-10-blank'].tools = ['skill_activate', 'skill_deactivate', 'skill_read_resource']
+    before.revoked['r1-10-blank'] = []
     assert.deepEqual(await tx.doc(ToolAccess), before)
   }, context)
 })

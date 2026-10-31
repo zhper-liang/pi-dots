@@ -1,3 +1,4 @@
+import { groupTools } from './tool-groups.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
@@ -63,48 +64,15 @@ function resultFor(options, name) {
   return messages.length ? JSON.parse(messages.at(-1).content[0].text) : null
 }
 
-test('cold store creates a blank Bot and both direct/scoped main GET work while management registration is off', async t => {
+test('cold store creates a default-capability Bot and both direct/scoped main GET work while management registration is off', async t => {
   const f = await fixture(t, { enabled: false })
   const created = await f.call('/api/bots', { name: 'Cold GET fixture', requestId: 'cold-get-new-bot' })
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const { bot, mainTaskId } = created.body
-  assert.deepEqual(bot.defaults.tools, [])
+  assert.deepEqual(bot.defaults.tools, [...groupTools('todos'), ...groupTools('history')])
   assert.equal((await f.call(`/api/tasks/${mainTaskId}`)).status, 200)
   assert.equal((await f.call(`/api/bots/${bot.id}/tasks/${mainTaskId}`)).status, 200)
   assert.equal((await f.store.get(mainTaskId)).bot.id, bot.id)
-})
-
-test('with the capability group set to ask, Chief configures and binds official MCP only after a genuine precise approval', async t => {
-  let targetId
-  const f = await fixture(t, { modelReply: async (_message, options) => {
-    const inspect = resultFor(options, 'mcp_manage')
-    if (!inspect) return turn('mcp_manage', { action: 'inspect', targetBotId: targetId })
-    if (inspect.data?.action === 'inspect') return turn('mcp_manage', { action: 'add', operationId: 'configure-echo', targetBotId: targetId, expectedRevision: inspect.data.targetRevision,
-      config: { connectionId: 'managed-echo', name: 'Managed SDK fixture', transport: 'streamable-http', url: f.remote.url, allowLoopback: true } })
-    return text('Report the real configuration receipt')
-  } })
-  targetId = (await f.store.createBot({ name: 'Configuration target', requestId: 'configuration-target' })).bot.id
-  const main = (await f.store.mainSessions()).chief
-  assert.equal((await f.store.get(main)).toolSets.authorized.includes('mcp_manage'), true)
-  await f.store.switchGroup('chief', { requestId: 'capabilities-ask-mode', groupId: 'capabilities', mode: 'ask' })
-  await f.store.send(main, 'Add the provided fixture MCP to the target Bot')
-  const waiting = await f.waitApproval(main)
-  assert.deepEqual(await f.mcp.connections(), [])
-  assert.equal(f.remote.calls.length, 0)
-  const initial = waiting.approvals.items.find(item => item.id === waiting.approvals.activeId)
-  assert.equal(initial.capabilityIntent.proposal.targetBotId, targetId)
-  await f.approve(main, initial.id)
-  const done = await f.idle(main), receipt = done.capabilitySetups[0]
-  assert.equal(receipt.state, 'ready', JSON.stringify(receipt))
-  assert.equal(receipt.enabledForBot, true)
-  const targetMain = (await f.store.mainSessions())[targetId]
-  assert.equal((await f.call(`/api/tasks/${targetMain}`)).status, 200)
-  assert.equal((await f.call(`/api/bots/${targetId}/tasks/${targetMain}`)).status, 200)
-  assert.equal(f.remote.calls.length, 0)
-  assert.equal((await f.store.getBotCapabilities(targetId)).items.find(item => item.id === receipt.capabilityId).available, true)
-  assert.equal((await f.call(`/api/capability-setups/${receipt.setupId}?taskId=${main}`, undefined, false)).status, 401)
-  const lookup = await f.call(`/api/capability-setups/${receipt.setupId}?taskId=${main}`)
-  assert.equal(lookup.status, 200); assert.equal(lookup.body.data.requestId, receipt.requestId)
 })
 
 test('missing credentials retain the original active input and the same authenticated setup resumes', async t => {
@@ -145,14 +113,11 @@ test('an explicit Skill request is configured directly and grants only its three
     const view = await f.store.getBotCapabilities(targetId)
     return turn('skill_manage', { action: 'add', operationId: 'add-review-skill', targetBotId: targetId, expectedRevision: view.revision, source: { kind: 'local', path: f.source } })
   } })
-  targetId = (await f.store.createBot({ name: 'Skill target', requestId: 'skill-target-bot' })).bot.id
+  targetId = (await f.store.createBot({ capabilities: [], name: 'Skill target', requestId: 'skill-target-bot' })).bot.id
   const main = (await f.store.mainSessions()).chief
   await f.store.send(main, 'Add the local declarative review Skill to the target Bot')
   const done = await f.idle(main)
-  const item = done.approvals.items.find(item => item.capabilitySetupSpec)
-  assert.equal(item.capabilitySetupSpec.scope, 'skill-mechanisms')
-  assert.deepEqual(item.capabilitySetupSpec.tools, ['skill_activate', 'skill_deactivate', 'skill_read_resource'])
-  assert.equal(done.approvals.items.every(item => item.decision.source === 'policy-rule'), true)
+  assert.ok(!done.approvals.items.some(item => item.capabilitySetupSpec?.scope === 'skill-mechanisms'))
   assert.equal(done.capabilitySetups[0].state, 'ready', JSON.stringify(done.capabilitySetups[0]))
   const target = await f.store.getBotConfiguration(targetId)
   assert.deepEqual([...target.assigned.tools].sort(), ['skill_activate', 'skill_deactivate', 'skill_read_resource'])
@@ -163,7 +128,7 @@ test('an explicit Skill request is configured directly and grants only its three
 test('a persisted Chief main gains configuration tools without changing its ID and ordinary Bots stay blank', async t => {
   let targetId
   const f = await fixture(t, { enabled: false, modelReply: async (_message, options) => resultFor(options, 'mcp_manage') ? text('inspected') : turn('mcp_manage', { action: 'inspect', targetBotId: targetId }) })
-  targetId = (await f.store.createBot({ name: 'Ordinary blank Bot', requestId: 'ordinary-blank-agent' })).bot.id
+  targetId = (await f.store.createBot({ capabilities: [], name: 'Ordinary blank Bot', requestId: 'ordinary-blank-agent' })).bot.id
   const main = (await f.store.mainSessions()).chief
   await f.store.harness.commit(async tx => { (await tx.doc(TaskCard, main)).managementTools = ['bot_inspect', 'bot_manage'] }, context)
   const ordinaryBefore = (await f.store.getBotConfiguration('calendar')).assigned

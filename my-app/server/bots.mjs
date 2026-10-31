@@ -13,8 +13,8 @@ export const BOT_CONFIG_VERSION = '2026-10-17.v11'
 
 const presets = [
   ['chief', 'Chief', '你的个人助理入口，帮助梳理目标与下一步。'],
-  ['calendar', '日程助理', '梳理日程与时间安排；可读取模拟日程，尚未连接真实日历。'],
-  ['todo', '待办助理', '整理事项与优先级；当前尚未连接待办服务。'],
+  ['calendar', '日程助理', '梳理日程与时间安排，找出冲突和空档。'],
+  ['todo', '待办助理', '整理待办和优先级，提醒快到期的事。'],
 ]
 
 export function listBots(modelConfig, executionDefaults = readExecutionDefaults({})) {

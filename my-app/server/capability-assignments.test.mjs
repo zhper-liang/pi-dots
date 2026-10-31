@@ -12,6 +12,7 @@ import { ToolAccess, toolSets, checkToolCall } from './tools.mjs'
 import { PolicyRules, addRule } from './policy.mjs'
 import { initializeConfiguration, migrateToolGroups, changeConfiguration } from './bot-configuration.mjs'
 import { inferLegacyBotRole, inferBotRole } from './bot-templates.mjs'
+import { groupTools } from './tool-groups.mjs'
 import { listBotCapabilities, setCapabilityAssignment, assertCapabilityEnabled } from './capability-assignments.mjs'
 
 const copy = value => JSON.parse(JSON.stringify(value))
@@ -33,24 +34,24 @@ async function set(f, botId, capabilityId, enabled, catalog = [], overrides = {}
   })
 }
 
-test('R1-08 static enable/disable includes read tools and never rewrites ask/allow or resources', async t => {
+test('R1-08 static enable/disable includes read tools and shares connected resources without rewriting rules', async t => {
   const f = await fixture(t)
   const projection = await f.commit(tx => listBotCapabilities(tx, 'todo'))
-  const calendar = projection.items.find(item => item.id === 'tool:calendar')
-  assert.equal(calendar.name, '日历与日程')
+  const calendar = projection.items.find(item => item.id === 'tool:todos')
+  assert.equal(calendar.name, '日程与待办')
   assert.ok(calendar.description)
   assert.equal(calendar.status, 'ready')
   assert.equal(typeof calendar.enabledForBot, 'boolean')
   await f.commit(tx => addRule(tx, { botId: 'todo', match: { tool: 'calendar_reschedule_event', action: 'update' }, effect: 'ask' }))
   const before = await f.commit(async tx => ({ rules: copy(await tx.doc(PolicyRules)), resources: [...(await tx.doc(ToolAccess)).assignments.todo.resources] }))
-  const enabled = await set(f, 'todo', 'tool:calendar', true)
-  assert.equal((await f.commit(tx => listBotCapabilities(tx, 'todo'))).items.find(item => item.id === 'tool:calendar').enabledForBot, true)
+  const enabled = await set(f, 'todo', 'tool:todos', true)
+  assert.equal((await f.commit(tx => listBotCapabilities(tx, 'todo'))).items.find(item => item.id === 'tool:todos').enabledForBot, true)
   assert.ok(enabled.toolNames.includes('calendar_read_schedule'))
-  await f.commit(async tx => { assert.deepEqual(await tx.doc(PolicyRules), before.rules); assert.deepEqual((await tx.doc(ToolAccess)).assignments.todo.resources, before.resources) })
-  await set(f, 'todo', 'tool:calendar', false)
+  await f.commit(async tx => { assert.deepEqual(await tx.doc(PolicyRules), before.rules); assert.deepEqual((await tx.doc(ToolAccess)).assignments.todo.resources, [...before.resources, 'workspace:local']) })
+  await set(f, 'todo', 'tool:todos', false)
   await f.commit(async tx => {
     const access = await tx.doc(ToolAccess)
-    await assert.rejects(assertCapabilityEnabled(tx, 'todo', 'tool:calendar'), { code: 'CAPABILITY_NOT_ENABLED' })
+    await assert.rejects(assertCapabilityEnabled(tx, 'todo', 'tool:todos'), { code: 'CAPABILITY_NOT_ENABLED' })
     const card = { bot: { id: 'todo' }, kind: 'chat' }
     const sets = toolSets(card, listBots(), access)
     assert.ok(!sets.authorized.includes('calendar_read_schedule'))
@@ -61,7 +62,7 @@ test('R1-08 static enable/disable includes read tools and never rewrites ask/all
     assert.equal(denied.ok, false)
     assert.equal(denied.error.code, 'TOOL_NOT_AUTHORIZED')
   })
-  await set(f, 'todo', 'tool:calendar', true)
+  await set(f, 'todo', 'tool:todos', true)
   await f.commit(async tx => { assert.deepEqual(await tx.doc(PolicyRules), before.rules); assert.ok(!(await tx.doc(ToolAccess)).revoked.todo.includes('calendar_read_schedule')) })
 })
 
@@ -83,14 +84,14 @@ test('R1-08 CAS shares the configuration version and receipt replays survive new
 
 test('R1-08 concurrent capability updates choose one complete revision, failure rolls back', async t => {
   const f = await fixture(t), view = await f.commit(tx => listBotCapabilities(tx, 'todo'))
-  const results = await Promise.allSettled(['history', 'calendar'].map(id => f.commit(tx => setCapabilityAssignment(tx, 'todo', {
+  const results = await Promise.allSettled(['history', 'todos'].map(id => f.commit(tx => setCapabilityAssignment(tx, 'todo', {
     requestId: `concurrent-${id}`, expectedRevision: view.revision, expectedCatalogRevision: 'static-1', capabilityId: `tool:${id}`, enabled: true
   }))))
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
   assert.equal(results.find(result => result.status === 'rejected').reason.code, 'CONFIG_VERSION_CONFLICT')
   const before = await f.commit(async tx => copy(await tx.doc(ToolAccess)))
   await assert.rejects(f.commit(async tx => { const current = await listBotCapabilities(tx, 'todo'); await setCapabilityAssignment(tx, 'todo', {
-    requestId: 'rollback-test-request', expectedRevision: current.revision, expectedCatalogRevision: 'static-1', capabilityId: 'tool:calendar', enabled: false
+    requestId: 'rollback-test-request', expectedRevision: current.revision, expectedCatalogRevision: 'static-1', capabilityId: 'tool:todos', enabled: false
   }); throw new Error('injected transaction failure') }))
   assert.deepEqual(await f.commit(async tx => copy(await tx.doc(ToolAccess))), before)
 })
@@ -128,7 +129,9 @@ test('R1-08 Skill selection never grants its dependencies and revocation superse
   const before = await f.commit(async tx => copy(await tx.doc(ToolAccess)))
   await set(f, 'todo', skill.id, true, [skill])
   assert.equal((await f.commit(tx => assertCapabilityEnabled(tx, 'todo', skill.id, { catalog: [skill] }))).id, skill.id)
-  assert.deepEqual(await f.commit(async tx => copy(await tx.doc(ToolAccess))), before)
+  const enabledAccess = await f.commit(async tx => copy(await tx.doc(ToolAccess)))
+  assert.deepEqual(enabledAccess.assignments.todo, { tools: [...before.assignments.todo.tools, ...groupTools('skills')], resources: before.assignments.todo.resources })
+  assert.deepEqual(enabledAccess.revoked.todo, [])
   await set(f, 'todo', skill.id, false, [skill])
   await f.reopen()
   await assert.rejects(f.commit(tx => assertCapabilityEnabled(tx, 'todo', skill.id, { catalog: [skill] })), { code: 'CAPABILITY_NOT_ENABLED' })
@@ -175,7 +178,7 @@ test('R1-08 marker migration preserves every live assignment, revocation, resour
 
 test('R1-08 new Bot is business-blank even for legacy profile, restart never fills it and a conversation can be created', async t => {
   const f = await fixture(t)
-  const result = await f.store.createBot({ name: '日程费用助手', requestId: 'blank-bot-request', profile: 'mock-calendar' })
+  const result = await f.store.createBot({ capabilities: [], name: '日程费用助手', requestId: 'blank-bot-request', profile: 'mock-calendar' })
   assert.equal(result.bot.description, '')
   assert.equal(inferBotRole('日程费用助手').role, '')
   assert.deepEqual(result.bot.defaults.tools, [])
@@ -184,7 +187,7 @@ test('R1-08 new Bot is business-blank even for legacy profile, restart never fil
   await f.reopen()
   const view = await f.store.getBotConfiguration(result.bot.id)
   assert.deepEqual(view.assigned, { tools: [], resources: [] })
-  const replay = await f.store.createBot({ name: '日程费用助手', requestId: 'blank-bot-request', profile: 'mock-calendar' })
+  const replay = await f.store.createBot({ capabilities: [], name: '日程费用助手', requestId: 'blank-bot-request', profile: 'mock-calendar' })
   assert.equal(replay.bot.id, result.bot.id)
   const task = await f.store.create({ botId: result.bot.id, title: '空白 Bot 可创建会话' })
   assert.ok(task.taskId)

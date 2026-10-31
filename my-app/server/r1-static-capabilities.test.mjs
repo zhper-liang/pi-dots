@@ -69,7 +69,7 @@ function deferred() {
 }
 
 for (const scenario of [
-  { name: 'calendar_read_schedule', group: 'tool:calendar', args: { date: '2026-10-29', resource: 'mock:personal' } },
+  { name: 'calendar_read_schedule', group: 'tool:todos', args: { date: '2026-10-29', resource: 'mock:personal' } },
   { name: 'routine_propose', group: 'tool:todos', args: { title: '不得创建', prompt: '测试', sourceIds: ['local'], notification: 'none', rule: { type: 'daily', time: '09:00', timezone: 'Asia/Shanghai' } } },
   { name: 'task_status', group: 'tool:reports', args: {} },
   { name: 'automation_pause', group: 'tool:automation', args: {} },
@@ -108,7 +108,7 @@ for (const scenario of [
 test('R1 new blank Bot chats in main and ordinary Task with no default business or main tools, including restart', async t => {
   const offered = []
   const f = await fixture(t, { modelReply: async (_message, options) => { offered.push((options.context?.tools ?? []).map(tool => tool.name)); return text() } })
-  const { bot, mainTaskId } = await f.store.createBot({ name: '日历专家', requestId: randomUUID() })
+  const { bot, mainTaskId } = await f.store.createBot({ capabilities: [], name: '日历专家', requestId: randomUUID() })
   assert.deepEqual(bot.defaults.tools, [])
   assert.deepEqual(bot.defaults.toolResources, [])
   for (const reopen of [false, true]) {
@@ -155,7 +155,8 @@ test('R1 HTTP toggles expose grouped main schemas, preserve write mode/resources
     assert.ok(!(await f.store.get(id)).toolSets.displayed.includes(name))
   }
   const after = await f.commit(async tx => ({ policy: copy(await tx.doc(PolicyRules)), resources: copy((await tx.doc(ToolAccess)).assignments.calendar.resources) }))
-  assert.deepEqual(after, before)
+  assert.deepEqual(after.policy, before.policy)
+  assert.deepEqual(after.resources, [...before.resources, 'workspace:local'])
   const ordinary = await f.store.create({ botId: 'calendar' })
   assert.ok(MAIN_TOOLS.every(name => !ordinary.toolSets.authorized.includes(name)))
   assert.ok(!ordinary.toolSets.authorized.includes('automation_pause'))

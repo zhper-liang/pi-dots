@@ -254,11 +254,11 @@ test('R3-04 revoked access makes the source invisible: disconnect, invalid_grant
     await assert.rejects(call, e => e.code === 'WORKSPACE_EXTERNAL_REVOKED')
   assert.equal(await readable(store, sourceId), false)
   assert.ok(!(await resourcesOf(store)).some(r => r.startsWith('workspace:google-tasks:')), 'removed from every Bot')
-  // Reconnecting the same account: same source id, new authEpoch; old Bot assignments do not come back.
+  // Reconnecting the same account: same source id, new authEpoch; schedule-enabled Bots regain sources unless narrowed.
   await connect()
   assert.equal((await sources()).find(s => s.title === '工作').id, sourceId)
   assert.equal((await store.workspace.queryExternal({ sourceId, ...windowOf(0, 2) })).items[0].title, '机密任务')
-  assert.equal(await readable(store, sourceId), false, 'reconnect does not re-grant old Bot resources')
+  assert.equal(await readable(store, sourceId), true, 'reconnect restores sources for schedule-enabled Bots')
   // 2. invalid_grant: the mirror goes needs_auth and the source disappears.
   fake.revokeAll(); google.rejectToken(await google.accessToken())
   await assert.rejects(store.workspace.queryExternal({ sourceId, ...windowOf(0, 2) }), e => ['GOOGLE_NEEDS_AUTH', 'WORKSPACE_EXTERNAL_REVOKED'].includes(e.code))

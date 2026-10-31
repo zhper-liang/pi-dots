@@ -120,10 +120,10 @@ export const TOOL_LABELS = Object.freeze({
   calendar_feishu_read_schedule: '读取飞书日程', calendar_feishu_read_event: '读取飞书日程详情', calendar_feishu_freebusy: '查看飞书忙闲',
   calendar_feishu_create_event: '新建飞书日程', calendar_feishu_update_event: '修改飞书日程', calendar_feishu_delete_event: '删除飞书日程',
   'workspace.list': '列出待办和日程', 'workspace.get': '查看事项详情', 'workspace.prepare_change': '新建、修改或删除事项', 'workspace.operation_status': '查询事项操作结果',
-  routine_propose: '创建例行任务', 'workspace.prepare_schedule': '提议定时计划',
-  collaborators_list: '查看其他 Bot', task_assign: '派发任务', task_review: '验收结果', shared_publish: '发布共享信息', shared_read: '读取共享信息', shared_link: '分享给其他 Bot',
+  routine_propose: '创建定时任务', 'workspace.prepare_schedule': '提议定时计划',
+  collaborators_list: '查看其他机器人', task_assign: '派发任务', task_review: '验收结果', shared_publish: '发布共享信息', shared_read: '读取共享信息', shared_link: '分享给其他机器人',
   report_blocker: '上报阻塞', blocker_resolve: '解除阻塞', blocker_escalate: '升级阻塞', task_status: '查看任务进度',
-  task_history_read: '回读会话历史', tool_result_read: '回读工具结果', automation_pause: '暂停自动化', bot_manage: '管理 Bot', task_create: '派给独立任务',
+  task_history_read: '回读会话历史', tool_result_read: '回读工具结果', automation_pause: '暂停自动化', bot_manage: '管理机器人', bot_inspect: '查看机器人', task_create: '派给独立任务',
 })
 export const toolLabel = (name) => TOOL_LABELS[name] ?? name
 

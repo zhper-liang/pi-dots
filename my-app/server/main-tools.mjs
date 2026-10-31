@@ -39,7 +39,7 @@ export const mainTools = [
       completionCriteria: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1000 } } } } },
   { name: TASK_STATUS_TOOL, description: '只读查看本主会话派出的任务：状态、待审批数、待补充数、结束时的结果摘要。不传taskId返回全部。',
     parameters: { type: 'object', additionalProperties: false, properties: { taskId: { type: 'integer', minimum: 1 } } } },
-  { name: ROUTINE_PROPOSE_TOOL, description: '为本Bot自己提议一个例行任务（定时或事件触发），默认直接创建；规则或全局暂停可能要求确认，遇到确认时以最终回执为准。rule：{type:"daily",time:"HH:mm"} 每天；{type:"weekly",weekdays:[1,3,5],time:"HH:mm"} 每周（周一1至周日7）；{type:"monthly",day:31,time:"HH:mm"} 每月（短月取最后一天）；{type:"interval",seconds:≥60,anchor:带偏移的ISO时间} 间隔；{type:"at",at:带偏移的ISO时间} 一次；{type:"event",event:"todo_due"|"event_changed"|"task_finished"} 待办到期/日程变更/本Bot任务结束。时区固定 Asia/Shanghai。运行时按Bot当时的权限和规则：写入默认直接执行，删除默认先问；无人值守遇到先问会跳过并记录。',
+  { name: ROUTINE_PROPOSE_TOOL, description: '为本Bot自己提议一个例行任务（定时或事件触发），直接创建；全局暂停时要求确认，以最终回执为准。rule：{type:"daily",time:"HH:mm"} 每天；{type:"weekly",weekdays:[1,3,5],time:"HH:mm"} 每周（周一1至周日7）；{type:"monthly",day:31,time:"HH:mm"} 每月（短月取最后一天）；{type:"interval",seconds:≥60,anchor:带偏移的ISO时间} 间隔；{type:"at",at:带偏移的ISO时间} 一次；{type:"event",event:"todo_due"|"event_changed"|"task_finished"} 待办到期/日程变更/本Bot任务结束。时区固定 Asia/Shanghai。运行时按Bot当时的权限：写入直接执行；全局暂停时无人值守的写入会跳过并记录。',
     parameters: { type: 'object', additionalProperties: false, required: ['title', 'prompt', 'rule', 'sourceIds', 'notification'], properties: {
       title: { type: 'string', minLength: 1, maxLength: 200 },
       prompt: { type: 'string', minLength: 1, maxLength: 3000, description: '每次运行要做的事' },

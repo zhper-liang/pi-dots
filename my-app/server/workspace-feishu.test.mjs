@@ -48,8 +48,8 @@ test('03 busy scope has no title/description/receipt; disconnect and rebind inva
   // R3-07 (D14): a rebind is a fresh connection, usable at once with a new epoch; was `authorized === false`.
   s = (await f.store.workspace.externalSources({})).sources[0]; assert.equal(s.id, f.sourceId)
   assert.deepEqual([s.authorized, s.readScope], [true, 'full']); assert.ok(s.epoch > narrowed)
-  // R3-07: the Bot lost the source with the disconnect, even with no sync in between; the rebind revives nothing.
-  assert.deepEqual((await f.store.getBotConfiguration('calendar')).assigned.resources, [])
+  // R4: the schedule-enabled Bot automatically regains both Feishu resources on reconnect.
+  assert.deepEqual((await f.store.getBotConfiguration('calendar')).assigned.resources.sort(), [(await f.store.feishuCalendar.status()).binding.resource, `workspace:${f.sourceId}`].sort())
 }))
 
 test('03 beforeHash conflict prevents provider mutation; changed request payload and unsupported fields rejected', async () => externalFixture(async f => {

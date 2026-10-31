@@ -210,12 +210,6 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         if (req.method !== 'GET') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET。' } }, { Allow: 'GET' }); return }
         req.resume(); sendJson(res, 200, { data: await tasks.inbox() }); return
       }
-      const groupSwitchMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/tool-groups\/([a-z]+)$/.exec(req.url)
-      if (tasks && groupSwitchMatch) {
-        if (req.method !== 'POST') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '方法不支持。' } }); return }
-        const body = await readJson(req)
-        sendJson(res, 200, { data: await tasks.switchGroup(groupSwitchMatch[1], { ...body, groupId: groupSwitchMatch[2] }) }); return
-      }
       if (tasks && (req.url === '/api/rules' || req.url === '/api/rules/remove')) {
         if (req.url === '/api/rules' && req.method === 'GET') { req.resume(); sendJson(res, 200, { data: await tasks.rules.list() }); return }
         req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '方法不支持。' } }); return
@@ -364,6 +358,10 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         const body = await readJson(req)
         const task = await tasks.setThinkingLevel(parametersMatch[1], Number(parametersMatch[2]), body)
         sendJson(res, 200, { task }); return
+      }
+      if (tasks && req.url === '/api/capabilities') {
+        if (req.method !== 'GET') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET。' } }, { Allow: 'GET' }); return }
+        req.resume(); sendJson(res, 200, { data: { items: await tasks.capabilityCatalog() } }); return
       }
       const capabilitiesMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/capabilities$/.exec(req.url)
       if (tasks && capabilitiesMatch) {

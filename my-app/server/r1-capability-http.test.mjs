@@ -40,7 +40,7 @@ async function fixture(t, { readCapabilityCatalog } = {}) {
   return { request, get store() { return store }, reopen: async () => { await stop(); await start() },
     commit: fn => store.harness.commit(fn, context) }
 }
-function assignment(view, { capabilityId = 'tool:calendar', enabled = true, requestId = randomUUID() } = {}) {
+function assignment(view, { capabilityId = 'tool:todos', enabled = true, requestId = randomUUID() } = {}) {
   return { requestId, expectedRevision: view.revision, capabilityId, enabled,
     expectedCatalogRevision: view.items.find(item => item.id === capabilityId)?.revision ?? 'static-1' }
 }
@@ -93,7 +93,7 @@ test('R1 capability HTTP rejects catalog injection, unregistered capabilities an
   assert.equal((await view(f)).revision, initial.revision)
 })
 
-test('R1 capability HTTP uses real assignments, preserves policy/resources and syncs live Bot catalog', async t => {
+test('R1 capability HTTP uses real assignments, preserves policy and shares connected resources and syncs live Bot catalog', async t => {
   const f = await fixture(t)
   await f.commit(tx => addRule(tx, { botId: 'todo', match: { tool: 'calendar_reschedule_event' }, effect: 'ask' }))
   const before = await f.commit(async tx => ({ access: copy(await tx.doc(ToolAccess)), policy: copy(await tx.doc(PolicyRules)) }))
@@ -103,7 +103,7 @@ test('R1 capability HTTP uses real assignments, preserves policy/resources and s
   assert.equal(enabled.status, 200)
   assert.equal(enabled.json.data.enabledForBot, true)
   assert.notEqual(enabled.json.data.revision, initial.revision)
-  const item = (await view(f)).items.find(item => item.id === 'tool:calendar')
+  const item = (await view(f)).items.find(item => item.id === 'tool:todos')
   assert.equal(item.enabledForBot, true)
   const configuration = await f.store.getBotConfiguration('todo')
   assert.ok(configuration.assigned.tools.includes('calendar_read_schedule'))
@@ -114,7 +114,7 @@ test('R1 capability HTTP uses real assignments, preserves policy/resources and s
   const after = await f.commit(async tx => ({ access: copy(await tx.doc(ToolAccess)), policy: copy(await tx.doc(PolicyRules)) }))
   assert.ok(!after.access.assignments.todo.tools.includes('calendar_read_schedule'))
   assert.ok(after.access.revoked.todo.includes('calendar_read_schedule'))
-  assert.deepEqual(after.access.assignments.todo.resources, before.access.assignments.todo.resources)
+  assert.deepEqual(after.access.assignments.todo.resources, [...before.access.assignments.todo.resources, 'workspace:local'])
   assert.deepEqual(after.policy, before.policy)
   assert.equal((await view(f, 'calendar')).revision, other.revision)
   assert.equal(f.store.bots().find(bot => bot.id === 'todo').configRef.version, disabled.json.data.revision)
@@ -156,7 +156,7 @@ test('R1 capability HTTP replays frozen receipts across later changes and restar
     assert.deepEqual(replay.json, enabled.json)
     const current = await view(f)
     assert.equal(current.revision, disabled.json.data.revision)
-    assert.equal(current.items.find(item => item.id === 'tool:calendar').enabledForBot, false)
+    assert.equal(current.items.find(item => item.id === 'tool:todos').enabledForBot, false)
     assert.equal(f.store.bots().find(bot => bot.id === 'todo').configRef.version, current.revision)
   }
   const conflict = await f.request('todo', { body: { ...input, enabled: false } })
@@ -167,9 +167,9 @@ test('R1 capability HTTP replays frozen receipts across later changes and restar
 test('R1 capability HTTP concurrent changes have one CAS winner and inactive Bots cannot mutate', async t => {
   const f = await fixture(t)
   const initial = await view(f)
-  const responses = await Promise.all(['tool:calendar', 'tool:history'].map(capabilityId => f.request('todo', { body: assignment(initial, { capabilityId }) })))
+  const responses = await Promise.all(['tool:todos', 'tool:history'].map(capabilityId => f.request('todo', { body: assignment(initial, { capabilityId }) })))
   assert.deepEqual(responses.map(response => response.status).sort(), [200, 409])
-  const created = await f.store.createBot({ requestId: randomUUID(), name: '空白隔离测试' })
+  const created = await f.store.createBot({ capabilities: [], requestId: randomUUID(), name: '空白隔离测试' })
   const blank = await view(f, created.bot.id)
   assert.ok(blank.items.every(item => !item.enabledForBot))
   await f.store.deactivateBot(created.bot.id, { confirm: true })

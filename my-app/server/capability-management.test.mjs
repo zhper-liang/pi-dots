@@ -120,7 +120,7 @@ async function fixture(t) {
       intents.set(sent.messageId, intent)
       return sent.messageId
     },
-    async blank(name = `Target ${++sequence}`) { return (await store.createBot({ name, requestId: `blank-target-${sequence++}` })).bot },
+    async blank(name = `Target ${++sequence}`) { return (await store.createBot({ capabilities: [], name, requestId: `blank-target-${sequence++}` })).bot },
     async revision(botId) { return (await store.getBotConfiguration(botId)).bot.configRef.version },
     async view(botId) { const catalog = await providers(); return transaction(tx => listBotCapabilities(tx, botId, { catalog })) },
     async approve(approvalId) { await transaction(async tx => { (await tx.doc(TaskApprovals, caller.taskId)).items.find(item => item.id === approvalId).status = 'approved' }) },
@@ -200,22 +200,19 @@ test('a declarative Skill is imported and selected without silently granting the
   const inputId = await f.user({ action: 'add', source: f.source, targetBotId: target.id })
   const result = await execute(f, inputId, 'skill', { action: 'add', operationId: 'declarative-skill', targetBotId: target.id, expectedRevision: await f.revision(target.id), source: { kind: 'local', path: f.source } })
   assert.equal(result.data.state, 'ready'); assert.equal(result.data.capabilityId, 'skill:setup-skill')
-  assert.deepEqual((await f.store.getBotConfiguration(target.id)).assigned.tools, [])
+  assert.deepEqual((await f.store.getBotConfiguration(target.id)).assigned.tools, ['skill_activate', 'skill_deactivate', 'skill_read_resource'])
   const targetTask = await f.store.create({ botId: target.id })
   const active = await f.store.activateSkill(targetTask.taskId, { skillId: 'setup-skill' })
   assert.equal(active.skillState.active.length, 1)
 })
 
-test('Skill mechanism tools require an exact host approval and still do not grant missing business tools or resources', async t => {
+test('Skill mechanism tools are automatic without granting missing business tools or resources', async t => {
   const f = await fixture(t), target = await f.blank()
   await writeFile(join(f.source, 'SKILL.md'), markdown('setup-skill', '1.0', 'required-tools: [skill_read_resource, workspace.list]\nrequired-resources: [workspace:local]\n'))
   const inputId = await f.user({ action: 'add', source: f.source, targetBotId: target.id })
   const pending = await execute(f, inputId, 'skill', { action: 'add', operationId: 'skill-dependencies', targetBotId: target.id, expectedRevision: await f.revision(target.id), source: { kind: 'local', path: f.source } })
-  assert.equal(pending.data.state, 'needs_confirmation'); assert.equal(typeof pending.data.approvalId, 'string')
-  assert.deepEqual((await f.store.getBotConfiguration(target.id)).assigned.tools, [])
-  await f.approve(pending.data.approvalId)
-  const after = await f.manager.resume(pending.data.setupId, { taskId: f.caller.taskId, inputId })
-  assert.equal(after.data.state, 'missing_dependency')
+  assert.equal(pending.data.state, 'missing_dependency')
+  const after = pending
   const assigned = (await f.store.getBotConfiguration(target.id)).assigned
   assert.deepEqual([...assigned.tools].sort(), ['skill_activate', 'skill_deactivate', 'skill_read_resource'].sort())
   assert.deepEqual(assigned.resources, [])

@@ -7,7 +7,7 @@ import { once } from 'node:events'
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { assignCapabilities, openTaskStore } from './fixtures/authorized-task-store.mjs'
+import { assignCapabilities, assignMockResource, openTaskStore } from './fixtures/authorized-task-store.mjs'
 import { listBots } from './bots.mjs'
 import { ToolAccess, CALENDAR_TOOL, CALENDAR_EVENT_TOOL, readMockSchedule } from './tools.mjs'
 import { MockCalendar, CALENDAR_WRITE_TOOL } from './approvals.mjs'
@@ -90,12 +90,13 @@ test('02 immutable idempotency receipts survive newer configs, base changes and 
 
 test('02 installed tools can be assigned directly; assignment changes reach existing Tasks', async (t) => {
   const { store } = await fixture(t)
-  const { bot } = await store.createBot({ name: '权限专家', description: '独立职责', profile: 'general', requestId: requestId() })
+  const { bot } = await store.createBot({ capabilities: [], name: '权限专家', description: '独立职责', profile: 'general', requestId: requestId() })
   // Creation is blank; only the explicit configuration below grants business access.
   assert.deepEqual(bot.defaults.tools, []); assert.deepEqual(bot.defaults.toolResources, [])
   const old = await store.create({ botId: bot.id }), sameBotOld = await store.create({ botId: 'calendar' })
   const before = await store.getBotConfiguration(bot.id)
   assert.ok(before.installed.includes(CALENDAR_TOOL)); assert.ok(!before.assigned.tools.includes(CALENDAR_TOOL))
+  await assignMockResource(store, bot.id)
   await store.updateBotConfiguration(bot.id, await edit(store, bot.id, { tools: [CALENDAR_TOOL], resources: [args.resource] }))
   assert.ok((await store.get(old.taskId)).toolSets.authorized.includes(CALENDAR_TOOL))
   assert.ok((await store.get(sameBotOld.taskId)).toolSets.authorized.includes(CALENDAR_TOOL))
@@ -112,6 +113,7 @@ for (const level of ['bot-tools', 'bot-resources']) test(`02 ${level} removal an
   let current = await store.get(old.taskId)
   assert.ok(resource ? !current.toolSets.resources.includes(args.resource) : !current.toolSets.authorized.includes(CALENDAR_TOOL))
   assert.deepEqual(current.parameters, old.parameters)
+  if (resource) await assignMockResource(store, 'calendar')
   await store.updateBotConfiguration('calendar', await edit(store, 'calendar', resource ? { resources: granted.resources } : { tools: granted.tools.filter(name => allGroupTools().includes(name)) }))
   await close(store); const reopened = await open(); current = await reopened.get(old.taskId)
   assert.ok(resource ? current.toolSets.resources.includes(args.resource) : current.toolSets.authorized.includes(CALENDAR_TOOL))
@@ -234,7 +236,7 @@ test('02 SIGKILL restores persisted configuration and pool denial before replayi
 test('02 new Bot starts blank and restart never restores revoked access or changes an existing Bot', async (t) => {
   const { store, close, open } = await fixture(t)
   const existing = await store.getBotConfiguration('calendar')
-  const input = { name: '空白日程助理', description: '不借用模板提升能力', profile: 'mock-calendar', requestId: requestId() }
+  const input = { capabilities: [], name: '空白日程助理', description: '不借用模板提升能力', profile: 'mock-calendar', requestId: requestId() }
   const { bot } = await store.createBot(input)
   assert.deepEqual(bot.defaults.tools, []); assert.deepEqual(bot.defaults.toolResources, [])
   assert.deepEqual((await store.getBotConfiguration(bot.id)).assigned, { tools: [], resources: [] })
@@ -243,6 +245,7 @@ test('02 new Bot starts blank and restart never restores revoked access or chang
   await close(store)
   const reopened = await open()
   assert.deepEqual((await reopened.getBotConfiguration(bot.id)).assigned, { tools: [], resources: [] })
+  await assignMockResource(reopened, bot.id)
   await reopened.updateBotConfiguration(bot.id, await edit(reopened, bot.id, { tools: [CALENDAR_TOOL], resources: [args.resource] }))
   assert.ok((await reopened.get(old.taskId)).toolSets.authorized.includes(CALENDAR_TOOL))
   await reopened.updateBotConfiguration(bot.id, await edit(reopened, bot.id, { tools: [], resources: [] }))
@@ -287,7 +290,7 @@ test('02 fresh runtime keeps existing grants and new Bots blank; legacy assignme
   assert.deepEqual(view.assigned.resources, view.bot.defaults.toolResources)
   const existing = structuredClone(view.assigned)
   const old = await store.create({ botId: 'calendar' }); assert.ok(old.toolSets.authorized.includes(CALENDAR_TOOL))
-  const { bot } = await store.createBot({ name: '全新日程助理', profile: 'mock-calendar', requestId: requestId() })
+  const { bot } = await store.createBot({ capabilities: [], name: '全新日程助理', profile: 'mock-calendar', requestId: requestId() })
   assert.deepEqual(bot.defaults.tools, []); assert.deepEqual(bot.defaults.toolResources, [])
   assert.deepEqual((await store.getBotConfiguration(bot.id)).assigned, { tools: [], resources: [] })
   // A prior record without assignment metadata initializes from the current Bot defaults.

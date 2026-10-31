@@ -1,3 +1,4 @@
+import { assignMockResource } from './fixtures/authorized-task-store.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -87,6 +88,7 @@ test('05 live revocation and old Chief without explicit server snapshot fail clo
 test('S3 management assigns installed tools without granting Chief business tools',async t=>{
   const {store:s}=await fixture(t),task=await s.create({botId:'chief'})
   const bot=(await call(s,task,creation)).data.bot
+  await assignMockResource(s,bot.id)
   const result=await call(s,task,{action:'configure',botId:bot.id,expectedVersion:bot.configRef.version,description:'读取日程',tools:['calendar_read_schedule'],resources:['mock:personal']},102)
   assert.equal(result.ok,true)
   assert.deepEqual((await s.getBotConfiguration(bot.id)).assigned,{tools:['calendar_read_schedule'],resources:['mock:personal']})
@@ -153,6 +155,7 @@ test('S1 restored management permission is usable by the existing Chief Task',as
 })
 test('S1 Chief configuration gives an existing target Task the newly assigned tool',async t=>{
   const {store:s}=await fixture(t),chief=await s.create({botId:'chief'}),bot=(await call(s,chief,creation)).data.bot,old=await s.create({botId:bot.id})
+  await assignMockResource(s,bot.id)
   const result=await call(s,chief,{action:'configure',botId:bot.id,expectedVersion:bot.configRef.version,description:'用户已明确授权的模拟日程读取',tools:['calendar_read_schedule'],resources:['mock:personal']},301)
   assert.equal(result.ok,true)
   assert.ok((await s.get(old.taskId)).toolSets.authorized.includes('calendar_read_schedule'))

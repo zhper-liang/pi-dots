@@ -2,17 +2,19 @@ import { createHash } from 'node:crypto'
 import { readdir } from 'node:fs/promises'
 import { defineDoc } from '@earendil-works/pi-durable'
 import { BotDirectory, assertBotActive } from './bot-directory.mjs'
-import { initializeConfiguration } from './bot-configuration.mjs'
+import { initializeConfiguration, availableResourceList } from './bot-configuration.mjs'
 import { ToolAccess, toolCatalog } from './tools.mjs'
-import { TOOL_GROUPS } from './tool-groups.mjs'
+import { TOOL_GROUPS, groupTools } from './tool-groups.mjs'
 import { MANAGEMENT_TOOLS } from './management-tools.mjs'
 import { MAIN_TOOLS } from './main-tools.mjs'
+import { grantResources } from './resource-sharing.mjs'
 import { TaskInputError } from './task-config.mjs'
 
 // Only Skill selection and binding provenance live here. All tool authorization, including
 // MCP tools, remains in ToolAccess. Catalogs and credentials are never persisted here.
 export const CapabilityAssignments = defineDoc({ kind: 'pidot.capability-assignments', version: 1, scope: 'session',
   initial: () => ({ legacySkillIds: null, legacyBots: [], skills: {}, bindings: {} }) })
+export const DEFAULT_CAPABILITIES = ['tool:todos', 'tool:history']
 const copy = value => JSON.parse(JSON.stringify(value))
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value
@@ -67,15 +69,67 @@ async function stateFor(tx, botId) {
   access.revoked ??= {}
   const bot = directory.items.find(item => item.id === botId)
   if (!bot) fail(404, 'BOT_NOT_FOUND', '指定的 Bot 不存在。')
+  const state = await capabilityState(tx)
+  return { directory, access, bot, state }
+}
+export async function capabilityState(tx) {
   const state = await tx.doc(CapabilityAssignments)
   if (state.legacySkillIds === null) {
     // Freeze only the existing read-only built-in source, never a caller's imported catalog.
     const entries = await readdir(new URL('./skills/', import.meta.url), { withFileTypes: true })
     state.legacySkillIds = entries.filter(item => item.isDirectory()).map(item => `skill:${item.name}`)
-    state.legacyBots = directory.items.filter(item => item.capabilityDefaultsVersion !== 2).map(item => item.id)
+    state.legacyBots = (await tx.doc(BotDirectory)).items.filter(item => item.capabilityDefaultsVersion !== 2).map(item => item.id)
   }
-  return { directory, access, bot, state }
+  return state
 }
+export function hasEnabledSkill(state, botId) {
+  return [...Object.keys(state.skills[botId] ?? {}), ...(state.legacyBots.includes(botId) ? state.legacySkillIds : [])]
+    .some(id => state.skills[botId]?.[id] ?? (state.legacyBots.includes(botId) && state.legacySkillIds.includes(id)))
+}
+export function syncSkillTools(access, state, botId) {
+  const names = groupTools('skills'), assigned = access.assignments[botId]
+  if (hasEnabledSkill(state, botId)) {
+    assigned.tools = [...new Set([...assigned.tools, ...names])]
+    access.revoked[botId] = (access.revoked[botId] ?? []).filter(name => !names.includes(name))
+  } else assigned.tools = assigned.tools.filter(name => !names.includes(name))
+}
+
+// Shared mutation for creation (version 1) and later authenticated capability changes.
+async function applyAssignment(tx, state, capabilityId, item, enabled) {
+  const { access, bot } = state, botId = bot.id
+  const binding = state.state.bindings[botId]?.[capabilityId], kind = item?.kind ?? binding.kind
+  const assigned = access.assignments[botId]
+  const names = [...new Set([...(item?.toolNames ?? []), ...(binding?.toolNames ?? [])])]
+  if (kind === 'skill') {
+    state.state.skills[botId] ??= {}
+    state.state.skills[botId][capabilityId] = enabled
+    syncSkillTools(access, state.state, botId)
+  } else if (enabled) {
+    // Only the reviewed current catalog is granted; remembered/removed tools never return.
+    assigned.tools = [...new Set([...assigned.tools, ...item.toolNames])]
+    access.revoked[botId] = (access.revoked[botId] ?? []).filter(name => !item.toolNames.includes(name))
+    if (capabilityId === 'tool:todos') grantResources(access, botId, (await availableResourceList(tx)).resources)
+  } else {
+    assigned.tools = assigned.tools.filter(name => !names.includes(name))
+    access.revoked[botId] = [...new Set([...(access.revoked[botId] ?? []), ...names])]
+  }
+  state.state.bindings[botId] ??= {}
+  state.state.bindings[botId][capabilityId] = { kind, toolNames: enabled ? [...(item?.toolNames ?? [])] : [], catalogRevision: item?.revision ?? binding.catalogRevision }
+  return kind
+}
+
+export async function enableAtCreation(tx, botId, capabilityId, catalog) {
+  const item = catalogItems(catalog).find(entry => entry.id === capabilityId)
+  if (!item) fail(404, 'CAPABILITY_NOT_FOUND', '能力未登记。')
+  if (item.status === 'disabled' || item.kind !== 'skill' && !item.toolNames.length) fail(409, 'CAPABILITY_UNAVAILABLE', '能力已停用或尚未发现工具，不能启用。')
+  await applyAssignment(tx, await stateFor(tx, botId), capabilityId, item, true)
+}
+
+export function listCapabilityCatalog(catalog) {
+  return catalogItems(catalog).map(({ id, kind, name, description, status, revision, version }) =>
+    ({ id, kind, name, description, status, revision, ...(version ? { version } : {}) }))
+}
+
 function project(item, { bot, access, state }) {
   const assigned = access.assignments[bot.id], revoked = access.revoked[bot.id] ?? []
   const tools = item.toolNames.filter(name => assigned.tools.includes(name) && !revoked.includes(name))
@@ -114,22 +168,8 @@ export async function setCapabilityAssignment(tx, botId, input, { catalog = [] }
   if (!item && (input.enabled || !binding)) fail(404, 'CAPABILITY_NOT_FOUND', '能力未登记。')
   if (input.enabled && item.revision !== input.expectedCatalogRevision) fail(409, 'CAPABILITY_CATALOG_CONFLICT', '工具目录已变化，请核对后再启用。')
   if (input.enabled && (item.status === 'disabled' || item.kind !== 'skill' && !item.toolNames.length)) fail(409, 'CAPABILITY_UNAVAILABLE', '能力已停用或尚未发现工具，不能启用。')
-  const kind = item?.kind ?? binding.kind
+  const kind = await applyAssignment(tx, state, input.capabilityId, item, input.enabled)
   const assigned = access.assignments[botId]
-  const names = [...new Set([...(item?.toolNames ?? []), ...(binding?.toolNames ?? [])])]
-  if (kind === 'skill') {
-    state.state.skills[botId] ??= {}
-    state.state.skills[botId][input.capabilityId] = input.enabled
-  } else if (input.enabled) {
-    // Only the reviewed current catalog is granted; remembered/removed tools never return.
-    assigned.tools = [...new Set([...assigned.tools, ...item.toolNames])]
-    access.revoked[botId] = (access.revoked[botId] ?? []).filter(name => !item.toolNames.includes(name))
-  } else {
-    assigned.tools = assigned.tools.filter(name => !names.includes(name))
-    access.revoked[botId] = [...new Set([...(access.revoked[botId] ?? []), ...names])]
-  }
-  state.state.bindings[botId] ??= {}
-  state.state.bindings[botId][input.capabilityId] = { kind, toolNames: input.enabled ? [...(item?.toolNames ?? [])] : [], catalogRevision: item?.revision ?? binding.catalogRevision }
   const history = directory.configurations[botId]
   const next = { ...copy(bot), defaults: { ...copy(bot.defaults), tools: [...assigned.tools], toolResources: [...assigned.resources] },
     configRef: { botId, version: `config-${history.length + 1}-${hash({ input, previous: bot.configRef }).slice(0, 12)}` } }

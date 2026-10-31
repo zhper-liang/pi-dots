@@ -52,8 +52,8 @@ export function createRoutineDelivery({ readCard, canDeliver, readReceipt, write
       // Resolve again immediately before append; no stored/caller-provided main ID is trusted.
       if (await currentMain(tx, botId) !== mainTaskId || await deleted(tx, occurrence.taskId) || await deleted(tx, mainTaskId)) return notSent('session_changed')
       if (!await canDeliver(tx, { botId, occurrence, result, card })) return notSent('authorization_revoked')
-      const data = { mirrorKind: 'finished', childTaskId: occurrence.taskId, childTitle: String(card.title ?? '例行任务').slice(0, 100), botId,
-        summary: `例行任务${labels[result.state]}；请查看原任务。`, outcome: result.state === 'waiting' ? 'limited' : result.state, createdAt: now() }
+      const data = { mirrorKind: 'finished', childTaskId: occurrence.taskId, childTitle: String(card.title ?? '定时任务').slice(0, 100), botId,
+        summary: `定时任务${labels[result.state]}；请查看原会话。`, outcome: result.state === 'waiting' ? 'limited' : result.state, createdAt: now() }
       // Deliberately do not copy source text, approval buttons or claim user receipt/success.
       const entry = await appendMirror(tx, mainCard.conversationId, data)
       if (!Number.isSafeInteger(entry?.id) || entry.id <= 0) fail('ROUTINE_DELIVERY_APPEND_UNCONFIRMED', '镜像写入未确认；不能登记送达。')

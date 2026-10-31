@@ -11,16 +11,19 @@ export const BotDirectory = defineDoc({ kind: 'pidot.bot-directory', version: 1,
 // R1-08: a name is only identity. An omitted description stays blank.
 export function parseBotCreation(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
-    Object.keys(input).some((key) => !['name', 'description', 'profile', 'parameters', 'requestId'].includes(key)) ||
+    Object.keys(input).some((key) => !['name', 'description', 'profile', 'parameters', 'requestId', 'capabilities'].includes(key)) ||
     typeof input.name !== 'string' || !input.name.trim() || input.name.length > 60 ||
     (input.description !== undefined && (typeof input.description !== 'string' || input.description.length > 2000)) ||
     typeof input.requestId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/.test(input.requestId) || ['constructor', 'prototype'].includes(input.requestId) ||
-    (input.profile !== undefined && !['general', 'mock-calendar'].includes(input.profile))) {
-    throw new TaskInputError(400, 'INVALID_BOT', '仅接受名称（1–60字符）、可选职责（1–2000字符）、受控profile/parameters及稳定requestId；不能提供工具、资源或凭证。')
+    (input.profile !== undefined && !['general', 'mock-calendar'].includes(input.profile)) ||
+    (input.capabilities !== undefined && (!Array.isArray(input.capabilities) || input.capabilities.length > 64 ||
+      new Set(input.capabilities).size !== input.capabilities.length || input.capabilities.some(id =>
+        typeof id !== 'string' || !/^(tool|skill|mcp):[A-Za-z0-9][A-Za-z0-9_.:-]{0,190}$/.test(id))))) {
+    throw new TaskInputError(400, 'INVALID_BOT', '仅接受名称（1–60字符）、可选职责（1–2000字符）、受控profile/parameters及稳定requestId；能力只能用能力目录里的 id。')
   }
   const name = input.name.normalize('NFKC').trim()
   const value = { name, description: input.description?.trim() ?? '',
-    profile: input.profile ?? 'general', parameters: input.parameters }
+    profile: input.profile ?? 'general', parameters: input.parameters, capabilities: input.capabilities }
   return { ...value, descriptionProvided: input.description !== undefined, requestId: input.requestId }
 }
 
@@ -28,7 +31,7 @@ const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value
 
 export function createDirectoryBot(directory, input) {
   const signatureFor = (description, defaults) => createHash('sha256').update(JSON.stringify(canonical({ name: input.name,
-    description, profile: input.profile, ...(defaults ? { defaults } : input.parameters === undefined ? {} : { parameters: input.parameters }) }))).digest('hex')
+    description, profile: input.profile, ...(input.capabilities !== undefined ? { capabilities: input.capabilities } : {}), ...(defaults ? { defaults } : input.parameters === undefined ? {} : { parameters: input.parameters }) }))).digest('hex')
   const signature = signatureFor(input.description)
   const previous = Object.hasOwn(directory.requests, input.requestId) ? directory.requests[input.requestId] : undefined
   // Old receipts signed the inferred description. Only an omitted description can replay

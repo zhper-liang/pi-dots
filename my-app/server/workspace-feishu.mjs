@@ -1,3 +1,4 @@
+import { shareWithBots } from './resource-sharing.mjs'
 import { reconcileReminders } from './workspace-reminder-state.mjs'
 import { createWorkspaceSync } from './workspace-sync.mjs'
 import { randomUUID } from 'node:crypto'
@@ -40,9 +41,10 @@ export function createFeishuWorkspaceService({ repository: repo, authority, cale
       // D14: connected = usable; the new epoch still invalidates intents from the previous connection.
       await seedSourceGrant(repo, tx, { sourceId, capabilities: actions })
     }
-    // A reconnect of a calendar seen before also drops its old assignments (fail closed: an assignment
-    // made between rebind and this first sync is dropped too and must be made again).
+    // Reconnect drops stale assignments, then restores this source for Bots holding 日程与待办.
+    // Explicit narrowing remains in excludedResources and is never restored automatically.
     await dropStaleResources(tx, old && fresh ? null : sourceId)
+    if (fresh) await shareWithBots(tx, [sourceResource(sourceId)])
     return { sourceId, binding: copy(b) }
   }
   async function permission(tx, actor, sourceId, action = 'read', full = false) {
@@ -147,7 +149,7 @@ export function createFeishuWorkspaceService({ repository: repo, authority, cale
         const a = await sync(tx)
         if (!a) return { sources: [], notice: '请先在现有连接管理中明确绑定专用应用日历。' }
         const grant = await repo.get(tx, 'Grant', actor.ownerId, a.sourceId, 'user:authenticated-user')
-        return { sources: [{ id: a.sourceId, provider: 'feishu', calendarId: a.binding.calendarId, authority: 'external', capabilities: actions, epoch: grant.epoch, authorized: grant.actions.includes('read'), readScope: grant.readScope }], notice }
+        return { sources: [{ id: a.sourceId, provider: 'feishu', calendarId: a.binding.calendarId, calendarName: a.binding.summary, authority: 'external', capabilities: actions, epoch: grant.epoch, authorized: grant.actions.includes('read'), readScope: grant.readScope }], notice }
       })
     },
     async grantExternal(actor, input) {

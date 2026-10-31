@@ -15,7 +15,7 @@ const kindName = { Event: '日程', Todo: '待办' }
 
 
 const WEEKDAYS = [[1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日']]
-const EVENT_TEXT = { todo_due: '待办到期时', event_changed: '日程变更时', task_finished: '本Bot的任务结束时' }
+const EVENT_TEXT = { todo_due: '待办到期时', event_changed: '日程变更时', task_finished: '这个机器人的任务结束时' }
 /** Plain-language schedule rule (PLAN §8.5), shared by the inbox summary and the routine card. */
 export function ruleText(rule = {}) {
   if (rule.type === 'daily') return `每天 ${rule.time}`
@@ -27,30 +27,30 @@ export function ruleText(rule = {}) {
   return '时间未定'
 }
 export function summarizeApproval(botName, toolName, args = {}, before = null) {
-  const who = botName || 'Bot', title = quote(args.title ?? before?.title ?? before?.summary)
+  const who = botName || '机器人', title = quote(args.title ?? before?.title ?? before?.summary)
   if (toolName === 'calendar_feishu_create_event') return `${who}想在 ${chineseTime(args.start)} 添加飞书日程${title}`
   if (toolName === 'calendar_feishu_update_event') return `${who}想修改飞书日程${title}${args.start ? `，改到 ${chineseTime(args.start)}` : ''}`
   if (toolName === 'calendar_feishu_delete_event') return `${who}想删除飞书日程${title}`
   if (toolName === 'calendar_reschedule_event') return `${who}想把模拟日程${title}从 ${chineseTime(args.expectedStart)} 改到 ${chineseTime(args.start)}`
-  if (toolName === 'routine_propose') return `${who}想新建例行任务${quote(args.title)}（${ruleText(args.rule)}）`
+  if (toolName === 'routine_propose') return `${who}想新建定时任务${quote(args.title)}（${ruleText(args.rule)}）`
   if (toolName === 'bot_manage') {
     const target = quote(before?.name) || quote(args.botId)
-    if (args.action === 'create') return `${who}想新建Bot${quote(args.name)}（${args.profile === 'mock-calendar' ? '日程类型' : '通用类型'}${args.parameters ? '，带自定义参数' : ''}）`
-    if (args.action === 'deactivate') return `${who}想停用Bot${target}`
-    return `${who}想修改Bot${target}的配置`
+    if (args.action === 'create') return `${who}想新建机器人${quote(args.name)}（${args.profile === 'mock-calendar' ? '日程类型' : '通用类型'}${args.parameters ? '，带自定义参数' : ''}）`
+    if (args.action === 'deactivate') return `${who}想停用机器人${target}`
+    return `${who}想修改机器人${target}的配置`
   }
   return `${who}想执行「${toolName}」，需要你确认`
 }
 // Past tense for the automatic-execution record (I-13): what already happened, with undo.
 export function summarizeAutoApplied(botName, op) {
-  const who = botName || 'Bot', a = op.normalizedArgs ?? {}, data = a.data ?? {}, before = op.confirmation?.before
+  const who = botName || '机器人', a = op.normalizedArgs ?? {}, data = a.data ?? {}, before = op.confirmation?.before
   const kind = kindName[a.type] ?? '事项', title = quote(data.title ?? before?.title)
   if (op.action === 'create') return a.type === 'Event' ? `${who}已自动在 ${chineseTime(data.start)} 添加${title || kind}` : `${who}已自动添加${kind}${title}`
   if (op.action === 'delete') return `${who}已自动删除${kind}${title}`
   return `${who}已自动修改${kind}${title}${a.type === 'Event' && data.start ? `，改到 ${chineseTime(data.start)}` : ''}`
 }
 export function summarizeOperation(botName, op) {
-  const who = botName || 'Bot', a = op.normalizedArgs ?? {}, data = a.data ?? {}, before = op.confirmation?.before
+  const who = botName || '机器人', a = op.normalizedArgs ?? {}, data = a.data ?? {}, before = op.confirmation?.before
   const kind = kindName[a.type] ?? '事项', title = quote(data.title ?? before?.title)
   if (op.action === 'create') return a.type === 'Event' ? `${who}想在 ${chineseTime(data.start)} 添加${title || kind}` : `${who}想添加${kind}${title}`
   if (op.action === 'delete') return `${who}想删除${kind}${title}`

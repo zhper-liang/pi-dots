@@ -104,7 +104,7 @@ test('T4-01f the timeline lists turns, tool calls, results, approvals, questions
   const entries = buildTimeline(sampleTask())
   assert.deepEqual(entries.map(e => e.kind), ['input', 'model', 'tool', 'tool', 'tool', 'approval', 'system', 'decision', 'receipt', 'question', 'answer', 'reply', 'error', 'tool', 'end'])
   const [read, reschedule, status] = entries.filter(e => e.kind === 'tool')
-  assert.deepEqual([read.title, read.status, read.result], ['读取模拟日程', 'ok', '2 条'])
+  assert.deepEqual([read.title, read.status, read.result], ['读取日程', 'ok', '2 条'])
   assert.deepEqual([reschedule.status, reschedule.result], ['ok', '等你审批'])
   assert.equal(status.status, 'running') // a call without a saved result is not shown as finished
   // P-14: a short summary by default; the raw arguments and result are kept for "展开".
@@ -153,7 +153,7 @@ test('T07 every notification kind belongs to exactly one lane; unknown kinds rem
   const { notificationSection, notificationReason } = await import('../src/system-cards.mjs')
   for (const kind of ['approval', 'workspace-proposal', 'blocker', 'skipped', 'future-kind']) assert.equal(notificationSection({ kind }), 'attention', kind)
   for (const kind of ['reminder', 'routine-result', 'auto-applied', 'finding']) assert.equal(notificationSection({ kind }), 'reminders', kind)
-  assert.match(notificationReason({ kind: 'skipped' }), /已跳过.*不会自动重试/)
+  assert.match(notificationReason({ kind: 'skipped' }), /这一步需要你处理，已跳过；打开原会话查看。/)
   assert.deepEqual(cardActions(inboxCard({ kind: 'skipped' })), [], 'a skipped receipt must never become an executable approval')
 })
 

@@ -6,6 +6,12 @@ import { BotDirectory } from '../bot-directory.mjs'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { ToolAccess } from '../tools.mjs'
 import { addRule, PolicyRules } from '../policy.mjs'
+export async function assignMockResource(store, botId) {
+  await store.harness.commit(async tx => {
+    const assigned = (await tx.doc(ToolAccess)).assignments[botId]
+    assigned.resources = [...new Set([...assigned.resources, 'mock:personal'])]
+  }, context)
+}
 export async function assignCapabilities(store, { operation, tools = [], resources = [] }) {
   return store.harness.commit(async tx => {
     const access = await tx.doc(ToolAccess), directory = await tx.doc(BotDirectory)
@@ -29,7 +35,7 @@ export async function openTaskStore(options) {
       const d = await tx.doc(BotDirectory), a = await tx.doc(ToolAccess)
       for (const bot of d.items) a.assignments[bot.id] ??= { tools: [...bot.defaults.tools], resources: [...bot.defaults.toolResources] }
       // Approval/recovery fixtures opt into ask, including the Feishu delete that asked by default
-      // before tool groups. Production writes run directly unless a group is switched off.
+      // before tool groups. Production writes run directly unless automation is paused.
       if (legacyApprovalRules) for (const bot of d.items) for (const name of ['calendar_reschedule_event', 'calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_feishu_delete_event', 'workspace.prepare_change']) {
         const match = { tool: name }
         if (!(await tx.doc(PolicyRules)).items.some(r => r.botId === bot.id && JSON.stringify(r.match) === JSON.stringify(match)))

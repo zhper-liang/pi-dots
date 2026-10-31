@@ -78,7 +78,7 @@ test('production external MCP HTTP configures, saves credentials, checks, binds,
   const publicList = (await f.call()).body.data.items
   assert.equal(publicList[0].hasCredential, true)
   assert.equal(JSON.stringify(publicList).includes('synthetic-credential'), false)
-  const { bot } = await f.store.createBot({ name: 'MCP blank bot', requestId: 'new-mcp-blank-bot' })
+  const { bot } = await f.store.createBot({ capabilities: [], name: 'MCP blank bot', requestId: 'new-mcp-blank-bot' })
   assert.deepEqual(bot.defaults.tools, [])
   const initial = (await f.store.getBotCapabilities(bot.id)).items.find(item => item.id === 'mcp:fixture')
   assert.equal(initial.enabledForBot, false)
@@ -104,7 +104,7 @@ test('actual Harness advertises a bound dynamic schema, runs an enabled tool dir
   } })
   await f.configure(); await f.check('fixture')
   alias = (await f.service.toolCatalog()).find(tool => tool.originalName === 'greeting.echo').name
-  const { bot } = await f.store.createBot({ name: 'Dynamic user', requestId: 'dynamic-model-bot' })
+  const { bot } = await f.store.createBot({ capabilities: [], name: 'Dynamic user', requestId: 'dynamic-model-bot' })
   await f.bind(bot.id)
   const task = await f.store.create({ botId: bot.id })
   await f.store.send(task.taskId, 'Use the configured echo')
@@ -157,7 +157,7 @@ test('large official MCP results are stored whole and read through the actual pa
   } })
   await f.configure(); await f.check('fixture')
   alias = (await f.service.toolCatalog()).find(tool => tool.originalName === 'greeting.echo').name
-  const { bot } = await f.store.createBot({ name: 'Paged result reader', requestId: 'paged-result-reader' })
+  const { bot } = await f.store.createBot({ capabilities: [], name: 'Paged result reader', requestId: 'paged-result-reader' })
   await f.bind(bot.id)
   const current = await f.store.getBotConfiguration(bot.id)
   await f.store.updateBotConfiguration(bot.id, { requestId: 'paged-result-read-tool', expectedVersion: current.bot.configRef.version,
@@ -185,7 +185,7 @@ test('reviewed source replacement retires old context while a new request can co
   } })
   await f.configure(); await f.check('fixture')
   alias = (await f.service.toolCatalog()).find(tool => tool.originalName === 'greeting.echo').name
-  const { bot } = await f.store.createBot({ name: 'Source replacement', requestId: 'source-replacement-bot' })
+  const { bot } = await f.store.createBot({ capabilities: [], name: 'Source replacement', requestId: 'source-replacement-bot' })
   await f.bind(bot.id)
   const task = await f.store.create({ botId: bot.id })
   const run = async message => {
@@ -215,7 +215,7 @@ test('disabling an in-flight benign MCP call stores one unknown receipt and neve
   try {
     await f.configure(); const checked = await f.check('fixture')
     alias = (await f.service.toolCatalog()).find(tool => tool.originalName === 'records.write').name
-    const { bot } = await f.store.createBot({ name: 'Interruption fixture', requestId: 'interruption-fixture' })
+    const { bot } = await f.store.createBot({ capabilities: [], name: 'Interruption fixture', requestId: 'interruption-fixture' })
     await f.bind(bot.id)
     const task = await f.store.create({ botId: bot.id })
     await f.store.send(task.taskId, 'Run the benign fixture call')

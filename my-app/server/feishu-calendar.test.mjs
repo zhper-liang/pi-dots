@@ -65,14 +65,14 @@ test('network timeout is bounded and never retries', async () => {
   const c = createFeishuClient({ env: env(), timeoutMs: 5, fetchImpl: async (_u, { signal }) => new Promise((_resolve, reject) => { const timer = setTimeout(() => reject(new Error('timeout-secret')), 15); signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('private-token')) }, { once: true }) }) })
   await assert.rejects(c.api('/calendar/v4/calendars'), { code: 'FEISHU_TRANSPORT' })
 })
-test('binding is explicit, strict, persists without implicit grants; old mock tasks remain mock', async t => {
+test('binding is explicit, strict, shares sources with schedule-enabled Bots; old mock tasks remain mock', async t => {
   const { s, http, close, open } = await fixture(t)
   const old = await s.create({ botId: 'calendar' })
   assert.equal((await s.feishuCalendar.status()).binding, null)
   await assert.rejects(s.feishuCalendar.manage({ action: 'bind', calendarId: 'test-calendar' }), { code: 'FEISHU_CONFIRM_REQUIRED' })
   for (const id of ['../other', 'x/y', 'x?token=y', '.', 33]) await assert.rejects(s.feishuCalendar.manage({ action: 'bind', calendarId: id, confirm: true }), { code: 'FEISHU_INVALID_MANAGEMENT' })
   const b = await bind(s); assert.match(b.resource, /^feishu:/)
-  assert.equal((await s.getBotConfiguration('calendar')).assigned.resources.includes(b.resource), false)
+  assert.equal((await s.getBotConfiguration('calendar')).assigned.resources.includes(b.resource), true)
   await assert.rejects(read(s, old.taskId, b.resource), { code: 'TOOL_NOT_AUTHORIZED' }); assert.equal(http.counts.read, 0)
   await grant(s, b.resource); const task = await s.create({ botId: 'calendar' }); assert.equal((await read(s, task.taskId, b.resource)).simulated, false)
   assert.deepEqual((await s.get(old.taskId)).parameters.toolResources, old.parameters.toolResources)

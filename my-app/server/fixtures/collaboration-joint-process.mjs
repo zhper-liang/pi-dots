@@ -1,3 +1,4 @@
+import { assignMockResource } from './authorized-task-store.mjs'
 import {writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {openTaskStore} from '../tasks.mjs'
@@ -10,7 +11,7 @@ if(!dir?.startsWith('/tmp/pidot-joint-06-'))throw Error('isolated database only'
 let store,parent,stopped=false
 function stop(extra={}){if(stopped)return;stopped=true;writeFileSync(join(dir,'checkpoint.json'),JSON.stringify({parentTaskId:parent.taskId,boundary,...extra}));process.kill(process.pid,'SIGSTOP')}
 store=await openTaskStore({file:join(dir,'test.sqlite'),bots:listBots(config),modelReply:driver(()=>store),calendarWriteImpl:async(_op,{execute})=>{const receipt=await execute();if(boundary==='effect')stop({effect:true});return receipt}})
-for(const id of ['chief','calendar','todo']){const {bot}=await store.getBotConfiguration(id);await store.updateBotConfiguration(id,{requestId:'joint06-config-'+id,expectedVersion:bot.configRef.version,description:bot.description,tools,resources:['mock:personal']})}
+for(const id of ['chief','calendar','todo']){await assignMockResource(store,id);const {bot}=await store.getBotConfiguration(id);await store.updateBotConfiguration(id,{requestId:'joint06-config-'+id,expectedVersion:bot.configRef.version,description:bot.description,tools,resources:['mock:personal']})}
 await store.harness.commit(tx=>addRule(tx,{botId:'calendar',match:{tool:'calendar_reschedule_event'},effect:'ask'}),context)
 parent=await store.create({botId:'chief'})
 store.harness.subscribeCommits(({changes})=>{
