@@ -249,7 +249,7 @@ test('T5-06 Bot page routine form and labels (pure UI logic)', async () => {
   assert.equal(routineInput({ ...base, when: 'event_changed', writes: false }).input.actionSpec.writes, false)
   for (const bad of [{ when: 'daily', value: '8点' }, { when: 'interval', value: '0' }, { when: 'at', value: '2026-10-21T08:00:00+08:00' }, { when: 'cron', value: '* * *' }, { title: ' ', when: 'daily', value: '08:00' }]) assert.ok(routineInput({ ...base, ...bad }).error, JSON.stringify(bad))
   assert.equal(ruleLabel({ type: 'at', at: '2026-10-23T01:00:00.000Z' }), '10月23日 09:00 一次')
-  assert.deepEqual([ruleLabel({ type: 'daily', time: '08:00' }), ruleLabel({ type: 'interval', seconds: 7200 }), ruleLabel({ type: 'event', event: 'task_finished' })], ['每天 08:00', '每 2 小时', '本 Bot 的任务结束时'])
+  assert.deepEqual([ruleLabel({ type: 'daily', time: '08:00' }), ruleLabel({ type: 'interval', seconds: 7200 }), ruleLabel({ type: 'event', event: 'task_finished' })], ['每天 08:00', '每 2 小时', '这个机器人的任务结束时'])
   assert.equal(ruleText({ type: 'interval', seconds: 7200 }), '每 2 小时')
   assert.deepEqual([runLabel({ state: 'skipped', reason: 'automation_paused' }), runLabel({ state: 'succeeded', test: true })], ['跳过（自动化暂停中）', '测试 · 完成'])
   assert.deepEqual(cardActions(inboxCard({ kind: 'approval', detail: { toolName: 'routine_propose' } })), ['approve', 'always', 'reject'])

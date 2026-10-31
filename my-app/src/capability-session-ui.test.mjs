@@ -83,13 +83,13 @@ async function harness(t, filename, initialProps, fetchImpl = async () => respon
     timerCount: delay => [...timers.values()].filter(timer => timer.delay === delay).length }
 }
 
-function list(tree) { return find(tree, 'stub-CapabilityList')?.props }
+function list(tree) { return find(tree, 'stub-CapabilityPicker')?.props }
 
 test('same Bot capabilities load on visible entry and refresh through the existing bounded controller without remounting', async t => {
   let current = catalog(), reads = 0
-  const h = await harness(t, './BotRules.tsx', { token: 'fixture-token', botId: 'alpha', active: false, refreshKey: 0 }, async path => {
+  const h = await harness(t, './BotCapabilities.tsx', { token: 'fixture-token', botId: 'alpha', readOnly: false, active: false }, async () => {
     reads++
-    return response(path.endsWith('/configuration') ? { toolGroups: [] } : structuredClone(current))
+    return response(structuredClone(current))
   })
   await h.settle(); assert.equal(reads, 0)
   h.update({ active: true }); await h.settle()
@@ -110,21 +110,20 @@ test('same Bot capabilities load on visible entry and refresh through the existi
 test('background capability reads cannot overwrite the original in-flight mutation or its unknown retry', async t => {
   let current = catalog(), delayedRead, delayNextRead = false
   const firstPost = deferred(), posts = []
-  const h = await harness(t, './BotRules.tsx', { token: 'fixture-token', botId: 'alpha', active: true, refreshKey: 0 }, async (path, init) => {
+  const h = await harness(t, './BotCapabilities.tsx', { token: 'fixture-token', botId: 'alpha', readOnly: false, active: true }, async (_path, init) => {
     if (init.method === 'POST') {
       posts.push(JSON.parse(init.body))
       if (posts.length === 1) return firstPost.promise
       current = catalog('alpha', { revision: 'bot-2', items: [capability({ enabledForBot: true })] })
       return response({ enabledForBot: true })
     }
-    if (path.endsWith('/configuration')) return response({ toolGroups: [] })
     if (delayNextRead) { delayNextRead = false; delayedRead = deferred(); return delayedRead.promise }
     return response(structuredClone(current))
   })
   await h.settle(); delayNextRead = true
   h.fireTimer(15000); await tick()
   assert.ok(delayedRead)
-  list(h.render()).onToggle(list(h.render()).items[0])
+  list(h.render()).onToggle('mcp:fixture', true)
   await h.settle()
   assert.equal(posts.length, 1)
   assert.equal(list(h.render()).pendingId, 'mcp:fixture')
@@ -132,24 +131,24 @@ test('background capability reads cannot overwrite the original in-flight mutati
   await h.settle()
   assert.equal(list(h.render()).items[0].id, 'mcp:fixture')
   firstPost.reject(new Error('fixture response lost'))
-  await h.settle(); h.update({ refreshKey: 5 }); await h.settle()
+  await h.settle(); h.update({ active: false }); h.update({ active: true }); await h.settle()
   assert.equal(h.timerCount(15000), 0)
-  assert.ok(button(h.render(), '重试原操作'))
-  button(h.render(), '重试原操作').props.onClick()
+  assert.ok(button(h.render(), '重试'))
+  button(h.render(), '重试').props.onClick()
   await h.settle()
   assert.equal(posts.length, 2)
   assert.deepEqual(posts[1], posts[0])
   assert.equal(posts[0].expectedRevision, 'bot-1')
   assert.equal(posts[0].expectedCatalogRevision, 'catalog-1')
-  assert.equal(list(h.render()).items[0].enabledForBot, true)
+  assert.deepEqual(list(h.render()).enabled, ['mcp:fixture'])
 })
 
 test('late capability reads from a disposed Bot cannot update a newly mounted Bot', async t => {
   const oldRead = deferred()
-  const first = await harness(t, './BotRules.tsx', { token: 'old-token', botId: 'alpha', active: true }, async path => path.endsWith('/configuration') ? response({ toolGroups: [] }) : oldRead.promise)
+  const first = await harness(t, './BotCapabilities.tsx', { token: 'old-token', botId: 'alpha', readOnly: false, active: true }, async () => oldRead.promise)
   await tick(); first.render(); await tick(); first.close()
   const oldWrites = first.writes()
-  const next = await harness(t, './BotRules.tsx', { token: 'new-token', botId: 'beta', active: true }, async path => response(path.endsWith('/configuration') ? { toolGroups: [] } : catalog('beta', { items: [capability({ id: 'mcp:beta' })] })))
+  const next = await harness(t, './BotCapabilities.tsx', { token: 'new-token', botId: 'beta', readOnly: false, active: true }, async () => response(catalog('beta', { items: [capability({ id: 'mcp:beta' })] })))
   await next.settle()
   oldRead.resolve(response(catalog('alpha', { items: [capability({ id: 'mcp:old-alpha' })] })))
   await next.settle()
@@ -157,16 +156,15 @@ test('late capability reads from a disposed Bot cannot update a newly mounted Bo
   assert.equal(list(next.render()).items[0].id, 'mcp:beta')
 })
 
-test('Bot detail activates its capability reader only for the visible tools tab and forwards the App refresh key', async t => {
-  const props = { bot: { id: 'alpha', name: 'Alpha', description: '', configRef: { botId: 'alpha', version: '1' } }, token: 'fixture-token', tasks: [], creating: false,
-    active: false, refreshKey: 4, tab: 'rules', mainTaskId: 1, chat: null }
+test('Bot settings activate the capability reader only when the capability tab is visible', async t => {
+  const props = { bot: { id: 'alpha', name: 'Alpha', description: '', configRef: { botId: 'alpha', version: '1' } }, token: 'fixture-token',
+    active: false, tab: 'capabilities', mainTaskId: 1, onTab() {}, onChat() {}, onSaved() {}, onDeactivate() {} }
   const h = await harness(t, './BotTemplatePage.tsx', props)
-  assert.equal(find(h.render(), 'stub-BotRules').props.active, false)
+  assert.equal(find(h.render(), 'stub-BotCapabilities').props.active, false)
   h.update({ active: true })
-  assert.equal(find(h.render(), 'stub-BotRules').props.active, true)
-  assert.equal(find(h.render(), 'stub-BotRules').props.refreshKey, 4)
-  h.update({ tab: 'chat' })
-  assert.equal(find(h.render(), 'stub-BotRules').props.active, false)
+  assert.equal(find(h.render(), 'stub-BotCapabilities').props.active, true)
+  h.update({ tab: 'memory' })
+  assert.equal(find(h.render(), 'stub-BotCapabilities').props.active, false)
 })
 
 const target = { taskId: 44, botId: 'alpha', kind: 'session', title: 'Fixture session' }
@@ -185,11 +183,11 @@ test('session definite failure retains the row and exposes a separate explicit r
   await openConfirmation(h); button(h.render(), '删除会话').props.onClick()
   await h.settle()
   assert.equal(completed.length, 0)
-  assert.ok(button(h.render(), '重试原请求'))
-  button(h.render(), '核查原请求').props.onClick(); await h.settle()
+  assert.ok(button(h.render(), '重试'))
+  button(h.render(), '核对删除结果').props.onClick(); await h.settle()
   assert.deepEqual(calls.map(call => call.method), ['POST', 'GET'])
   assert.equal(completed.length, 0)
-  button(h.render(), '重试原请求').props.onClick(); await h.settle()
+  button(h.render(), '重试').props.onClick(); await h.settle()
   assert.deepEqual(calls.map(call => call.method), ['POST', 'GET', 'POST'])
   assert.equal(calls[2].path, calls[0].path)
   assert.equal(calls[2].body, calls[0].body)
@@ -208,15 +206,15 @@ test('pending session deletion remains query-only; a durable unknown outcome per
   })
   const h = await harness(t, './SessionActions.tsx', { target, onAction: handlers.action, onVerify: handlers.verify, onComplete: result => completed.push(result) })
   await openConfirmation(h); button(h.render(), '删除会话').props.onClick(); await h.settle()
-  assert.equal(button(h.render(), '重试原请求'), undefined)
-  button(h.render(), '核查原请求').props.onClick(); await h.settle()
+  assert.equal(button(h.render(), '重试'), undefined)
+  button(h.render(), '核对删除结果').props.onClick(); await h.settle()
   assert.deepEqual(calls.map(call => call.method), ['POST', 'GET'])
-  assert.equal(button(h.render(), '重试原请求'), undefined)
+  assert.equal(button(h.render(), '重试'), undefined)
   state = 'unknown'
-  button(h.render(), '核查原请求').props.onClick(); await h.settle()
+  button(h.render(), '核对删除结果').props.onClick(); await h.settle()
   assert.deepEqual(calls.map(call => call.method), ['POST', 'GET', 'GET'])
   assert.equal(completed.length, 0)
-  button(h.render(), '重试原请求').props.onClick(); await h.settle()
+  button(h.render(), '重试').props.onClick(); await h.settle()
   assert.deepEqual(calls.map(call => call.method), ['POST', 'GET', 'GET', 'POST'])
   assert.equal(calls[3].body, calls[0].body)
   assert.equal(completed.length, 1)
@@ -232,11 +230,11 @@ test('a missing original session request offers explicit retry and GET never per
   })
   const h = await harness(t, './SessionActions.tsx', { target, onAction: handlers.action, onVerify: handlers.verify, onComplete: result => completed.push(result) })
   await openConfirmation(h); button(h.render(), '删除会话').props.onClick(); await h.settle()
-  button(h.render(), '核查原请求').props.onClick(); await h.settle()
+  button(h.render(), '核对删除结果').props.onClick(); await h.settle()
   assert.deepEqual(calls.map(call => call.method), ['POST', 'GET'])
   assert.equal(completed.length, 0)
-  assert.ok(button(h.render(), '重试原请求'))
-  button(h.render(), '重试原请求').props.onClick(); await h.settle()
+  assert.ok(button(h.render(), '重试'))
+  button(h.render(), '重试').props.onClick(); await h.settle()
   assert.equal(calls[2].body, calls[0].body)
   assert.equal(completed.length, 1)
 })

@@ -17,8 +17,8 @@ test('T10 payload trims ordinary inputs, omits blank key and carries replacement
     requestId: 'fixture-request-id', baseUrl: 'https://fixture.invalid/v1', model: 'model-a',
   })
   assert.equal(Object.hasOwn(modelSettingsPayload({ baseUrl: '', model: '', apiKey: 'synthetic-replacement' }, 'fixture-request-id'), 'apiKey'), true)
-  assert.match(MODEL_SETTINGS_NOTICE, /对所有会话的下一次调用生效/)
-  assert.match(MODEL_SETTINGS_NOTICE, /Task.*模型名快照/)
+  assert.equal(MODEL_SETTINGS_NOTICE, '改完后，之后的对话用新设置。')
+  assert.doesNotMatch(MODEL_SETTINGS_NOTICE, /Task|快照/)
 })
 
 test('T10 choices preserve snapshot, remove duplicates and reject malformed ids', () => {
@@ -180,7 +180,7 @@ test('R1-05 unknown saves lock editing, keep recovery usable and replay the iden
   const dialog = element(tree, 'editor-dialog')
   assert.equal(dialog.props.pending, false)
   assert.equal(dialog.props.disabled, true)
-  const recovery = element(dialog.props.footer, 'button', props => props.children === '重试原请求')
+  const recovery = element(dialog.props.footer, 'button', props => props.children === '重试')
   assert.equal(recovery.props.type, 'button')
   recovery.props.onClick(); await harness.idle(); tree = harness.render()
   assert.deepEqual(sent[1], sent[0])

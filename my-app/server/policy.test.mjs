@@ -4,7 +4,6 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openTaskStore } from './fixtures/authorized-task-store.mjs'
-import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { listBots } from './bots.mjs'
 import { addRule, decide, listRules, openGroup, pickRule, PolicyRules, setAutomationPause, unattended, validateRule } from './policy.mjs'
 
@@ -66,8 +65,6 @@ async function fixture(fn) {
   finally { await s?.close(); await rm(dir, { recursive: true, force: true }) }
 }
 async function settled(s, id) { for (let i = 0; i < 800; i++) { const t = await s.get(id); if (t.activeInputId === null && t.runtime.checkpoint?.phase === 'awaitInput') return t; await new Promise(r => setTimeout(r, 5)) } assert.fail('Task did not settle') }
-async function configured(s) { const { bot } = await s.getBotConfiguration('calendar'); await s.updateBotConfiguration('calendar', { requestId: 'policy-assign-' + ++seq, expectedVersion: bot.configRef.version, description: bot.description, tools: WORKSPACE_TOOLS, resources: ['workspace:local'] }) }
-async function run(s, script, id, args) { script.push(turn('workspace.prepare_change', args)); await s.send(id, '请处理'); return (await settled(s, id)).messages.filter(m => m.toolName === 'workspace.prepare_change').at(-1).result.data }
 
 test('T01 openGroup clears only that group\'s rules for that Bot', async () => {
   const tx = fakeTx()

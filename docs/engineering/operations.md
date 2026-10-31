@@ -40,13 +40,31 @@
 1. 在 Google Cloud 控制台新建项目，启用 Calendar、Tasks、Gmail、Drive、Docs、Sheets 六个 API。
 2. OAuth 同意屏幕选“外部”，发布状态设为“正式发布”（未验证，登录时会多一次“未经验证的应用”提示；停在“测试”时令牌 7 天过期）。
 3. 新建“桌面应用”类型的 OAuth 客户端。
-4. 在 Pidot 设置页“连接 Google”填客户端 ID 和密钥（也可用 `GOOGLE_OAUTH_CLIENT_ID`、`GOOGLE_OAUTH_CLIENT_SECRET`，环境变量优先，界面随之只读），勾选日历、任务和邮件与文件，点连接并在浏览器登录。Pidot 在另一台机器上时，把浏览器地址栏里的跳转地址粘回设置页。
+4. 在 Pidot “设置 → 连接 → Google”填客户端 ID 和密钥（也可用 `GOOGLE_OAUTH_CLIENT_ID`、`GOOGLE_OAUTH_CLIENT_SECRET`，环境变量优先，界面随之只读），勾选日历、任务和邮件与文件，点连接并在浏览器登录。Pidot 在另一台机器上时，把浏览器地址栏里的跳转地址粘回设置页。
 5. 按第三轮计划的 `R3-05-OPS.md` 写 workspace-mcp 的环境文件并启动。必须设 `WORKSPACE_MCP_HOST=127.0.0.1`，否则它监听所有网卡。端口不是 8000 时在 `my-app/.env` 设 `PIDOT_WORKSPACE_MCP_URL`。
 6. 对 Chief 说“接上 Google 邮件和文件，给某个 Bot”。设置页会显示 workspace-mcp 是否在运行、是否已连接。
 
 - 断开：设置页断开会撤销令牌、删除本地凭据，所有 Bot 立即失去 Google 来源和 workspace-mcp 工具。
 - 迁到服务器：停服务，复制数据库目录（含 `google/`），在服务器装同一版本 workspace-mcp 并用同一份环境文件，启动后在设置页检查一次连接。
 - 已知限制：workspace-mcp 的写入结果不明时只记 unknown，是否重复发信要自己核对；重启后 workspace-mcp 连接要重新检查一次才可用。
+
+### 第四轮升级（R4）
+
+1. 停掉正在运行的 Pidot 服务。
+2. **复制整个 `my-app/data/` 目录做手动备份**，包含 SQLite 及旁边的 `bot-workspaces/`、连接配置和凭据目录；备份按本机秘密文件保管，不提交仓库。自定义数据库路径时复制其整个数据目录。
+3. 更新代码，在 `my-app/` 执行 `pnpm build`，之后 `pnpm start:api`。生产入口会传 `r4Migration: true`，首次启动按 `ToolAccess.r4MigratedAt` 自动迁移一次，后续启动不重跑；嵌入与普通测试 store 默认不迁移。
+4. 打开机器人设置、创建页与事项/通知/全局设置，按[第四轮清单](../../plans/active/r4-simplify/README.md#2-目标与验收)验收。真实 Google / 飞书账号手测仍由用户自己做。
+
+一次迁移依序完成：
+- 对已开日历或待办任一工具的机器人补全合并后的「日程与待办」工具集，并清除这些工具的撤销标记。
+- 为已启用 Skill 的机器人同步加载所需工具。
+- 为持有「日程与待办」的机器人分配所有已连接日历和任务列表，保留单机器人收窄。
+- 删除非 preset 的 ask 规则，保留 deny / allow；写入直接做，全局暂停仍要求确认。
+- 从全部分配及排除项移除 `mock:personal`，后端模拟代码保留。
+- 日程、待办预设说明仍等于旧文案时更新，用户改过的说明保留；打开记忆文件后，仅仍等于旧原文的人格同步更新。
+- 记录 `r4MigratedAt`。不自动备份、不新增回滚开关，不手工删库或重写历史。
+
+注意：飞书重新绑定产生新的 `feishu:` id 时，旧 id 上的单机器人收窄不作用于新 id，需在该机器人的「设置 → 高级」重新关闭。
 
 ## 验证与适用性
 自动测试仅使用临时/隔离库，真实强杀使用隔离子进程，不对真实 provider 人为制造未知写入。正式库不用于验收；不得通过清库、清审批或重新授权掩盖历史问题。

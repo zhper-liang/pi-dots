@@ -12,13 +12,13 @@ Bot 保存身份、职责、版本化配置及工具分配；Conversation 承载
 2. 固定模型名、提示词等运行配置版本及调用额度；工具与资源按 Bot 当前分配解析，Skill 按当前可用依赖加载。
 3. 持久化 Task、conversation 与任务卡，装配上下文后执行。
 
-权限以当前登记、ToolAccess/CapabilityAssignments及撤销为准，没有能力池、Bot Grant、档位或Task许可快照/epoch匹配；来源记录自身的版本字段仍保留。R1新Bot的业务工具、MCP/Skill和来源默认空白，旧Bot的精确分配、撤销与确认规则保留，迁移只记标识不重新灌满。工具启停与allow/ask写入确认是两件事；[ADR-014](../decisions/README.md#adr-014-实时权限与直接做先问)的实时边界保留，[ADR-015](../decisions/README.md#adr-015-工具组默认开开即直接做)的旧“默认全组/迁移补齐”不再用于新Bot。飞书断开或换绑仍移除旧来源资源。
+权限以当前登记、ToolAccess / CapabilityAssignments 和撤销为准，没有能力池、Bot Grant、档位或 Task 权限快照/epoch 匹配。按 ADR-022，新机器人默认 `tool:todos` + `tool:history`，MCP / Skills 默认关闭，创建时可覆盖。日历和待办并为 `todos`；旧库只在生产入口进行一次合并与 ask 规则清理。工具集仅有能力开关，不再有写入模式。飞书 / Google 断开仍移除旧连接资源，重连按当前工具集与收窄项重新分发。
 
 模型连接地址和 key 不属于 Task 固定运行配置：每次调用从服务端读取，按进程环境、app/root dotenv、同库目录 `model-settings.json` 的优先级选择。JSON 明文凭证用 0600 原子替换，不进 Harness/SQLite；认证设置接口只投影 hasKey。旧 Task 的 provider/baseUrl 兼容忽略，模型名不变；改连接不改变 Bot 版本或触发迁移。已持久化 Bot 目录保持权威，不因新 seed 哈希改变而重写版本；无配置首次启用时仅新 Task 使用真实模型，已有测试 Task 不变。
 
 配置更新使用 expectedVersion，保存不可变版本和幂等回执。显式迁移仅用于模型、提示词等运行配置，在无执行、无待消费输入和无等待事项的安全边界进行，检查依赖、容量与差异，保留原身份、历史、用量和责任；工具、资源和规则实时生效，无需迁移。
 
-主会话仅展示该Bot当前可用工具并服从确认规则；task_create/task_status/automation_pause也不无条件授予新空白Bot。legacy主会话固有工具单独投影，显式撤销优先；Chief管理职责及新配置工具通过真实宿主角色/授权提供。派生Task用于长任务，运行配置快照不是权限快照，历史/工具结果回读实时复核来源。例行任务仅开放当前工作区读工具，显式 writes=true 时再开放工作区变更与操作查询；测试运行、旧只读简报和“帮我想办法”任务保持只读，并限定原任务指定的来源范围。
+主会话仅展示该 Bot 当前可用工具，写入直接执行，全局暂停时确认；task_create/task_status/automation_pause也不无条件授予未启用对应能力的机器人。legacy主会话固有工具单独投影，显式撤销优先；Chief管理职责及新配置工具通过真实宿主角色/授权提供。派生Task用于长任务，运行配置快照不是权限快照，历史/工具结果回读实时复核来源。例行任务仅开放当前工作区读工具，显式 writes=true 时再开放工作区变更与操作查询；测试运行、旧只读简报和“帮我想办法”任务保持只读，并限定原任务指定的来源范围。
 
 ## 消息与调度
 | 输入 | 行为 |
@@ -34,7 +34,7 @@ Bot 保存身份、职责、版本化配置及工具分配；Conversation 承载
 ## 工具与 Skill
 区分已安装、已授权、本轮展示三个集合。隐藏 schema 不是权限控制；每次实际派发和历史/结果回读都检查身份、来源、参数、授权、审批、预算与取消状态。凭证留在服务端，不进入模型上下文。
 
-Skill 是工作方法，不授予工具权限。活动 Skill 的选择、激活/退出、依赖检查及生命周期持久化；正文按当前阶段加载，不能用 Skill 绕过工具白名单或实时撤权。目录合并只读内置 `server/skills/` 与受控用户Skill包；发现不等于分配，新注册Skill不会自动给旧Bot启用。用户导入固定来源/内容hash和版本，更新不改运行Task固定快照，撤销/移除仍实时生效；能否使用取决于Skill选择、机制工具和声明依赖的当前分配。使用是按需的：Bot 从简要目录自己选（skill_activate），或用户在输入框打“/”选一个只对那条消息生效；每条输入处理完自动停用。没有手动激活面板；对话里每次使用留一行卡片（不进模型上下文），会话详情里有只读记录。
+Skill 是工作方法；开启任一 Skill 自动带上 `skills` 组加载工具，关闭最后一个时移除，不授予 Skill 声明的业务依赖。活动 Skill 的选择、激活/退出、依赖检查及生命周期持久化；正文按当前阶段加载，不能用 Skill 绕过工具白名单或实时撤权。目录合并只读内置 `server/skills/` 与受控用户Skill包；发现不等于分配，新注册Skill不会自动给旧Bot启用。用户导入固定来源/内容hash和版本，更新不改运行Task固定快照，撤销/移除仍实时生效；能否使用取决于Skill选择、机制工具和声明依赖的当前分配。使用是按需的：Bot 从简要目录自己选（skill_activate），或用户在输入框打“/”选一个只对那条消息生效；每条输入处理完自动停用。没有手动激活面板；对话里每次使用留一行卡片（不进模型上下文），会话详情里有只读记录。
 
 ## 动态能力与配置 Host
 
@@ -49,12 +49,19 @@ MCP来源独立refs；context/history/产物/协作/digest/记忆走同一来源
 普通Task删除需确认既有持久停止标记，再隐藏列表/详情/发送，归档不等于删除。主会话不接受普通delete/cancel，而以clear-main停止旧入口并原子创建同Bot新上下文；Bot、子Task和原审计保留。stop/swap窗口结果用持久交接记录接到当前主会话，来源与去重跨连续清空/重启保持；普通cancel/root stop/实时撤权仍有效。
 
 ## 工作区与动作裁决
-- 工作区来源和连接须 active，动作须属于来源能力且具有用户许可；local 由所有者隐式完整许可，外部来源保留用户 Grant/readScope。Bot 读需要当前分配 workspace.list/get，写需要 workspace.prepare_change，并分配对应 workspace:<sourceId> 资源；busy-only 仍只投影时段。飞书只开放忙闲时可只勾 calendar_feishu_freebusy，不勾读详情工具。
-- stdio MCP 保留独立凭证及 sources/actions/readScope、到期和撤销校验，实际权限不超过 Bot 当前分配和用户许可。凭证在设置页发放、列出和撤销；不再有 AgentWorkspace 面板。
-- policy.decide() 对读和内部协作工具直接 allow；写工具按 tool、action、sourceId、type 取最具体规则，同样具体时 deny > ask > allow。传统已授权业务写入无匹配时直接执行，删除同样适用；外部MCP动态工具及能力配置变更保守要求精确批准，不由annotations或普通组开关自动放行。传统工具组写入确认：开 = 无规则，关 = 组内每个写工具一条 ask；切换时清掉该 Bot 在组内写工具上的全部规则，所以开关显示等于裁决结果。模型只看到 Bot 有对应资源的工具，已委派的子任务不再看到 task_assign。未登记工具拒绝。旧 origin=preset 与 risk 规则不参与裁决，不再有 R0–R4/H、批量计数或每小时自动写入上限。
-- 全局暂停把写入 allow 降为 ask，停止例行任务和事件触发，恢复后不补跑；模型/工具/token 调用预算仍独立保留。在场时按原操作和精确参数确认，本地提案保留 5 分钟；可点“以后直接做”把该工具所在组设为开，暂停中和结果未知后的重做审批不提供该按钮。
+- 工作区来源和连接须 active，动作须属于来源能力且具有用户许可；local 由所有者隐式完整许可，外部来源保留用户 Grant/readScope。Bot 读需要当前分配 workspace.list/get，写需要 workspace.prepare_change，并分配对应 workspace:<sourceId> 资源；busy-only 仍只投影时段。单机器人可在「设置 → 高级」收窄日历和任务列表，用户 readScope 仍控制忙闲投影。
+- stdio MCP 保留独立凭证及 sources/actions/readScope、到期和撤销校验，实际权限不超过 Bot 当前分配和用户许可。凭证在「设置 → 高级」发放、列出和撤销；不再有 AgentWorkspace 面板。
+- `policy.decide()` 对读和内部协作工具直接 allow；写工具按 tool / action / sourceId / type 取最具体规则，同级 deny > ask > allow，无匹配直接执行（含删除）。已启用外部 MCP 与能力配置按 ADR-018 / ADR-022 同一路径执行，不因 annotations 获授权。删除 `switchGroup` 与 tool-groups HTTP 路由，不再在界面生成 ask 规则；`PolicyRules`、`decide()`、`setGroupMode`、`openGroup` 和审批卡保留。模型只看到当前日历/任务列表可用的工具，已委派子任务不再看到 task_assign。未登记工具拒绝，旧 preset/risk 规则不参与裁决。
+- 全局暂停把写入 allow 降为 ask，停止例行任务和事件触发，恢复后不补跑；模型/工具/token 调用预算仍独立保留。在场时按原操作和精确参数确认，本地提案保留 5 分钟；可点“以后直接做”清除该工具所在组的询问规则，暂停中和结果未知后的重做审批不提供该按钮。
 - origin 为 routine、event、detector 时遇到 ask，不出审批卡、不等待 30 分钟过期，跳过并在运行记录与结果中说明“已跳过：这一步需要你来做。”
 - 例行任务派发时实时复核 Bot active、当前读工具、来源资源及用户/连接许可；失效就取消并记录原因。仅更新 Bot 配置版本不使例行任务失效。用户提醒和内部计划的 authorizationSnapshot 不受此次简化影响。
+
+### 来源跟着工具集（ADR-022）
+`resource-sharing.mjs` 的 `holdsSchedule` / `grantResources` / `shareWithBots` 在分配层处理：持有 `todos` 组任一有效工具的机器人得到全部已连接日历/任务列表；`toolSets()` 与各读取方不改。飞书 bind、新同步来源和 Google `registerExternalSource` 在原事务内分发；开 `tool:todos` 与带能力创建时同样补入。
+
+`changeConfiguration` 记录 `ToolAccess.excludedResources[botId]`：移除记排除，手动加回取消排除；重连、发现来源均跳过排除项。飞书换绑产生新 id 时旧排除不覆盖新 id。模拟日程从可分配列表与升级后的分配中移除，代码和测试保留。
+
+生产 `server/index.mjs` 传 `r4Migration:true`，开库在旧工具组迁移之后执行 `migrateToR4`，只记一次 `r4MigratedAt`。顺序是合并组、同步 Skill 工具、分发资源、清非 preset ask、去模拟资源、更新未改过的预设说明、记标识；memoryFiles 打开后仅更新仍等于旧文案的人格。嵌入和普通测试库默认不迁移，手动备份见运行手册。
 
 ## 上下文与调用限制
 上下文按固定配置、任务规则、活动 Skill、近期交流、压缩摘要与按需证据装配。压缩不丢失目标、来源、未完成工作、审批、未知动作和责任信息。工具结果有界，必要时按引用读取原始结果；读取仍执行权限检查。
@@ -80,13 +87,13 @@ MCP来源独立refs；context/history/产物/协作/digest/记忆走同一来源
 ## Google 连接（R3）
 Calendar、Tasks 是 workspace-service 的两个原生 provider 适配（`workspace-google-calendar.mjs`、`workspace-google-tasks.mjs`），进 Event/Todo 文档，经 `workspace-sync` 后台重扫，日历视图和提醒照常使用；Bot 经 `workspace.*` 工具读写，对话路径由 `workspace-mcp-host.mjs` 按来源是否仍有效放行。Gmail、Drive、Docs、Sheets 经 workspace-mcp：一条凭据来源为“取自 Google 连接”的外部 MCP 连接，每次调用由 `google.accessToken()` 取当前令牌作 bearer，传输层 401 时作废该令牌并重试一次，工具已执行后不重试。令牌只在服务端凭据文件和内存里。
 
-外部来源（飞书、Google）连上即可用，哪个 Bot 能用仍按 Bot 分配；日程写入归“日历与日程”组，事项写入归“待办与事项”组（ADR-021）。见 ADR-020 与[运行手册](../engineering/operations.md#google-连接与-workspace-mcpr3)。
+外部连接（飞书、Google）连上即获得用户许可；开着「日程与待办」的机器人自动拿到全部日历和任务列表，高级收窄跨重连保留。日程和待办共用 `todos` 工具集（ADR-022），写入直接执行，全局暂停时确认。见 ADR-020 / ADR-021 / ADR-022 与[运行手册](../engineering/operations.md#google-连接与-workspace-mcpr3)。
 
 ## 协作、群聊与 Chief
-- Chief普通创建/配置/停用按现有allow/ask规则执行，配置管理权转授始终需要精确确认；可配置自己的工具与来源，不能停用 Chief 自身，已停用 Bot 不自动重新启用。管理仍校验身份、目标、版本、精确参数及幂等回执。
+- Chief 普通创建/配置/停用及已授权配置能力按同一规则直接执行，全局暂停时确认；可配置自己的工具与来源，不能停用 Chief 自身，已停用 Bot 不自动重新启用。管理仍校验身份、目标、版本、精确参数及幂等回执。
 - 委派记录父子关系、主管、执行者、目标与结果来源；目标 Bot 独立检查能力和授权。
 - 群管理员接收普通消息，单目标 @ 从明确消息点 fork 必要上下文；结果回报保留原身份与来源，不能把定向材料广播给无权成员。
-- 阻塞逐级上报；规则要求先问的动作必须由认证用户精确批准，主管不能代批。
+- 阻塞逐级上报；需要确认的动作必须由认证用户按精确参数批准，主管不能代批。
 - 提交结果后由主管验收或带意见返工，返工上限两次，超限交用户；保留原提交与版本化责任记录。
 - 工作控制、暂停/停止与 Bot 停用不等于删除 Task，也不吞掉迟到结果。
 

@@ -91,7 +91,7 @@ test('Bot view keeps shared preferences read-only, detail uses live memory and l
   assert.doesNotMatch(page, /将在 T11|bot-memory-placeholder/)
   assert.doesNotMatch(config, /setDescription|<textarea|职责与模型/)
   assert.match(config, /description: view.bot.description/)
-  assert.match(config, /配置历史与审计/)
+  assert.match(config, /<details className="tech-info">[\s\S]*?<summary>技术信息<\/summary>/)
 })
 
 
@@ -135,12 +135,12 @@ test('memory source resolver authenticates original Task and anchors exact Entry
 test('source resolver refuses missing Entry, wrong Task, invalid owner, groups and failed authorization', async () => {
   const task = { taskId: 84, bot: { id: 'calendar' }, messages: [{ id: 104 }] }
   for (const invalid of [{ ...task, taskId: 85 }, { ...task, messages: [] }, { ...task, messages: {} }, { ...task, bot: { id: 'invalid/owner' } }, { ...task, bot: {} }, { ...task, kind: 'group' }, { ...task, groupId: 'private-group' }]) {
-    await assert.rejects(resolveMemorySourceHash('test', { taskId: 84, entryId: 104 }, undefined, async () => new Response(JSON.stringify({ task: invalid }))), /无法打开/)
+    await assert.rejects(resolveMemorySourceHash('test', { taskId: 84, entryId: 104 }, undefined, async () => new Response(JSON.stringify({ task: invalid }))), /打不开原对话/)
   }
-  await assert.rejects(resolveMemorySourceHash('test', { taskId: 84, entryId: 104 }, undefined, async () => new Response('private auth detail', { status: 403 })), /无法打开/)
+  await assert.rejects(resolveMemorySourceHash('test', { taskId: 84, entryId: 104 }, undefined, async () => new Response('private auth detail', { status: 403 })), /打不开原对话/)
   let fetched = false
   for (const invalid of [{ taskId: 0, entryId: 104 }, { taskId: '84', entryId: 104 }, { taskId: 84, entryId: -1 }]) {
-    await assert.rejects(resolveMemorySourceHash('test', invalid, undefined, async () => { fetched = true }), /无法打开/)
+    await assert.rejects(resolveMemorySourceHash('test', invalid, undefined, async () => { fetched = true }), /打不开原对话/)
   }
   assert.equal(fetched, false)
 })
@@ -169,13 +169,13 @@ test('R2-07 file state: nothing when file mode is off; location and sync time wh
 test('R2-07 rejected and pending reasons are plain Chinese without codes, paths or internals', () => {
   const tooLong = memoryFileView(file('rejected', 'MEMORY_FILE_TOO_LONG'), 'memory').reason
   assert.match(tooLong, /文件太长/)
-  assert.match(tooLong, /Bot 暂时拿不到/)
+  assert.match(tooLong, /机器人暂时拿不到/)
   assert.match(tooLong, /精简后保存，会自动恢复/)
   assert.match(tooLong, /64 条/)
   assert.match(memoryFileView(file('rejected', 'MEMORY_FILE_TOO_LONG', null, 'bot-workspaces/bots/chief/PROFILE.md'), 'personality').reason, /8192 字/)
   assert.match(memoryFileView(file('rejected', 'MEMORY_FILE_INVALID'), 'memory').reason, /无法读取.*UTF-8/)
   assert.match(memoryFileView(file('rejected', 'MEMORY_FILE_UNAVAILABLE'), 'preferences').reason, /不可访问/)
-  assert.match(memoryFileView(file('pending', 'MEMORY_FILE_WRITE_FAILED'), 'memory').reason, /已保存.*Bot 照常使用.*自动重试/)
+  assert.match(memoryFileView(file('pending', 'MEMORY_FILE_WRITE_FAILED'), 'memory').reason, /已保存.*机器人照常使用.*自动重试/)
   assert.ok(memoryFileView(file('rejected', 'SOMETHING_NEW'), 'memory').reason)
   assert.ok(memoryFileView(file('pending', 'SOMETHING_NEW'), 'memory').reason)
   for (const [state, code] of [['rejected', 'MEMORY_FILE_TOO_LONG'], ['rejected', 'MEMORY_FILE_INVALID'], ['rejected', 'MEMORY_FILE_UNAVAILABLE'], ['pending', 'MEMORY_FILE_WRITE_FAILED'], ['rejected', 'SOMETHING_NEW']]) {
@@ -213,8 +213,8 @@ test('R2-07 adapter keeps the file field; file state lives only in the memory se
 
 test('R2 save notice does not promise the Bot sees an edit while its file is rejected', () => {
   const rejected = { path: 'bot-workspaces/bots/chief/MEMORY.md', state: 'rejected', code: 'MEMORY_FILE_TOO_LONG', syncedAt: null }
-  assert.equal(memorySavedNotice('update', { ...rejected, state: 'synced', code: null }), '已保存，所有会话的下一次模型调用会读取最新内容。')
-  assert.equal(memorySavedNotice('update', null), '已保存，所有会话的下一次模型调用会读取最新内容。')
-  assert.match(memorySavedNotice('update', rejected), /Bot 暂时拿不到/)
+  assert.equal(memorySavedNotice('update', { ...rejected, state: 'synced', code: null }), '已保存，改完马上生效。')
+  assert.equal(memorySavedNotice('update', null), '已保存，改完马上生效。')
+  assert.match(memorySavedNotice('update', rejected), /机器人暂时拿不到/)
   assert.equal(memorySavedNotice('delete', rejected), '已删除，编辑历史仍保留。')
 })

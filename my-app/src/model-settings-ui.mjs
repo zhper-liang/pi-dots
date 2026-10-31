@@ -11,7 +11,7 @@ export function modelSettingsPayload({ baseUrl, model, apiKey }, requestId) {
   return { requestId, baseUrl: baseUrl.trim(), model: model.trim(), ...(apiKey.trim() ? { apiKey } : {}) }
 }
 
-export const MODEL_SETTINGS_NOTICE = '对所有会话的下一次调用生效；独立 Task 保留模型名快照，主会话可为下一条输入选择模型。'
+export const MODEL_SETTINGS_NOTICE = '改完后，之后的对话用新设置。'
 
 export function modelChoices(current, models = []) {
   return [...new Set([current, ...(Array.isArray(models) ? models.filter(object).map(item => item.id) : [])].filter(id => typeof id === 'string' && /^[\w./:-]{1,200}$/.test(id)))]

@@ -36,11 +36,11 @@ pnpm build                                                 # tsc -b + vite build
 
 - **持久化**：执行状态和业务对象都是 pi-durable Documents（`defineDoc`），在 `store.harness.commit(async tx => ...)` 事务里读写，没有手写 SQL 表。
 - **装配根**：`server/tasks.mjs` 的 `openTaskStore()` 组装 Bot、工具、规则、工作区、后台计划与检测器，返回 store；`app.mjs` 的 `createApiServer({ token, tasks })` 做认证、JSON 校验和路由。模型/工具循环在 `tasks.mjs` 的 `chatDefinition()`，单次 provider 调用在 `model-reply.mjs`。
-- **工具裁决**：模型提出的每次工具调用都在派发时实时检查 Bot 当前工具/资源分配、来源许可、预算和取消状态，再由 `policy.mjs` 的 `decide()` 给出 allow / ask / deny。没有 Task 级权限快照。无人值守来源（routine、event、detector）遇到 ask 直接跳过并记录。两层是分开的：「启用」= 这个 Bot 拥有该能力（`capability-assignments.mjs`，新 Bot 空白、旧 Bot 保留原分配）；「直接做/先问」= 工具组写入模式（`tool-groups.mjs` + `tool-group-settings.mjs`，ADR-015）。不要用 allow/ask 冒充启停。用户多次表示权限关卡太多，加新的确认环节前先问用户。
+- **工具裁决**：每次工具调用实时检查机器人当前分配、日历/任务列表许可、预算和取消，再由 `policy.mjs` 的 `decide()` 裁决。能力页 Skills / MCP / 工具集开关决定启用；写入直接执行，全局暂停时确认，无人值守遇 ask 跳过并记录。日历与待办合为 `todos`，所有已连接日历和任务列表随该工具集分配，单机器人高级设置可收窄并跨重连保留。新机器人默认 `tool:todos` + `tool:history`，Skill 开启自动附带机制工具。权限以 ADR-014、ADR-018、ADR-021、ADR-022 为准，不新增写入模式、确认环节或 Task 权限快照。
 - **工作区**：用户手动 CRUD 走 HTTP → `workspace-service`，不经过模型；Agent 走内部 MCP（规范名 `workspace.*`，模型侧是 `workspace_*` 别名）。两条路径共用同一业务服务，不要在 UI、API、MCP 各写一份规则。
 - **副作用**：写操作带 `requestId`，修改带 `expectedVersion`。外部（飞书）结果不明时记为 `unknown`，不能换新 `requestId` 自动重试；恢复复用原 Task 和原 Operation。
 - **配置快照**：模型名、提示词等运行配置在创建 Task 时固定；连接地址和 key 每次调用实时读取（ADR-016），旧 Task 不随默认值变化；工具、资源、规则实时生效。
-- **Skill**：内置的 `server/skills/<id>/manifest.json` 存在即注册，每次使用时读取；用户导入的 Skill 走 `skill-import.mjs`，存放在数据库同级的 `skills/` 目录，不写进源码目录。Skill 不授予工具权限，正文里的 `allowed-tools` 只是声明。
+- **Skill**：内置的 `server/skills/<id>/manifest.json` 存在即注册，每次使用时读取；用户导入的 Skill 走 `skill-import.mjs`，存放在数据库同级的 `skills/` 目录，不写进源码目录。开启 Skill 自动附带加载所需的机制工具，不授予其业务依赖；正文里的 `allowed-tools` 只是声明。
 - **外部 MCP**：用官方 `@modelcontextprotocol/sdk` 连接远程 Streamable HTTP 或本机已安装的 stdio 程序（`external-mcp*.mjs`），凭据单独存储，不进聊天、日志或工具结果。现有内部 MCP client 不当作通用第三方连接器用。Agent 通过 `capability-management*.mjs` 的管理工具（`mcp_manage`/`skill_manage`，只给 Chief 或宿主明确赋权的配置 Agent）在对话里添加、绑定、停用 MCP 和 Skill，和 UI 走同一服务层。
 - **记忆**：每 Bot 的 `PROFILE.md`、`MEMORY.md` 和共享的 `shared/USER.md` 放在数据库同级的 `bot-workspaces/`，是内容真源；`pidot.bot-memory.*` Document 改作台账（版本、来源、防复活、提取水位）。只有 `memory-files.mjs` 的对账读写这些文件，读之前对账，不用 fs.watch。测试 store 默认只用台账，文件模式用 `openTaskStore({ memoryFiles: { enabled: true } })` 开启（ADR-019）。
 - **Google**：Calendar、Tasks 是 workspace-service 的原生 provider 适配，进 Event/Todo；Gmail、Drive、Docs、Sheets 经 loopback HTTP 上固定版本的 workspace-mcp，Pidot 登录 Google 一次，每次调用把访问令牌传给它。refresh token 只在数据库同级的 `google/credentials.json`。测试只打 `fixtures/fake-google.mjs` 与 `fixtures/fake-workspace-mcp.mjs`，请求真实 Google 主机即失败（ADR-020、ADR-021）。

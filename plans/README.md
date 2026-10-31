@@ -13,7 +13,7 @@
 | 计划 | 更新 | 状态 |
 |---|---|---|
 | [第三轮：Google Workspace](active/r3-google-workspace/README.md) | 2026-10-30 | 实现完成，test 1531/1531、lint/build 通过；待用户验收（真实 Google 账号手测由用户做） |
-| [第四轮：降低使用负担](active/r4-simplify/README.md) | 2026-10-31 | 已授权，交执行方按票实施（主管 + 子 agent）；与第三轮验收并行 |
+| [第四轮：降低使用负担](active/r4-simplify/README.md) | 2026-10-31 | 实现完成，test 1537/1537、lint 10 条既有 warning（无新增）、build 通过；双尺寸 UI 22 画面通过，待用户验收；与第三轮并行 |
 
 ## 已完成
 

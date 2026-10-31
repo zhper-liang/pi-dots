@@ -63,14 +63,13 @@ pnpm start:api
 
 ## 网页使用
 
-1. 输入 `my-app/.env` 中的 `PIDOT_API_TOKEN` 连接本地服务；错误 token 退回连接页。
-2. 首页直接与 Chief 对话；「新建会话」先选 Bot，第一条消息创建独立会话。左栏「机器人」打开卡片目录，新建 Bot 进入独立模板选择页，只填名字即可。
-   事项分日历、待办、自动化三个常驻标签，默认今日日视图与今天到期待办；自动化保留按 Bot 创建/测试例行任务与全部执行记录。通知分「需要你处理」「事项提醒」，技术标识折叠在诊断；recorded/read 只表示应用内状态。
-3. Bot 详情分对话、规则、Skills、MCP、记忆（T11 占位）、设置、任务七标签；对话是原主会话，任务按 Bot 身份列出原 Task/例行任务。MCP 仅当前 Bot 的 stdio 凭证，全局设置仍可管理。会话详情保留 Harness Task ID、Conversation ID、配置版本与固定参数来源。
-4. 刷新保留选中 Task；列表可重开，浏览器前进/后退可切换；关闭标签页后重新输入 token 仍可打开本地会话。
-5. 正常停止/重启 API 后数据仍在；“断开连接”只清除标签页 token，不删除本地会话。
+1. 输入 `my-app/.env` 中的 `PIDOT_API_TOKEN` 连接本地服务。
+2. 首页与 Chief 对话；点机器人直接进其主会话，点齿轮进「能力 / 记忆 / 设置」。新建只需名字，可选模板与职责，高级能力默认开启「日程与待办」「历史与回读」。
+3. 能力按 Skills / MCP / 工具集开关；日历和任务列表随「日程与待办」分配，单机器人高级可收窄。启用后写入直接做，全局暂停时等你确认。
+4. 事项为日历、定时任务、执行记录；通知为需要你处理、提醒。设置为连接、模型、自动化、偏好、高级，飞书 / Google / MCP 放同一个连接列表，stdio 凭证在高级。
+5. 会话详情保留任务目标，技术字段和时间线入口折叠在技术信息；主会话模型与思考深度在输入框「⋯」。刷新、前进后退保留原会话，断开网页不删除数据。
 
-发送框展示历史、执行中、分类失败与实际请求参数。`/api/chat` 是不持久化的测试接口，不代表真实模型流程。
+第四轮升级前停服务并复制整个 `my-app/data/`，第一次 `pnpm start:api` 自动迁移一次，详见[运行手册](../docs/engineering/operations.md#第四轮升级r4)。`/api/chat` 仍为不持久化测试接口。
 
 ## API
 
@@ -94,7 +93,13 @@ pnpm start:api
 | 方法与路径 | 说明 |
 | --- | --- |
 | `POST /api/chat` | 不持久化测试接口，只接受 `{"message":"..."}`（非空、≤4000 个 UTF-16 单元）。 |
-| `GET /api/bots` | 预置 Bot 身份、说明、配置引用及默认值。 |
+| `GET /api/bots` | 机器人目录与主会话引用。 |
+| `POST /api/bots` | `{name,requestId,description?,profile?,parameters?,capabilities?}`；默认 `tool:todos` + `tool:history`，可传空数组，不包 data 返回创建结果。 |
+| `GET /api/capabilities` | `{data:{items}}`：本机已装、已连接的全局能力目录。 |
+| `GET /api/bots/:id/capabilities` | `{data:{botId,revision,items}}`：机器人能力与启用状态。 |
+| `POST /api/bots/:id/capabilities` | `{requestId,expectedRevision,capabilityId,enabled,expectedCatalogRevision}` 切换能力。 |
+| `GET /api/bots/:id/configuration` | 模型与分配设置；toolGroups 无 mode / switchable，resources 无模拟日程。 |
+| `POST /api/bots/:id/configuration` | 更新配置；移除日历/任务列表记为收窄，重连保持。 |
 | `POST /api/tasks` | 创建会话；`botId` 必填，`title` 1–100 字符，`taskState` 与 `parameters` 选填。返回 `201`。 |
 | `GET /api/tasks` | 所有会话按原生 Task id 新到旧排列。 |
 | `GET /api/tasks/:taskId` | 含有序 `messages`、`activeInputId`、原生状态、`toolSets`、`callUsage`、`effectiveCallLimits`。 |
@@ -186,12 +191,12 @@ pnpm build
 - 先在原能力池与Bot配置显式分配workspace工具及`workspace:local`（或已绑定飞书对应`workspace:<sourceId>`），在Agent工作区面板独立授予Bot来源范围，并新建Task。旧Task不自动升级；配置迁移须用户查看差异明确确认。用户来源许可仍是上限。
 - stdio：面板发行10分钟受限client凭证，放入本地进程环境`PIDOT_MCP_TOKEN`；`PIDOT_MCP_URL=http://127.0.0.1:3001`指向运行中的同一后端。独立MCP client配置命令`node`、参数`server/workspace-mcp-stdio.mjs`（cwd为my-app）。不要把API管理员token、凭证写进模型、命令参数或版本库。
 - 桥只转发本机私有`/api/workspace/mcp-dispatch`，不打开SQLite、不加载.env、stdout仅逐行JSON-RPC；拒绝Origin、远程目标、任意路径、凭证URL及重定向。该relay不是公网HTTP MCP transport，远程MCP不支持。
-- Agent与client只准备精确Operation；本地/外部修改均须面板批准。确认5分钟绑定参数/原主体/版本/权限，拒绝保留cancelled；unknown禁止盲重发。断线后用原requestId查状态，桥关闭不取消已持久操作。
+- Agent 与 client 共用精确 Operation；启用后本地/外部修改直接执行，全局暂停时由面板确认。确认5分钟绑定参数/原主体/版本/权限，拒绝保留cancelled；unknown禁止盲重发。断线后用原requestId查状态，桥关闭不取消已持久操作。
 - client凭证同库只存SHA256摘要，最多100个保留记录；会话内最多4096请求、同一ID拒绝重放。过期/撤销不可复活；用户可用已知clientId调用认证`client-revoke`，不删审计。MCP消息16KiB，来源分页保持业务覆盖信息，busy-only无标题正文。
 
 ## V2 统一工作区
 
-八页导航将事项、计划、执行记录、通知与权限分开；切页保留草稿和未确认原请求，Task链接仍进入原会话。来源状态统一显示authority与用户权限，飞书窗口保留新鲜度/完整性。
+导航集中为机器人、对话、事项、通知和设置；事项内含日历、定时任务、执行记录，切页保留草稿和未确认原请求，Task链接仍进入原会话。来源状态统一显示authority与用户权限，飞书窗口保留新鲜度/完整性。
 
 [完整支持矩阵、在线条件、运行与回滚说明](../docs/engineering/operations.md)。不将缓存、候选、recorded/read或关闭浏览器等同于外部写回/系统送达/停机执行。
 

@@ -30,8 +30,6 @@ export default function BotCreation({ token, onCreated, onCancel }: BotCreationP
 
   useEffect(() => {
     const abort = new AbortController()
-    setItems(null)
-    setCatalogError(false)
     fetch('/api/capabilities', { signal: abort.signal, headers: { Authorization: `Bearer ${token}` } })
       .then(async response => {
         const body = await response.json()

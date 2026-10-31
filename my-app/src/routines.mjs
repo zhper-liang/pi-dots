@@ -1,5 +1,5 @@
 // Shared pure form rules; the server remains authoritative for permissions and recurrence.
-export const ROUTINE_EVENTS = { todo_due: '待办到期', event_changed: '日程变更', task_finished: '本 Bot 的任务结束' }
+export const ROUTINE_EVENTS = { todo_due: '待办到期', event_changed: '日程变更', task_finished: '这个机器人的任务结束' }
 export const ROUTINE_WHEN = [['at', '一次'], ['daily', '每日'], ['weekly', '每周'], ['monthly', '每月'], ['interval', '间隔'], ['event', '事件']]
 export const ROUTINE_WEEKDAYS = [[1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日']]
 export const ROUTINE_LIMITS = Object.freeze({ modelCalls: 10, toolCalls: 20, totalTokens: 50000 })
@@ -49,7 +49,7 @@ export function routineInstant(value, timezone) {
 /** Create form → schedule-manage input, or { error } with a message for the user. */
 export function routineInput({ title, prompt, when, value, weekdays = [1], day = 1, event = 'todo_due', timezone = 'Asia/Shanghai', model = '', notification = 'inbox', writes = true, botId, requestId, now = Date.now() }) {
   if (!title?.trim() || title.length > 200) return { error: '请填写名称（最多200字）。' }
-  if (!botId?.trim()) return { error: '请选择执行 Bot。' }
+  if (!botId?.trim()) return { error: '请选择由哪个机器人做。' }
   if (!prompt?.trim() || prompt.length > 3000) return { error: '请写清楚每次要做什么（最多3000字）。' }
   try { if (typeof timezone !== 'string' || !timezone.trim()) throw Error(); new Intl.DateTimeFormat('en', { timeZone: timezone }).format() } catch { return { error: '请填写有效的 IANA 时区，例如 Asia/Shanghai。' } }
   if (typeof model !== 'string' || model.trim() && !/^[\w./:-]{1,200}$/.test(model.trim())) return { error: '模型只填名称，不填地址或密钥。' }
@@ -97,12 +97,12 @@ export function routineBotChoices(bots, allowed) {
 /** UI-only guard over authenticated read responses; never grants missing capabilities. */
 export function routineBotSelection({ botId, directory, configuration, task }) {
   const bot = directory?.bots?.find(item => item.id === botId)
-  if (!bot || bot.status === 'inactive' || configuration?.bot?.id !== botId || configuration.bot.status === 'inactive') return { error: '执行 Bot 已停用或不存在，请重新选择。' }
+  if (!bot || bot.status === 'inactive' || configuration?.bot?.id !== botId || configuration.bot.status === 'inactive') return { error: '这个机器人已停用或不存在，请重新选择。' }
   const revision = configuration.bot.configRef?.version
   const models = [...new Set((configuration.models ?? []).map(item => item.id).filter(id => typeof id === 'string' && id))].sort()
   const mainTaskId = directory.mainSessions?.[botId]
-  if (typeof revision !== 'string' || !revision || !Number.isSafeInteger(mainTaskId) || task?.taskId !== mainTaskId || task.bot?.id !== botId || task.kind !== 'main') return { error: 'Bot 当前版本或主会话已改变，请重新读取。' }
-  if (task.parameters?.mode !== 'model' || !models.length) return { error: '目标 Bot 没有可用模型，请先配置模型。' }
+  if (typeof revision !== 'string' || !revision || !Number.isSafeInteger(mainTaskId) || task?.taskId !== mainTaskId || task.bot?.id !== botId || task.kind !== 'main') return { error: '这个机器人的设置刚改过，请重新读取。' }
+  if (task.parameters?.mode !== 'model' || !models.length) return { error: '这个机器人没有可用模型，请先配置模型。' }
   const tools = configuration.assigned?.tools ?? [], resources = configuration.assigned?.resources ?? []
   const missing = [...['workspace.list', 'workspace.get'].filter(name => !tools.includes(name)), ...(!resources.includes('workspace:local') ? ['workspace:local'] : [])]
   return { botId, revision, mainTaskId, models, defaultModel: configuration.bot.defaults?.model?.id ?? '', missing,
