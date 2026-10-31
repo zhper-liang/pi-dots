@@ -40,11 +40,11 @@ export default function ModelPicker({ token, task, value, disabled = false, onCh
     window.addEventListener('pidot:model-settings-updated', refresh)
     return () => { live = false; controller.abort(); window.removeEventListener('pidot:model-settings-updated', refresh) }
   }, [token, botId, editable])
-  if (!editable) return <span className="pd-tool pd-tool-static" title="独立 Task 的模型快照只读；设置变化不会改写历史模型或用量">{task.parameters.mode === 'model' ? current || '模型' : '测试模式'}</span>
+  if (!editable) return <span className="pd-tool pd-tool-static" title="本会话使用的模型">{task.parameters.mode === 'model' ? current || '模型' : '测试模式'}</span>
   const choices = modelChoices(current, models)
   const available = new Set(modelChoices('', models))
   return <>
-    <label className="pd-tool model-picker" title="从下一条输入开始使用所选模型；当前调用、历史消息和用量不变"><span>模型</span><select aria-label="下一条输入的模型" value={current} disabled={disabled || loading || available.size === 0} onChange={event => { if (available.has(event.target.value)) onChange({ id: event.target.value }) }}>{!current && <option value="" disabled>{loading ? '读取中…' : '请选择模型'}</option>}{choices.map(id => <option key={id} value={id} disabled={!available.has(id)}>{id}{!loading && !error && !available.has(id) ? '（当前快照，不在可选列表）' : ''}</option>)}</select></label>
+    <label className="pd-tool model-picker" title="从下一条消息开始用这个模型"><span>模型</span><select aria-label="下一条消息的模型" value={current} disabled={disabled || loading || available.size === 0} onChange={event => { if (available.has(event.target.value)) onChange({ id: event.target.value }) }}>{!current && <option value="" disabled>{loading ? '读取中…' : '请选择模型'}</option>}{choices.map(id => <option key={id} value={id} disabled={!available.has(id)}>{id}{!loading && !error && !available.has(id) ? '（当前，不在可选列表）' : ''}</option>)}</select></label>
     {error && <span className="model-picker-error" role="status">{error}</span>}
   </>
 }

@@ -168,7 +168,7 @@ test('credentials cannot fabricate a new input or auto-resume when host says the
   canResume = false
   find(h.render(), 'stub-McpCredentialForm').props.onSaved({ saved: true }); const tree = await h.settle()
   assert.equal(resumed, 0)
-  assert.match(text(tree), /原输入当前不能续办/)
+  assert.match(text(tree), /请回原会话继续/)
   assert.equal(button(tree, '继续原配置'), undefined)
 })
 
@@ -196,7 +196,7 @@ test('setup client scopes GET and resume to the original IDs and rejects a diffe
   assert.equal(calls[1].path, '/api/capability-setups/setup-fixture/resume')
   assert.equal(Object.hasOwn(JSON.parse(calls[1].body), 'approved'), false)
   const wrong = createCapabilitySetupClient({ token: 'fixture-api', fetchImpl: async () => ({ ok: true, json: async () => ({ data: readyReceipt({ targetBotId: 'other' }) }) }) })
-  await assert.rejects(wrong.get(receipt()), /不匹配/)
+  await assert.rejects(wrong.get(receipt()), /没有对应上/)
 })
 
 test('real external approval uses trusted connection/original name and keeps the existing exact approval endpoint', async t => {
@@ -232,7 +232,7 @@ test('App groups one latest host setup card and never promotes provider content,
   const task = { taskId: 1, conversationId: 1, kind: 'main', title: 'Chief main', bot: bots[0], configRef: bots[0].configRef, createdAt: '2026-10-29T01:00:00Z', messages, parameters: { mode: 'test' }, parameterSources: {}, activeInputId: null,
     capabilitySetups: [readyReceipt({ inputId: 11 }), readyReceipt({ setupId: 'wrong-task', taskId: 999 })], runtime: { status: 'running', checkpoint: { phase: 'awaitInput' } } }
   const h = await harness(t, './App.tsx', {}, async (path) => {
-    const body = path === '/api/bots' ? { bots, mainSessions: { chief: 1, alpha: 2 } } : path === '/api/tasks' ? { tasks: [] } : /\/tasks\/1$/.test(path) ? { task } : null
+    const body = path === '/api/bots' ? { bots, mainSessions: { chief: 1, alpha: 2 } } : path === '/api/tasks' ? { tasks: [] } : /\/configuration$/.test(path) ? { toolLabels: {} } : /\/tasks\/1$/.test(path) ? { task } : null
     assert.ok(body, `unexpected App read ${path}`)
     return { ok: true, json: async () => body }
   })
@@ -242,8 +242,8 @@ test('App groups one latest host setup card and never promotes provider content,
   assert.equal(cards[0].props.receipt.setupId, 'setup-fixture')
   assert.equal(cards[0].props.receipt.inputId, 11)
   assert.equal(cards[0].props.receipt.state, 'ready')
-  assert.match(text(tree), /未通过原 Task \/ 输入关联核查/)
-  assert.match(text(tree), /最新真实状态已合并/)
+  assert.match(text(tree), /配置结果还没核对上/)
+  assert.match(text(tree), /最新配置状态已合并/)
 })
 
 test('a newer host projection queues a fresh GET and an older in-flight response cannot become verified state', async t => {
@@ -330,7 +330,7 @@ test('an approved manager operation without provider capabilities renders its se
   h.update({ task: approvalTask(settled), scope: 'settled' })
   const afterReceipt = h.render()
   assert.equal(find(afterReceipt, 'stub-ActionOutcomeControls'), undefined)
-  assert.match(system(afterReceipt).state, /宿主回执已保存/)
+  assert.match(system(afterReceipt).state, /配置结果已保存/)
 })
 
 test('legacy calendar operations retain their original recovery component and capability metadata', async t => {
@@ -349,7 +349,7 @@ async function appWithMessages(t, messages, approvals = { activeId: null, items:
   const task = { taskId: 1, conversationId: 1, kind: 'main', title: 'Chief main', bot: bots[0], configRef: bots[0].configRef, createdAt: '2026-10-29T01:00:00Z', messages,
     parameters: { mode: 'test' }, parameterSources: {}, activeInputId: 10, capabilitySetups: [], approvals, runtime: { status: 'running', checkpoint: { phase: approvals.activeId ? 'awaitApproval' : 'awaitInput' } } }
   return harness(t, './App.tsx', {}, async path => {
-    const body = path === '/api/bots' ? { bots, mainSessions: { chief: 1, alpha: 2 } } : path === '/api/tasks' ? { tasks: [] } : /\/tasks\/1$/.test(path) ? { task } : null
+    const body = path === '/api/bots' ? { bots, mainSessions: { chief: 1, alpha: 2 } } : path === '/api/tasks' ? { tasks: [] } : /\/configuration$/.test(path) ? { toolLabels: {} } : /\/tasks\/1$/.test(path) ? { task } : null
     assert.ok(body, `unexpected App read ${path}`)
     return { ok: true, json: async () => body }
   })
@@ -375,7 +375,7 @@ test('App manager inspect reports a read-only directory result and never turns o
   const messages = [historyMessage(10, 'user', { content: '检查 Alpha 的 MCP 目录' }), historyMessage(20, 'tool', { toolName: 'mcp_manage', inReplyTo: 10, callId: 'inspect-native', arguments: { action: 'inspect', targetBotId: 'alpha' }, result: { ok: true, data } })]
   const h = await appWithMessages(t, messages), tree = await h.settle()
   assert.match(text(tree), /MCP 只读目录检查/)
-  assert.match(text(tree), /本次未修改配置、绑定或授权/)
+  assert.match(text(tree), /能力目录（1 项）/)
   assert.doesNotMatch(text(tree), /未通过原 Task/)
   assert.equal(nodes(tree).filter(node => node.type === h.cardModule.default).length, 0)
   assert.equal(capabilityManagerNotice({ ...messages[1], role: 'assistant' }, 1, messages), null)
@@ -413,7 +413,7 @@ test('external MCP dispatching operation without calendar capabilities renders c
   assert.equal(Object.hasOwn(item.operation, 'capabilities'), false)
   assert.equal(find(tree, 'stub-ActionOutcomeControls'), undefined)
   assert.match(system(tree).state, /结果未确认/)
-  assert.match(text(tree), /外部调用已登记派发，结果尚未确认/)
+  assert.match(text(tree), /外部调用已发出，等结果/)
   assert.match(text(tree), /不自动重新调用/)
   assert.match(text(tree), /external-operation-fixture/)
   assert.doesNotMatch(text(tree), /请在日历中核对|稳定幂等恢复/)
@@ -426,8 +426,8 @@ test('settled external MCP result displays its real SDK receipt without creating
   const h = await harness(t, './TaskApprovalControls.tsx', { token: 'fixture', task, scope: 'settled', onUpdated() {}, onError() {} })
   const tree = h.render()
   assert.equal(find(tree, 'stub-ActionOutcomeControls'), undefined)
-  assert.equal(system(tree).state, '外部调用回执已保存')
-  assert.match(text(tree), /已保存本次外部调用回执/)
+  assert.equal(system(tree).state, '外部调用结果已保存')
+  assert.match(text(tree), /完成/)
   assert.match(text(tree), /hello fixture/)
   assert.doesNotMatch(text(tree), /真实飞书操作API|请在日历中核对|稳定幂等恢复/)
 })
@@ -440,13 +440,13 @@ test('external MCP unknown intent and saved unknown receipt both stay conservati
   let tree = h.render()
   assert.equal(find(tree, 'stub-ActionOutcomeControls'), undefined)
   assert.equal(system(tree).state, '外部调用结果未知 · 不自动重试')
-  assert.match(text(tree), /不能判定原动作是否发生/)
+  assert.match(text(tree), /没确认外部调用结果/)
   const recorded = { ...item, receipt: { id: 95, source: 'tool', createdAt: '2026-10-29T01:02:00Z',
     result: { ok: false, error: { code: 'MCP_INVOCATION_UNKNOWN', message: '原调用结果尚未核实', unknown: true, retryable: false } } } }
   h.update({ task: approvalTask(recorded), scope: 'settled' })
   tree = h.render()
   assert.equal(find(tree, 'stub-ActionOutcomeControls'), undefined)
   assert.equal(system(tree).state, '外部调用结果未知 · 不自动重试')
-  assert.match(text(tree), /不会自动重试/)
+  assert.match(text(tree), /请核对实际状态/)
   assert.doesNotMatch(text(tree), /请在日历中核对|稳定幂等恢复/)
 })

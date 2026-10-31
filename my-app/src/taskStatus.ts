@@ -14,23 +14,22 @@ export type StatusTask = {
 export type StatusTone = 'neutral' | 'busy' | 'attention' | 'danger' | 'muted'
 
 export function taskStatus(task: StatusTask, sending = false): { label: string; tone: StatusTone } {
-  const mode = task.parameters.mode === 'model' ? '真实模型' : '测试模式'
   const checkpoint = task.runtime.checkpoint
-  if (sending) return { label: '正在提交…', tone: 'busy' }
-  if (task.botLifecycle === 'inactive') return { label: 'Bot 已停用 · 历史与真实结果保留', tone: 'muted' }
-  if (Boolean(task.cancellation) || task.runtime.outcome?.status === 'aborted') return { label: '已取消 · 记录保留', tone: 'muted' }
-  if (task.runtime.status === 'terminal') return { label: 'Task 执行异常 · 无法继续', tone: 'danger' }
-  if (task.waiting?.kind === 'action-outcome') return { label: '结果待核实 · 仅按工具保障安全恢复', tone: 'attention' }
-  if (checkpoint?.phase === 'awaitChildren') return { label: '等待子任务结果 · 不持续调用模型', tone: 'busy' }
-  if (task.approvals?.activeId) return { label: '等待你的审批 · 不持续调用模型', tone: 'attention' }
+  if (sending) return { label: '正在发送…', tone: 'busy' }
+  if (task.botLifecycle === 'inactive') return { label: '已停用', tone: 'muted' }
+  if (Boolean(task.cancellation) || task.runtime.outcome?.status === 'aborted') return { label: '已取消', tone: 'muted' }
+  if (task.runtime.status === 'terminal') return { label: '出错了，不能继续', tone: 'danger' }
+  if (task.waiting?.kind === 'action-outcome') return { label: '结果待确认', tone: 'attention' }
+  if (checkpoint?.phase === 'awaitChildren') return { label: '等子任务结果', tone: 'busy' }
+  if (task.approvals?.activeId) return { label: '等你确认', tone: 'attention' }
   if (task.blockers?.activeId) {
     const active = task.blockers.items.find(b => b.id === task.blockers?.activeId)
-    return { label: active?.assignee === 'supervisor' ? '等待主管处理 · 不持续调用模型' : '等待用户回答 · 不持续调用模型', tone: 'attention' }
+    return { label: active?.assignee === 'supervisor' ? '等主管处理' : '等你回答', tone: 'attention' }
   }
-  if (task.activeInputId !== null) return { label: `执行中 · ${mode === '测试模式' ? '测试回复' : mode}`, tone: 'busy' }
-  if (checkpoint?.lastOutcome === 'limited') return { label: `受限等待 · ${checkpoint.waitingReason} · 请提高上限后继续`, tone: 'attention' }
-  if (checkpoint?.lastOutcome === 'failed') return { label: '上轮执行失败 · 可继续发送', tone: 'danger' }
-  return { label: `等待输入 · ${mode}`, tone: 'neutral' }
+  if (task.activeInputId !== null) return { label: '正在回复', tone: 'busy' }
+  if (checkpoint?.lastOutcome === 'limited') return { label: '已到调用上限', tone: 'attention' }
+  if (checkpoint?.lastOutcome === 'failed') return { label: '上次出错，可以继续发', tone: 'danger' }
+  return { label: '空闲', tone: 'neutral' }
 }
 
 export function taskStatusLabel(task: StatusTask, sending = false): string {

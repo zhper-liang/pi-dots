@@ -1,11 +1,11 @@
 // Composer "/" menu: a Skill for this message, plus shortcuts to buttons that already exist.
 // Nothing here grants a permission; the server still checks every action.
 export const ACTIONS = [
-  { id: 'new-task', label: '新任务', hint: '用这个 Bot 开一个新任务', keywords: ['new', 'task', '新建'] },
+  { id: 'new-task', label: '新建会话', hint: '用这个机器人开一个新会话', keywords: ['new', 'task', '新建'] },
   { id: 'pane', label: '对话 / 时间线', hint: '在对话和时间线之间切换', keywords: ['timeline', '时间线', '对话'] },
-  { id: 'pause', label: '暂停全部自动化', hint: '例行任务停下，自动执行改为先问你；恢复在设置页', keywords: ['pause', '暂停'] },
-  { id: 'new-bot', label: '新建 Bot', hint: '起个名字就能建', keywords: ['bot', '新建'] },
-  { id: 'details', label: '会话详情', hint: '权限、用量和 Skill 记录', keywords: ['details', '详情', 'skill'] },
+  { id: 'pause', label: '暂停全部自动化', hint: '定时任务暂停，改东西需要你确认；到设置里恢复', keywords: ['pause', '暂停'] },
+  { id: 'new-bot', label: '新建机器人', hint: '起个名字就能建', keywords: ['bot', '新建'] },
+  { id: 'details', label: '会话详情', hint: '任务目标、调用次数和 Skill 记录', keywords: ['details', '详情', 'skill'] },
 ]
 
 /** skills: GET /api/tasks/:id/skills items. Groups get no Skills and no per-Bot new task; resume is Settings-only. */

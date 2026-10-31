@@ -28,7 +28,7 @@ export default function MentionMenu({ bots, context, draft, selectionStart, sele
   const items = candidates.map(candidate => candidate.disabled || !token || applyMention(draft, token, candidate, { bindings, maxLength }) ? candidate :
     { ...candidate, disabled: `选择后会超出 ${maxLength} 字符限制，请先缩短草稿` })
   return <ComposerSuggestions enabled={Boolean(token)} sessionKey={JSON.stringify([scopeKey, context, draft, selectionStart, selectionEnd])}
-    label="选择 Bot" items={items} inputRef={inputRef} emptyLabel="没有匹配的可用 Bot"
+    label="选择机器人" items={items} inputRef={inputRef} emptyLabel="没有匹配的机器人"
     onPick={candidate => {
       if (!token) return
       // Reject a stale event if a textarea edit/selection happened before React rerendered.

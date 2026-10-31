@@ -23,7 +23,7 @@ function statusText(r: Relation) {
 export default function GroupTaskBoard({ groupId, groupTaskId, token, relations, members, archivedIds, onArchived, onError }: Props) {
   const [busy, setBusy] = useState<number | null>(null)
   const items = (relations ?? []).filter(r => r.parentTaskId === groupTaskId)
-  if (!items.length) return <section aria-label="群任务" className="today-card group-board"><h3>群任务</h3><p className="shell-muted small">还没有分派的任务。在下方输入框选「@」某个 Bot 后发送，就会派给它。</p></section>
+  if (!items.length) return <section aria-label="群任务" className="today-card group-board"><h3>群任务</h3><p className="shell-muted small">还没有分派的任务。在下方输入框选「@」某个机器人 后发送，就会派给它。</p></section>
   const name = (id: string) => members.find(m => m.id === id)?.name ?? id
   const columnOf = (r: Relation): Column => archivedIds.includes(r.childTaskId) ? 'archived' : r.businessStatus && doneStates.includes(r.businessStatus) ? 'done' : 'active'
   async function archive(r: Relation, archived: boolean) {
@@ -54,6 +54,6 @@ export default function GroupTaskBoard({ groupId, groupTaskId, token, relations,
       return col === 'active' ? <div key={col}><h4>{labels[col]} · {list.length}</h4>{body}</div>
         : <details key={col} open={col === 'done'}><summary>{labels[col]} · {list.length}</summary>{body}</details>
     })}
-    <p className="shell-muted small">归档只是隐藏，不会取消或删除任务。</p>
+    <p className="shell-muted small">归档后从列表隐藏。</p>
   </section>
 }

@@ -73,7 +73,7 @@ test('all active Bots are visible, including nonmembers with a reason and no joi
   assert.deepEqual(candidates.map(item => item.botId), ['calendar', 'todo', 'chief', 'foreign'])
   const foreign = candidates.find(item => item.botId === 'foreign')
   assert.equal(foreign.action, 'unavailable')
-  assert.match(foreign.disabled, /不是本群成员.*没有加入入口/)
+  assert.match(foreign.disabled, /还不是群成员.*不能 @/)
   assert.equal(pick('@', foreign), null)
   assert.equal(candidates[0].hint, '检查会议和行程')
 })
@@ -102,7 +102,7 @@ test('private/primary chat selection is only a switch-bot payload with unsent dr
   assert.equal(selected.action, 'switch-bot')
   assert.equal(selected.botId, 'todo')
   assert.equal(selected.draft, '请 @待办助理 帮忙')
-  assert.match(other.actionLabel, /不会自动发送/)
+  assert.match(other.actionLabel, /未发送的草稿/)
 })
 
 test('pick preserves both sides, replaces suffix at the caret and reports exact edit/caret', () => {

@@ -138,8 +138,8 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .shell-chat.details-open { grid-template-columns: minmax(0, 1fr) 360px; }
 .shell-chat-header { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-3); position: sticky; top: 0; z-index: 5; margin: calc(-1 * var(--space-6)) calc(-1 * var(--space-8)) 0; padding: var(--space-3) var(--space-8); background: var(--c-bg); border-bottom: 1px solid var(--c-border); }
 .shell-chat-header h2 { margin: 0; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-/* Title, status and 对话/时间线 on the left; 归档 · Bot 设置 · ⓘ grouped on the right. */
-.shell-chat-header .shell-pane-toggle { margin-right: auto; }
+/* The title takes spare space; status, archive, settings and details stay compact. */
+.shell-chat-header h2 { flex: 1; }
 .status-badge { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; padding: 4px 10px; border-radius: var(--radius-sm); background: var(--c-sidebar); color: var(--c-muted); }
 .status-badge.tone-busy { background: var(--c-busy-bg); color: var(--c-busy); }
 .status-badge.tone-attention { background: var(--c-attention-bg); color: var(--c-attention); }
@@ -166,7 +166,7 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .shell-composer { position: sticky; bottom: 0; margin: auto 0 0; padding: var(--space-3) 0 var(--space-3); background: linear-gradient(to bottom, transparent, var(--c-bg) 20%); display: grid; gap: var(--space-2); }
 /* The scroll anchor after the composer takes no room of its own. */
 .shell-composer + div { margin-top: calc(-1 * var(--space-4)); }
-/* Composer: one box with the text and a tool row (/ · model · 思考 · count · 插入 · 发送), docked at the bottom. */
+/* Composer: primary actions stay visible; model and thinking depth live in the more fold. */
 .pd-composer-box { position: relative; border: 1px solid var(--c-border-strong); border-radius: var(--radius); background: var(--c-bg); }
 .pd-composer-box:focus-within { border-color: var(--c-accent); }
 .app-shell .pd-composer-box textarea { display: block; width: 100%; box-sizing: border-box; min-height: 44px; border: 0; border-radius: var(--radius); padding: 12px 14px 4px; background: transparent; resize: vertical; font: inherit; font-size: var(--fs-body); line-height: 1.6; color: var(--c-text); box-shadow: none; }
@@ -272,8 +272,8 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .swatch:has(input:checked) { box-shadow: 0 0 0 2px var(--c-bg), 0 0 0 4px var(--c-text); }
 .shape-option:has(input:checked) { border-color: var(--c-text); }
 .swatch:has(input:focus-visible), .shape-option:has(input:focus-visible) { outline: 2px solid var(--c-accent); outline-offset: 2px; }
-.bot-actions, .bot-detail-actions { display: flex; gap: var(--space-2); justify-content: flex-end; flex-wrap: wrap; }
-.bot-actions button:not(.primary), .bot-detail-actions button:not(.primary) { border: 1px solid var(--c-border); border-radius: var(--radius); padding: 9px 16px; background: var(--c-bg); cursor: pointer; }
+.bot-actions { display: flex; gap: var(--space-2); justify-content: flex-end; flex-wrap: wrap; }
+.bot-actions button:not(.primary) { border: 1px solid var(--c-border); border-radius: var(--radius); padding: 9px 16px; background: var(--c-bg); cursor: pointer; }
 .bot-templates h2 { font-size: 16px; margin: 0; }
 .bot-template-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-2); margin-top: var(--space-2); }
 .bot-template { display: flex; gap: var(--space-3); align-items: flex-start; text-align: left; padding: var(--space-3); border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-bg); cursor: pointer; }
@@ -288,8 +288,6 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .settings { display: grid; gap: var(--space-4); }
 .settings-account { display: flex; justify-content: space-between; align-items: center; }
 @media (max-width: 719px) {
-  .bot-detail-actions { width: 100%; justify-content: stretch; }
-  .bot-detail-actions button { flex: 1; }
   .today-header { padding-left: 4px; }
 }
 
@@ -346,9 +344,8 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .shell-settled[open] > summary { margin-bottom: var(--space-3); }
 .shell-cards .shell-settled section { border: 0; background: transparent; padding: 0; }
 
-/* Conversation / timeline switch and the timeline itself (P-14). */
-.shell-pane-toggle { flex: none; background: var(--c-sidebar); border-radius: var(--radius); padding: 2px; }
-.shell-pane-toggle button[aria-pressed] { padding: 4px 10px; font-size: 13px; }
+/* Execution timeline and its conversation return action. */
+.timeline-back { align-self: flex-start; }
 .timeline { list-style: none; margin: 0; padding: 0; display: grid; }
 .timeline-item { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px solid var(--c-border); }
 .timeline-icon { width: 24px; height: 24px; display: inline-grid; place-items: center; border-radius: 50%; background: var(--c-sidebar); color: var(--c-muted); font-size: 12px; }
@@ -408,7 +405,7 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 /* Bot 编辑：分区 + 设置行（左文字、右控件），开关是真正的滑块 */
 .bot-edit { display: grid; gap: var(--space-6); padding: var(--space-4) var(--space-6); border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-bg); min-width: 0; }
 .bot-edit-section { display: grid; gap: var(--space-2); min-width: 0; }
-.bot-edit-section + .bot-edit-section, .bot-edit-section + .bot-edit-diagnostics { padding-top: var(--space-6); border-top: 1px solid var(--c-border); }
+.bot-edit-section + .bot-edit-section { padding-top: var(--space-6); border-top: 1px solid var(--c-border); }
 .bot-edit-section h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .bot-edit-hint { margin: 0; font-size: 13px; color: var(--c-muted); line-height: 1.6; }
 .bot-edit-error { margin: 0; font-size: 13px; color: var(--c-danger); }
@@ -416,7 +413,6 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .bot-edit-actions { display: flex; gap: var(--space-2); padding-top: var(--space-2); }
 .bot-edit-actions .primary { padding: 7px 18px; }
 .bot-edit-actions button:disabled { opacity: .6; cursor: default; }
-.bot-edit-diagnostics > summary { cursor: pointer; font-size: 13px; color: var(--c-muted); }
 .bot-edit-history { margin: var(--space-2) 0 0; padding-left: var(--space-4); display: grid; gap: var(--space-2); font-size: 12px; color: var(--c-muted); overflow-wrap: anywhere; }
 .bot-edit-history p { margin: 2px 0 0; color: var(--c-text); }
 .bot-edit-history pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: var(--space-1) 0 0; }
@@ -472,13 +468,10 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
   /* At 44px the composer bar keeps only controls: the model name and the character count drop out. */
   .pd-tool-static, .pd-composer-count { display: none; }
   .app-shell .pd-composer-bar button.primary { margin-left: auto; }
-  /* Chat header: status on its own line, then 对话/时间线 · 归档 · Bot 设置, with ⓘ at the end. */
+  /* Narrow headers wrap status without expanding the main actions. */
   .shell-chat-header { row-gap: 0; }
   .shell-chat-header .status-badge { max-width: 100%; }
-  .shell-chat-header::after { content: ''; flex-basis: 100%; order: 1; }
-  .shell-chat-header > :not(h2, .status-badge) { order: 2; }
-  .shell-chat-header .shell-pane-toggle { margin-right: 0; padding: 0; }
-  .shell-chat-header > .shell-icon-button { margin-left: auto; }
+  .shell-chat-header > .shell-icon-button { flex-shrink: 0; }
   .app-shell .pd-tool select { padding: 0 6px; }
   .swatch, .shape-option { width: 44px; height: 44px; }
 }
@@ -493,3 +486,14 @@ body { background: var(--c-bg); color: var(--c-text); font-family: system-ui, -a
 .items-due-today h2 { font-size: var(--fs-section); }
 .items-due-today time { color: var(--c-muted); white-space: nowrap; }
 @media (max-width: 1000px) { .notification-columns { grid-template-columns: minmax(0, 1fr); } }
+
+.pd-composer-more { position: relative; }
+.pd-composer-more > summary { display: inline-grid; place-items: center; min-width: 32px; min-height: 28px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--c-muted); cursor: pointer; list-style: none; }
+.pd-composer-more > summary::-webkit-details-marker { display: none; }
+.pd-composer-more > summary:hover { background: var(--c-hover); color: var(--c-text); }
+.pd-composer-more[open] { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); max-width: 100%; }
+.pd-composer-more .model-picker { min-width: 0; max-width: 100%; }
+.pd-composer-more .model-picker select { min-width: 0; max-width: min(260px, 55vw); }
+@media (max-width: 719px) {
+  .pd-composer-more > summary { min-width: 44px; min-height: 44px; }
+}

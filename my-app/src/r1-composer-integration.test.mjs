@@ -80,6 +80,7 @@ async function harness(t, { initial = 3, failSend = false } = {}) {
     let value
     if (url === '/api/bots') value = { bots, mainSessions: { chief: 1, alpha: 2, beta: 4 } }
     else if (url === '/api/tasks') value = { tasks }
+    else if (/\/configuration$/.test(url)) value = { toolLabels: {} }
     else if (/\/tasks\/\d+$/.test(url)) value = { task: tasks.find(item => item.taskId === Number(url.split('/').at(-1))) }
     else throw new Error(`Unexpected test API ${url}`)
     return { ok: true, json: async () => value }

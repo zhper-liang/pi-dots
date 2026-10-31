@@ -7,8 +7,8 @@ export const CARD_KINDS = {
   finding: { label: '提醒', tone: 'attention' },
   'auto-applied': { label: '已自动执行', tone: 'busy' },
   summary: { label: '昨日遗留', tone: 'attention' },
-  'routine-proposal': { label: '例行任务提议', tone: 'attention' },
-  'bot-management': { label: 'Bot 管理提议', tone: 'attention' },
+  'routine-proposal': { label: '定时任务提议', tone: 'attention' },
+  'bot-management': { label: '机器人管理提议', tone: 'attention' },
   'capability-setup': { label: '能力配置', tone: 'attention' },
 }
 export const DETECTOR_LABELS = { conflict: '日程冲突', overdue: '待办逾期', unprepared: '会前未准备', followup: '话题跟进', summary: '昨日遗留' }
@@ -18,7 +18,7 @@ const STATE_LABELS = {
   resolved: '已补充', closed: '任务已结束', unavailable: '无法读取', failed: '失败', applied: '可撤销', undone: '已撤销',
   open: '', deferred: '已并入下次汇总', dismissed: '已忽略', muted: '这类已不再提醒', handled: '已派出任务',
 }
-const SETUP_STATES = { pending: '配置待处理', needs_auth: '等待安全输入凭据', needs_confirmation: '等待对应操作确认', missing_dependency: '依赖尚未满足', ready: '已启用并通过校验', disabled: '此 Bot 能力已停用', unbound: '已解除此 Bot 绑定', removed: '已移除来源', error: '配置未完成', unknown: '结果未知，需核查原操作' }
+const SETUP_STATES = { pending: '配置待处理', needs_auth: '等待安全输入凭据', needs_confirmation: '等待对应操作确认', missing_dependency: '依赖尚未满足', ready: '已启用并通过校验', disabled: '这个机器人的能力已停用', unbound: '已取消关联', removed: '已移除连接', error: '配置未完成', unknown: '结果未知，需核查原操作' }
 const FINDING_STATES = { resolved: '已处理或已过时' }
 const FINISHED = { succeeded: '已完成', failed: '失败', cancelled: '已取消' }
 const WAITING = ['pending', 'awaiting_confirmation', 'open', 'deferred']
@@ -55,7 +55,7 @@ export function cardView(card) {
   return { kind, label, tone: waiting ? base.tone : kind === 'auto-applied' && card.state === 'applied' ? 'busy' : 'muted', state: stateLabel(kind, card.state), waiting, actions: cardActions({ ...card, kind }) }
 }
 
-export const ALWAYS_WARNING = '以后这个 Bot 的同类操作会自动执行，不再问你。对外写入发出后无法撤销；全局暂停期间仍会询问。确定？'
+export const ALWAYS_WARNING = '以后这个机器人的同类操作自动处理；全局暂停时需要你确认。确定？'
 
 /** Mirror entry (PLAN §8.1) → card input. Mirror decisions reuse the derived Task's endpoints. */
 export function mirrorCard(item) {
@@ -91,6 +91,6 @@ export function notificationSection(item) {
 export function notificationReason(item) {
   if (item.kind === 'approval' || item.kind === 'workspace-proposal') return '这一步需要你确认，尚未执行。'
   if (item.kind === 'blocker') return String(item.detail?.question ?? '任务缺少信息，需要你补充。')
-  if (item.kind === 'skipped') return '无人值守执行遇到需要询问的动作，已跳过；请到原任务核对，不会自动重试。'
+  if (item.kind === 'skipped') return '这一步需要你处理，已跳过；打开原会话查看。'
   return '事项状态有更新，请核对原任务或提醒记录。'
 }

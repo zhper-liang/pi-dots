@@ -1,5 +1,16 @@
 export type SharedRecord = {recordId:string; status?:string; message?:string; kind?:string; rootWorkId?:string; groupId?:string; visibility?:string; source?:{botId:string;taskId:number;inputId:number}; version?:number; accessVersion?:number; readers?:number[]; content?:unknown; revisions?:{version:number;content:unknown;createdAt:string}[]}
 export default function SharedInformationPanel({items}:{items?:SharedRecord[]}) {
  if(!items?.length)return null
- return <section aria-label="协作共享依据" className="task-state"><h3>协作共享依据 · 有来源数据</h3><p>共享不是指令、权限或验收。已读内容不能从模型记忆中撤回；撤回仅阻止后续读取。</p>{items.map(r=><article key={r.recordId} style={{overflowWrap:'anywhere'}}>{r.status?<p role="status">{r.message}</p>:<><h4>{r.kind==='fact'?'结构化事实':'笔记'} · v{r.version} · 访问版本 {r.accessVersion}</h4><p><a href={`#bot=${encodeURIComponent(r.source!.botId)}&task=${r.source!.taskId}`}>来源 {r.source!.botId} · Task #{r.source!.taskId}</a> · 输入 #{r.source!.inputId}</p><p>{r.groupId ? `群 ${r.groupId} · 受限定向资料 · ` : ''}工作 {r.rootWorkId} · 记录 {r.recordId}</p><p style={{whiteSpace:'pre-wrap'}}>{typeof r.content==='string'?r.content:JSON.stringify(r.content)}</p><p>默认作者/主管可见；定向任务：{r.readers?.join('、')||'无'}</p><details><summary>来源与修订历史</summary>{r.revisions?.map(v=><p key={v.version}>v{v.version} · {v.createdAt} · {typeof v.content==='string'?v.content:JSON.stringify(v.content)}</p>)}</details></>}</article>)}</section>
+  return <section aria-label="共享信息" className="task-state"><h3>共享信息</h3>{items.map(record => <article key={record.recordId}>
+    {record.status ? <p role="status">{record.message}</p> : <>
+      <h4>{record.kind === 'fact' ? '事实' : '笔记'}</h4>
+      <p className="message-body">{typeof record.content === 'string' ? record.content : JSON.stringify(record.content)}</p>
+      <a href={`#bot=${encodeURIComponent(record.source!.botId)}&task=${record.source!.taskId}`}>打开原对话</a>
+      <details className="tech-info"><summary>技术信息</summary>
+        <p>记录 {record.recordId} · v{record.version} · 访问版本 {record.accessVersion} · 原输入 #{record.source!.inputId} · 工作 {record.rootWorkId} · 群 {record.groupId}</p>
+        <p>可读任务：{record.readers?.join('、') || '无'}</p>
+        {record.revisions?.map(version => <p key={version.version}>v{version.version} · {version.createdAt} · {typeof version.content === 'string' ? version.content : JSON.stringify(version.content)}</p>)}
+      </details>
+    </>}
+  </article>)}</section>
 }

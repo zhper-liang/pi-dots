@@ -23,7 +23,7 @@ function SetupCard({ token, receipt, targetName, botNames = {}, readOnly = false
   const unknown = uncertain || current.state === 'unknown'
   const incoming = JSON.stringify(receipt)
   const apply = useCallback((next: CapabilitySetupReceipt) => {
-    if (!sameCapabilitySetup(next, latest.current)) throw new Error('配置回执作用域不匹配。')
+    if (!sameCapabilitySetup(next, latest.current)) throw new Error('配置结果没有对应上，点「核查原配置」。')
     latest.current = next; setCurrent(next); setVerified(true); setUncertain(false)
     return next
   }, [])
@@ -48,7 +48,7 @@ function SetupCard({ token, receipt, targetName, botNames = {}, readOnly = false
     inFlight.current = true; active.current = controller; setBusy(true); setError('')
     const pending = (async () => {
       try { return await readLatest(controller.signal) }
-      catch { if (live.current && !controller.signal.aborted) { setVerified(false); setError('暂时无法核查最新配置状态；保留原 setup 和 requestId，不会重新提交。') } }
+      catch { if (live.current && !controller.signal.aborted) { setVerified(false); setError('现在核对不了，稍后再点「核查原配置」。') } }
       finally { inFlight.current = false; readFlight.current = null; if (live.current && !controller.signal.aborted) { active.current = null; setBusy(false) } }
       return null
     })()
@@ -72,7 +72,7 @@ function SetupCard({ token, receipt, targetName, botNames = {}, readOnly = false
       await readLatest(controller.signal)
       if (!live.current || controller.signal.aborted) return
       onChanged?.()
-    } catch { if (live.current && !controller.signal.aborted) { setUncertain(true); setVerified(false); setError('续办结果未确认。请仅核查原操作，不会自动重复配置。') } }
+    } catch { if (live.current && !controller.signal.aborted) { setUncertain(true); setVerified(false); setError('没确认配置成功，点「核查原配置」。') } }
     finally { inFlight.current = false; if (live.current && !controller.signal.aborted) { active.current = null; setBusy(false); if (queuedRead.current) void query() } }
   }
   async function openCredentials() {
@@ -91,7 +91,7 @@ function SetupCard({ token, receipt, targetName, botNames = {}, readOnly = false
     setCredentialOpen(false); setCredentialPending(false); setNotice('凭据已安全保存，正在核查原配置操作。'); onChanged?.()
     const next = await query(true)
     if (next?.canResume && next.state !== 'unknown') await resume(next)
-    else if (live.current) setNotice(!next ? '凭据已安全保存，最新配置状态仍待核查。' : next.state === 'ready' && next.enabledForBot && next.verification.status === 'ready' ? '凭据已保存，原配置已通过回读校验。' : '凭据已安全保存。原输入当前不能续办，请回原会话明确继续；不会伪造输入身份。')
+    else if (live.current) setNotice(!next ? '凭据已安全保存，最新配置状态仍待核查。' : next.state === 'ready' && next.enabledForBot && next.verification.status === 'ready' ? '凭据已保存，原配置已通过回读校验。' : '凭据已保存，请回原会话继续。')
   }
   const ready = verified && current.state === 'ready' && current.enabledForBot && current.verification.status === 'ready'
   const state = !verified ? '尚未核查最新配置状态' : current.state === 'ready' && !ready ? '绑定或校验尚未确认，配置未完成' : CAPABILITY_SETUP_STATES[current.state]
@@ -99,24 +99,24 @@ function SetupCard({ token, receipt, targetName, botNames = {}, readOnly = false
   const others = current.affectedBotIds.filter(botId => botId !== current.targetBotId)
   return <SystemCard id={`capability-setup-${current.setupId}`} card={{ kind: 'capability-setup', state: verified ? current.state : 'pending' }} title={`${current.kind === 'mcp' ? 'MCP' : 'Skill'} · ${current.name || current.capabilityId || '能力配置'}`}
     state={state} className="capability-setup-card" error={error || (verified ? current.error?.message : undefined)}
-    meta={`${CAPABILITY_SETUP_ACTIONS[current.action]} · 目标 Bot：${targetName ?? botNames[current.targetBotId] ?? current.targetBotId}`}
+    meta={`${CAPABILITY_SETUP_ACTIONS[current.action]} · 目标机器人：${targetName ?? botNames[current.targetBotId] ?? current.targetBotId}`}
     actions={<><button type="button" disabled={busy} onClick={() => void query(true)}>核查原配置</button>
       {canResume && <button type="button" disabled={busy || readOnly || credentialPending} onClick={() => void resume()}>继续原配置</button>}
       {verified && !unknown && current.state === 'needs_auth' && current.credentialEntry && <button type="button" disabled={busy || readOnly} onClick={() => void openCredentials()}>安全输入凭据</button>}
       {verified && !unknown && current.state === 'needs_confirmation' && current.approvalId && onOpenApproval && <button type="button" disabled={busy || readOnly || credentialPending} onClick={() => onOpenApproval(current.approvalId!)}>查看对应确认</button>}
-      {onOpenBot && <button type="button" onClick={() => onOpenBot(current.targetBotId)}>查看 Bot 工具</button>}
+      {onOpenBot && <button type="button" onClick={() => onOpenBot(current.targetBotId)}>查看机器人能力</button>}
     </>}>
     {current.description && <p>{current.description}</p>}
-    <div className="capability-setup-binding">{verified ? <><Switch label={`目标 Bot 的${current.name}启用状态（回执）`} checked={current.enabledForBot} disabled onChange={() => {}} onText="已启用" offText="未启用" /><span>开关展示当前回执；可在 Bot 工具页或通过对话调整。</span></> : <span>正在核查真实绑定状态…</span>}</div>
+    <div className="capability-setup-binding">{verified ? <><Switch label={`目标机器人的${current.name}启用状态`} checked={current.enabledForBot} disabled onChange={() => {}} onText="已启用" offText="未启用" /><span>可以在机器人的「能力」里改，也可以在对话里说。</span></> : <span>正在核查启用状态…</span>}</div>
     {verified && <p className="capability-setup-verification">校验：{current.verification.summary || '暂无校验说明'}{current.verification.checkedAt ? ` · ${new Date(current.verification.checkedAt).toLocaleString()}` : ' · 尚无校验时间'}</p>}
     {verified && !!current.missing.length && <ul className="capability-setup-missing" aria-label="缺少条件">{current.missing.map((item, index) => <li key={`${item.kind}:${item.id}:${index}`}>{item.message || `${item.kind}：${item.id}`}</li>)}</ul>}
-    {!!others.length && <p className="capability-setup-impact">此全局操作还涉及其他 Bot：{others.map(botId => botNames[botId] ?? botId).join('、')}。只以对应确认中的真实范围为准。</p>}
-    {unknown && <p role="status">结果未知，仅查询原 setup 和原请求；不会自动重新执行配置或绑定。</p>}
+    {!!others.length && <p className="capability-setup-impact">此全局操作还涉及其他机器人：{others.map(botId => botNames[botId] ?? botId).join('、')}。范围见对应确认卡。</p>}
+    {unknown && <p role="status">没确认结果，点「核查原配置」。</p>}
     {notice && <p role="status">{notice}</p>}
     {credential && <section className="capability-setup-credential" hidden={!credentialOpen} aria-label="原连接的安全凭据输入"><button type="button" onClick={() => setCredentialOpen(false)}>收起凭据输入</button>
       <McpCredentialForm connectionId={credential.connectionId} expectedRevision={credential.revision} transport={credential.transport} secretEnvKeys={credential.secretEnvKeys} hasCredential={credential.hasCredential}
         disabled={busy || readOnly || unknown} onSave={(input, signal) => mcp.saveCredential(input, signal)} onVerify={(requestId, signal) => mcp.requestStatus(requestId, signal)} onSaved={() => { void credentialSaved() }} onPendingChange={setCredentialPending} />
     </section>}
-    <details className="capability-setup-details"><summary>原操作标识</summary><dl><dt>setup</dt><dd>{current.setupId}</dd><dt>request</dt><dd>{current.requestId}</dd><dt>operation</dt><dd>{current.operationId}</dd><dt>Task / 输入</dt><dd>{current.taskId} / {current.inputId}</dd>{current.capabilityId && <><dt>能力</dt><dd>{current.capabilityId}</dd></>}</dl></details>
+    <details className="tech-info capability-setup-details"><summary>技术信息</summary><dl><dt>setup</dt><dd>{current.setupId}</dd><dt>request</dt><dd>{current.requestId}</dd><dt>operation</dt><dd>{current.operationId}</dd><dt>Task / 输入</dt><dd>{current.taskId} / {current.inputId}</dd>{current.capabilityId && <><dt>能力</dt><dd>{current.capabilityId}</dd></>}</dl></details>
   </SystemCard>
 }

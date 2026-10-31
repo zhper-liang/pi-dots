@@ -1,6 +1,6 @@
 // Pure safe receipt projection and authenticated setup client; no UI state or persistent storage.
 export const CAPABILITY_SETUP_STATES = { pending: '配置待处理', needs_auth: '等待安全输入凭据', needs_confirmation: '等待对应操作确认', missing_dependency: '依赖尚未满足',
-  ready: '已启用并通过校验', disabled: '此 Bot 能力已停用', unbound: '已解除此 Bot 绑定', removed: '已移除来源', error: '配置未完成', unknown: '结果未知，需核查原操作' }
+  ready: '已启用并通过校验', disabled: '这个机器人的能力已停用', unbound: '已取消关联', removed: '已移除连接', error: '配置未完成', unknown: '结果未知，需核查原操作' }
 export const CAPABILITY_SETUP_ACTIONS = { inspect: '检查', add: '接入', update: '更新', disable: '停用', unbind: '解绑', remove: '移除', rollback: '回退', resume: '续办' }
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const bounded = (value, max = 4000) => typeof value === 'string' && value.length <= max
@@ -67,9 +67,9 @@ export function createCapabilitySetupClient({ token, fetchImpl = fetch }) {
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       ...(resume ? { body: JSON.stringify({ taskId: original.taskId, inputId: original.inputId }) } : {}) })
     const body = await response.json().catch(() => null)
-    if (!response.ok) throw new Error('原配置操作尚未确认完成，请核查原操作后继续。')
+    if (!response.ok) throw new Error('原没确认配置成功，点「核查原配置」。')
     const current = capabilitySetupReceipt(body?.data, original.taskId)
-    if (!current || !sameCapabilitySetup(current, original)) throw new Error('配置回执与原操作不匹配，请保留原请求核查。')
+    if (!current || !sameCapabilitySetup(current, original)) throw new Error('配置结果没有对应上，点「核查原配置」。')
     return current
   }
   return { get: (receipt, signal) => request(receipt, false, signal), resume: (receipt, signal) => request(receipt, true, signal) }

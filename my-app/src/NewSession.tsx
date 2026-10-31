@@ -20,7 +20,7 @@ export default function NewSession({ bots, busy, onStart, onGroup }: { bots: Bot
   return <section className="pd-new-session" aria-labelledby="new-session-title">
     <span className="shell-brand-mark pd-new-mark" aria-hidden="true">p</span>
     <h1 id="new-session-title">有什么要做的？</h1>
-    <p className="shell-muted">选一个 Bot，写下第一句话。要几个 Bot 一起做，就开群聊。</p>
+    <p className="shell-muted">选一个机器人，写下第一句话。要几个一起做，就开群聊。</p>
     <form className="pd-new-form" onSubmit={submit}>
       <fieldset className="pd-chips"><legend className="sr-only">交给谁</legend>
         {active.map((bot) => <label key={bot.id} className={`pd-chip${chosen?.id === bot.id ? ' is-picked' : ''}`}>
@@ -31,7 +31,7 @@ export default function NewSession({ bots, busy, onStart, onGroup }: { bots: Bot
       </fieldset>
       <div className="pd-composer-box">
         <label htmlFor="new-session-message" className="sr-only">第一条消息</label>
-        <textarea id="new-session-message" rows={3} maxLength={4000} value={text} placeholder={chosen ? `给 ${chosen.name} 发消息…` : '没有可用的 Bot'} disabled={busy || !chosen} onChange={(e) => setText(e.target.value)} />
+        <textarea id="new-session-message" rows={3} maxLength={4000} value={text} placeholder={chosen ? `给 ${chosen.name} 发消息…` : '没有可用的机器人'} disabled={busy || !chosen} onChange={(e) => setText(e.target.value)} />
         <div className="pd-composer-bar">
           <span className="pd-composer-hint">{text.length} / 4000</span>
           <button className="primary" disabled={busy || !chosen || !text.trim()}>{busy ? '正在开始…' : '开始'}</button>

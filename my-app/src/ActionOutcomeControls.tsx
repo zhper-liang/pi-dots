@@ -30,9 +30,10 @@ export default function ActionOutcomeControls<T extends OutcomeTask>({ task, ite
     finally { if (!controller.signal.aborted) { submitting.current = false; setBusy(false) } }
   }
   return <div className="action-outcome" data-testid="action-outcome">
-    <h4>原操作记录 · {operation.id}</h4>
-    <p className="muted small">派发前意图 #{operation.intentEntryId} · {new Date(operation.createdAt).toLocaleString('zh-CN')}。参数和批准见本卡，不因重启改变。</p>
-    {!item.receipt && <p role="status"><strong>缺失：工具执行回执。原动作可能已经发生，也可能未发生；不能据此判为成功或失败。</strong>{operation.capabilities.stableIdempotency ? '工具仅在明确保障窗口内复用原标识与精确参数，最多有限次安全恢复；不成立时查询或等待，不作无保障重试。' : operation.capabilities.reliableQuery ? '工具支持按原操作 ID 可靠查询；宿主只作有限只读核实，不会重放写入。无结果不代表失败。' : '此操作未声明可靠结果查询或稳定幂等保障，宿主不会自动重做。'}请在日历中核对上述会议 ID 和精确时间，再提交核实说明。</p>}
+    <h4>核对上次操作</h4>
+    {!item.receipt && <p role="status">还没确认结果，请核对日历中的时间，再填写下面的说明。</p>}
+    <details className="tech-info"><summary>技术信息</summary>
+      <p>原操作 {operation.id} · 意图 #{operation.intentEntryId} · {operation.createdAt}</p>
     {operation.capabilities.query && <p className="muted small">可靠查询：{operation.capabilities.query.name} · 标识：{operation.capabilities.query.identity.join(' / ')} · 最多 {operation.capabilities.query.maxAttempts} 次，跨重启累计，计入工具额度。稳定幂等：{operation.capabilities.stableIdempotency ? '已声明（见保障条件）' : '未声明'}。</p>}
     {operation.capabilities.idempotency && <section aria-label="原操作幂等恢复证据">
       <h4>稳定幂等恢复 · 原标识、原参数、一次业务效果</h4>
@@ -50,13 +51,14 @@ export default function ActionOutcomeControls<T extends OutcomeTask>({ task, ite
       {querying && !cancelled && <p role="status">正在核实原操作结果，暂不能提交用户核实；不会执行新的写入。</p>}
       {operation.query.stopped && <p role="status">自动核实已停止：{stopReasons[operation.query.stopped.reason] ?? operation.query.stopped.reason}（{operation.query.stopped.reason}）。原结果仍未知，保留等待；查不到不代表失败，不自动重做。</p>}
     </section>}
-    {cancelled && !item.receipt && <p>Task 已取消，原结果仍未知。取消不代表外部动作被回滚，旧核实或批准不能恢复执行。</p>}
-    {operation.verifications.map((entry) => <p key={entry.id} className="blocker-answer">用户核实 #{entry.id} · {entry.outcome === 'completed' ? '确认完成' : entry.outcome === 'retry' ? '申请重新操作（尚需精确批准）' : '仍无法确认'}：{entry.note}<br /><small>{entry.source} · {new Date(entry.createdAt).toLocaleString('zh-CN')}</small></p>)}
-    {operation.resolution?.outcome === 'retry' && <p>原结果仍未知，记录保留。请处理新审批 #{operation.resolution.retryApprovalId}，申请本身不会执行。</p>}
+    </details>
+    {cancelled && !item.receipt && <p>会话已取消，上次操作的结果还没确认。</p>}
+    {operation.verifications.map((entry) => <p key={entry.id} className="blocker-answer">用户核实 #{entry.id} · {entry.outcome === 'completed' ? '确认完成' : entry.outcome === 'retry' ? '申请重新操作（尚需精确批准）' : '仍无法确认'}：{entry.note}<br /><time>{new Date(entry.createdAt).toLocaleString('zh-CN')}</time></p>)}
+    {operation.resolution?.outcome === 'retry' && <p>上次结果还没确认，请处理新的确认卡。</p>}
     {available && <div className="approval-actions">
-      <label htmlFor={`verify-note-${item.id}`}>核实说明（必填，不是新授权或参数变更）</label>
+      <label htmlFor={`verify-note-${item.id}`}>核对说明（必填）</label>
       <textarea id={`verify-note-${item.id}`} rows={2} maxLength={2000} value={note} disabled={busy} onChange={(event) => setNote(event.target.value)} placeholder="说明你核对了哪个会议、实际时间，或为什么仍不能确认。" />
-      <p className="muted small">重新操作可能重复执行。选择后仅创建同参数的新审批，仍须明确承认重复风险并再次批准；不会默认执行。</p>
+      <p className="muted small">重试可能重复改动，需要你在新卡片里确认。</p>
       <div className="button-row"><button className="primary" disabled={busy || !note.trim()} onClick={() => void verify('completed')}>我已核实原操作完成</button>
         <button disabled={busy || !note.trim()} onClick={() => void verify('unknown')}>仍无法确认，继续等待</button>
         <button disabled={busy || !note.trim()} onClick={() => void verify('retry')}>申请重新操作（可能重复）</button></div>

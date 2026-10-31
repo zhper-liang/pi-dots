@@ -18,9 +18,9 @@ export function MirrorCard({ token, item, onOpenTask }: { token: string; item: M
     try {
       const response = await fetch(path, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const result = await response.json().catch(() => null)
-      if (!response.ok) throw new Error(result?.error?.message ?? '结果未确认，请打开任务查看。')
+      if (!response.ok) throw new Error(result?.error?.message ?? '没确认结果，打开会话查看。')
       setDecided(approve ? '已同意' : '已拒绝')
-    } catch (e) { setError(e instanceof Error ? e.message : '结果未确认，请打开任务查看。') } finally { setBusy(false) }
+    } catch (e) { setError(e instanceof Error ? e.message : '没确认结果，打开会话查看。') } finally { setBusy(false) }
   }
   if (item.mirrorKind === 'auto-applied' && item.requestId) return <AutoAppliedCard token={token} requestId={item.requestId} summary={item.summary} undone={item.live === 'undone'} createdAt={item.createdAt} />
   const card = mirrorCard(item), actions = decided ? [] : cardActions(card)
@@ -30,7 +30,7 @@ export function MirrorCard({ token, item, onOpenTask }: { token: string; item: M
       {actions.includes('always') && <button type="button" disabled={busy} onClick={() => { if (window.confirm(ALWAYS_WARNING)) void decide(true, true) }}>以后直接做</button>}
       {actions.includes('reject') && <button type="button" disabled={busy} onClick={() => void decide(false)}>拒绝</button>}
       {actions.includes('answer') && <button type="button" className="primary" onClick={() => onOpenTask(item.childTaskId, item.botId)}>去补充</button>}
-      <button type="button" className="text-button" onClick={() => onOpenTask(item.childTaskId, item.botId)}>打开任务「{item.childTitle}」</button>
+      <button type="button" className="text-button" onClick={() => onOpenTask(item.childTaskId, item.botId)}>打开会话「{item.childTitle}」</button>
     </>}>
     {/* D-20: a "帮我想办法" result is shown right on its finished card; the task holds the full text. */}
     {item.mirrorKind === 'finished' && item.result ? <p className="system-card-result">{item.result}</p> : null}

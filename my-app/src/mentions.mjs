@@ -72,8 +72,8 @@ export function buildMentionCandidates(bots, context, query = '') {
     const rank = !q || normalize(label).includes(q) ? 0 : normalize(bot.id).includes(q) ? 1 : normalize(bot.description).includes(q) ? 2 : 3
     return { index, rank, candidate: {
       id: bot.id, botId: bot.id, label, hint: bot.description ?? '', action,
-      actionLabel: action === 'switch-bot' ? '转到此 Bot 会话，携带草稿；不会自动发送' : action === 'unavailable' ? '加入后 @' : '在当前会话 @',
-      disabled: member ? null : '加入后 @：目前不是本群成员，当前没有加入入口',
+      actionLabel: action === 'switch-bot' ? '转到这个机器人的会话，带上未发送的草稿' : action === 'unavailable' ? '加入后 @' : '在当前会话 @',
+      disabled: member ? null : '还不是群成员，暂时不能 @',
     } }
   }).filter(item => item.rank < 3).sort((a, b) => a.rank - b.rank || a.index - b.index).map(item => item.candidate)
 }
