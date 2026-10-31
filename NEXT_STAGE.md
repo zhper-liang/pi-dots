@@ -1,10 +1,10 @@
 # 当前状态与授权边界
 
-更新：2026-10-30（Asia/Shanghai）。接手前读这一页，再读 [plans](plans/README.md)。
+更新：2026-10-31（Asia/Shanghai）。接手前读这一页，再读 [plans](plans/README.md)。
 
 ## 一句话状态
 
-已交付的计划全部验收通过，移入 [plans/done](plans/done/)。第三轮 Google Workspace 2026-10-30 实现完成，待用户验收。
+已交付的计划全部验收通过，移入 [plans/done](plans/done/)。第三轮 Google Workspace 2026-10-30 实现完成，待用户验收。第四轮（降低使用负担）2026-10-31 已授权，待实施。
 
 ## 已验收完成
 
@@ -16,9 +16,13 @@
 
 [第三轮：Google Workspace](plans/active/r3-google-workspace/README.md)：混合路线，Calendar、Tasks 原生，Gmail、Drive、Docs、Sheets 经 workspace-mcp，由 Pidot 统一授权。2026-10-30 用户授权开工（“开”），按票派子 agent，主管协调与验收；子 agent 返回后先停下向用户汇报。2026-10-30 实现完成（ADR-020、ADR-021），待用户验收；真实账号手测步骤见[运行手册](docs/engineering/operations.md#google-连接与-workspace-mcpr3)。设计要能原样迁到服务器，服务器部署本身不做。
 
+[第四轮：降低使用负担](plans/active/r4-simplify/README.md)：机器人能力改为 Skills / MCP / 工具集三栏开关，创建时就能选；去掉「先问 / 直接做」和按来源逐个分配；对话页、设置页、事项与通知页收简，文案统一。2026-10-31 用户选定全部决定并授权一轮做完，交执行方（主管 + 子 agent）实施，执行规则和停下来问的条件见该计划 §0。在当前 `main` 上做，与第三轮验收并行。
+
 ## 授权边界
 
-- 第三轮已授权，范围以[该计划](plans/active/r3-google-workspace/README.md)为准，含派子 agent。此外的新阶段、新连接器、新依赖、派子 Agent 都需要用户另行授权；候选计划未授权不得开工。
+- 第三轮已授权，范围以[该计划](plans/active/r3-google-workspace/README.md)为准，含派子 agent。
+- 第四轮已授权，范围以[该计划](plans/active/r4-simplify/README.md)为准，含派子 agent；只有该计划 §0 列出的四种情况需要停下来问用户。
+- 此外的新阶段、新连接器、新依赖、派子 Agent 都需要用户另行授权；候选计划未授权不得开工。
 - 已批准的固定依赖：`@earendil-works/*@1.3.0`、`@modelcontextprotocol/sdk@1.32.2`、`zod@4.6.7`；第三轮另批准固定版本的 workspace-mcp（Python，经 uv 安装，D11）。
 - 不操作正式库和 `my-app/data/` 下的数据，不连接真实 Google 账号，不把凭证写入文档或日志。
 
