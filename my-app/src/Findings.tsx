@@ -56,7 +56,8 @@ export function MutedDetectors({ token }: { token: string }) {
   }
   if (muted === null) return <p className="shell-muted">{error || '正在读取…'}</p>
   return <div>
-    <p className="shell-muted small">数据变化或到点时用代码判断，不调用模型、不读聊天内容：日程冲突、待办逾期、会前未准备、话题跟进。每天最多 10 条即时提醒推到 Chief，多的并入次日“昨日遗留”；22:00–08:00 只进收件箱。</p>
+    <h3>主动提醒</h3>
+    <p className="shell-muted small">日程冲突、待办逾期、会前没准备、话题该跟进时提醒你。每天最多 10 条，22:00–08:00 只进通知。</p>
     {muted.length === 0 ? <p>所有提醒都开着。</p> : <ul>{muted.map(d => <li key={d}>{labels[d] ?? d} · 已不再提醒 <button type="button" onClick={() => void restore(d)}>恢复</button></li>)}</ul>}
     {error && <p role="alert" className="shell-note">{error}</p>}
   </div>
@@ -84,7 +85,7 @@ export function AssistSettings({ token }: { token: string }) {
   const offerRead = !value.chiefRead.enabled
   return <div className="assist-settings">
     <h3>帮我想办法</h3>
-    <p className="shell-muted small">打开后，提醒卡和「昨日遗留」卡上会多一个「帮我想办法」按钮。点一下，Chief 会开一个只读任务分析这条提醒、给出方案，结论显示在 Chief 主会话里。它不会改动任何东西，也不会中途问你。每次最多 5 次模型调用、10 次工具调用，会花模型额度。提醒本身仍由代码判断，不调用模型。</p>
+    <p className="shell-muted small">打开后，提醒卡上多一个「帮我想办法」：Chief 只看不改地分析这条提醒，把办法发到对话里，每次会用一点模型额度。</p>
     <p role="status">{value.assist ? '已打开' : '已关闭（默认）'}{value.chiefRead.enabled ? ' · Chief 能查看本地待办和日程（只读）' : ' · Chief 看不到本地待办和日程，只能凭卡上的内容分析'}</p>
     {offerRead && <label className="assist-read"><input type="checkbox" checked={read} disabled={busy || !value.chiefRead.available} onChange={e => setRead(e.target.checked)} /> 同时让 Chief 能查看本地待办和日程（只读）{!value.chiefRead.available && <span className="shell-muted small">：本地查看工具暂不可用，请检查工具安装。</span>}</label>}
     <div className="bot-actions">
@@ -92,7 +93,7 @@ export function AssistSettings({ token }: { token: string }) {
       {value.assist && offerRead && read && <button type="button" className="primary" disabled={busy} onClick={() => void save(true, true)}>保存</button>}
       {value.assist && <button type="button" disabled={busy} onClick={() => void save(false)}>关闭</button>}
     </div>
-    {value.assist && <p className="shell-muted small">关闭只会去掉按钮，已开始的分析会做完；Chief 的查看权限要在 Chief 的资料页「高级」里改。</p>}
+    {value.assist && <p className="shell-muted small">关掉只是去掉按钮，已经开始的分析会做完。</p>}
     {error && <p role="alert" className="shell-note">{error}</p>}
   </div>
 }

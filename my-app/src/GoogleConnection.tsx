@@ -9,7 +9,7 @@ class GoogleRequestError extends Error {}
 
 // Secrets (client secret, pasted redirect URL) live only in uncontrolled inputs and the request
 // body; forms are reset right after submit and nothing secret is kept in React state.
-export default function GoogleConnection({ token }: { token: string }) {
+export default function GoogleConnection({ token, onSummary }: { token: string; onSummary?: (text: string) => void }) {
   const [status, setStatus] = useState<GoogleStatus | null>(null), [loadError, setLoadError] = useState('')
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState(''), [error, setError] = useState('')
   const [rows, setRows] = useState<RowId[] | null>(null)
@@ -19,7 +19,10 @@ export default function GoogleConnection({ token }: { token: string }) {
     try { response = await fetch(path, { method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) }
     catch { throw new GoogleRequestError('网络中断，结果未确认；请稍后刷新状态。') }
     const data = await response.json().catch(() => null)
-    if (!response.ok) throw new GoogleRequestError(googleErrorText(response.status, data))
+    if (!response.ok) {
+      if (response.status === 503 && path === '/api/google/status' && live.current) onSummary?.('未启用')
+      throw new GoogleRequestError(googleErrorText(response.status, data))
+    }
     return data?.data
   }
   async function refresh() {
@@ -38,6 +41,9 @@ export default function GoogleConnection({ token }: { token: string }) {
     // Token changes remount the settings page (key={token}).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
+  useEffect(() => {
+    if (status) onSummary?.(status.connected ? status.email ?? '已连接' : '未连接')
+  }, [status, onSummary])
   const waiting = !!status?.attempt
   useEffect(() => {
     if (!waiting) return
@@ -104,7 +110,7 @@ export default function GoogleConnection({ token }: { token: string }) {
       {waiting && status.attempt && <p className="google-connection-waiting" role="status">已在新窗口打开 Google 授权页（5 分钟内有效）。没有打开？<a href={status.attempt.authorizeUrl} target="_blank" rel="noopener noreferrer">点这里打开</a>。</p>}
       <form className="google-paste" onSubmit={paste} autoComplete="off">
         <label htmlFor={`${ids}-paste`}>粘贴跳转地址</label>
-        <p id={`${ids}-paste-help`} className="shell-muted small">授权后浏览器若打不开 127.0.0.1 开头的页面（例如 Pidot 在另一台机器上），把地址栏里的完整地址粘贴到这里。只用于这一次连接，不会保存。</p>
+        <p id={`${ids}-paste-help`} className="shell-muted small">授权后浏览器若打不开 127.0.0.1 开头的页面（例如 Pidot 在另一台机器上），把地址栏里的完整地址粘贴到这里。只用于这一次连接。</p>
         <div className="google-paste-row">
           <input id={`${ids}-paste`} name="google-redirect-url" type="text" inputMode="url" required maxLength={8192} spellCheck={false} autoComplete="off" disabled={busy || !waiting} aria-describedby={`${ids}-paste-help`} placeholder={waiting ? 'http://127.0.0.1:…/?state=…&code=…' : '先点“连接 Google”'} />
           <button type="submit" className="pd-button" disabled={busy || !waiting}>完成连接</button>

@@ -97,16 +97,28 @@ function replaceGlobal(t, key, value) {
   t.after(() => { if (previous) Object.defineProperty(globalThis, key, previous); else delete globalThis[key] })
 }
 
-test('external MCP real settings component keeps the original outgoing stdio credential entry', async t => {
+test('R4-06 settings has five sections, a shared connection list and stdio credentials under advanced', async t => {
   const h = await harness(t, './SettingsPage.tsx', { token: 'fixture-ui' })
   const tree = h.render()
-  assert.ok(find(tree, 'stub-ExternalMcpConnections'))
-  assert.ok(find(tree, 'stub-StdioCredentials'))
+  const sections = tree.props.children.filter(Boolean)
+  assert.deepEqual(sections.map(section => text(find(section, 'h2'))), ['连接', '模型', '自动化', '偏好', '高级'])
+  const connections = sections[0].props.children.filter(node => node?.type === 'details')
+  assert.deepEqual(connections.map(node => text(node.props.children[0]).replace('读取中…', '')), ['飞书日历', 'Google', 'MCP 连接'])
+  assert.ok(find(sections[0], 'stub-ExternalMcpConnections'))
+  assert.equal(find(sections[0], 'stub-StdioCredentials'), undefined)
+  assert.ok(find(sections[4], 'stub-StdioCredentials'))
+  assert.ok(find(sections[4], 'details', props => props.className === 'tech-info'))
+  for (const [type, summary] of [['ExternalWorkspace', '工作日历'], ['GoogleConnection', 'me@example.test'], ['ExternalMcpConnections', '2 个']]) {
+    find(tree, `stub-${type}`).props.onSummary(summary)
+  }
+  assert.deepEqual(h.render().props.children[0].props.children.filter(node => node?.type === 'details').map(node => text(find(node, 'span'))), ['工作日历', 'me@example.test', '2 个'])
 })
 
 test('external MCP component saves form configuration only, then explicitly checks and disables the connection', async t => {
-  const f = fakeClient(), h = await harness(t, './ExternalMcpConnections.tsx', { token: 'fixture-ui', client: f.client })
+  const f = fakeClient(), summaries = []
+  const h = await harness(t, './ExternalMcpConnections.tsx', { token: 'fixture-ui', client: f.client, onSummary: value => summaries.push(value) })
   await h.settle()
+  assert.deepEqual(summaries, ['未添加'])
   button(h.render(), '添加 MCP 连接').props.onClick()
   changeField(h, 'mcp-name-', 'Local fixture')
   changeField(h, 'mcp-description-', '正常连接测试', 'textarea')
@@ -119,6 +131,7 @@ test('external MCP component saves form configuration only, then explicitly chec
   assert.equal(f.calls[0].input.config.url, 'https://example.com/mcp')
   assert.equal(Object.hasOwn(f.calls[0].input, 'expectedRevision'), false)
   assert.match(text(tree), /已保存，待检查/)
+  assert.equal(summaries.at(-1), '1 个')
   assert.doesNotMatch(text(tree), /连接检查完成/)
   button(tree, '检查连接').props.onClick()
   tree = await h.settle()
@@ -171,17 +184,18 @@ test('external MCP component preserves the original unknown request and verifies
   find(h.render(), 'form').props.onSubmit({ preventDefault() {} })
   let tree = await h.settle()
   assert.equal(button(tree, '添加 MCP 连接').props.disabled, true)
-  assert.ok(button(tree, '核查原 MCP 请求'))
-  assert.match(find(tree, 'stub-EditorDialog').props.error, /操作结果未确认/)
+  assert.ok(button(tree, '核对上次操作'))
+  assert.match(find(tree, 'stub-EditorDialog').props.error, /上次操作没确认结果/)
   assert.equal(find(tree, 'stub-EditorDialog').props.pending, false)
   const requestId = f.calls[0].input.requestId
-  button(tree, '核查原 MCP 请求').props.onClick()
+  assert.match(text(find(tree, 'details', props => props.className === 'tech-info')), new RegExp(requestId))
+  button(tree, '核对上次操作').props.onClick()
   tree = await h.settle()
   assert.deepEqual(f.checks, [requestId])
   assert.equal(f.calls.length, 1)
   assert.equal(find(tree, 'stub-EditorDialog').props.open, false)
   assert.match(text(tree), /Unknown fixture/)
-  assert.equal(button(tree, '核查原 MCP 请求'), undefined)
+  assert.equal(button(tree, '核对上次操作'), undefined)
 })
 
 test('external MCP removal requires confirmation and does not hide a row before the receipt and list reread', async t => {
@@ -198,7 +212,7 @@ test('external MCP removal requires confirmation and does not hide a row before 
   assert.equal(f.calls[0].input.confirmGlobal, true)
   assert.equal(f.calls[0].input.expectedRevision, '1')
   assert.equal(find(tree, 'ul', props => props['aria-label'] === '外部 MCP 连接'), undefined)
-  assert.match(text(tree), /尚未添加外部 MCP 连接/)
+  assert.match(text(tree), /还没有 MCP 连接/)
 })
 
 test('credential form clears synthetic secrets immediately and verifies an unknown request without resubmitting', async t => {
@@ -217,13 +231,13 @@ test('credential form clears synthetic secrets immediately and verifies an unkno
   assert.deepEqual(posts[0].credential, { bearerToken: 'synthetic-test-only' })
   assert.doesNotMatch(text(tree), /synthetic-test-only/)
   assert.equal(find(tree, 'fieldset').props.disabled, true)
-  button(tree, '核查原凭据请求').props.onClick()
+  button(tree, '核对上次操作').props.onClick()
   tree = await h.settle()
   assert.deepEqual(reads, [posts[0].requestId])
   assert.equal(posts.length, 1)
   assert.deepEqual(pending, [true, false])
   assert.deepEqual(saved, [publicReceipt({ saved: true })])
-  assert.equal(button(tree, '核查原凭据请求'), undefined)
+  assert.equal(button(tree, '核对上次操作'), undefined)
   assert.doesNotMatch(text(tree), /must-not-escape/)
   assert.equal(find(tree, 'input').props.value, undefined)
 })
@@ -307,13 +321,13 @@ test('reconnect unknown outcome reconciles the service check ledger and never st
   await h.settle(); button(h.render(), '重新连接').props.onClick()
   let tree = await h.settle()
   assert.match(text(tree), /操作结果待核查/)
-  button(tree, '核查原 MCP 请求').props.onClick()
+  button(tree, '核对上次操作').props.onClick()
   tree = await h.settle()
   assert.equal(f.calls.length, 1)
   assert.equal(f.calls[0].operation, 'reconnect')
   assert.deepEqual(f.checks, [f.calls[0].input.requestId])
   assert.match(text(tree), /已就绪/)
-  assert.equal(button(tree, '核查原 MCP 请求'), undefined)
+  assert.equal(button(tree, '核对上次操作'), undefined)
 })
 
 test('definitively failed MCP operation exposes an explicit retry with the identical request and payload', async t => {
@@ -326,10 +340,10 @@ test('definitively failed MCP operation exposes an explicit retry with the ident
   await h.settle(); button(h.render(), '检查连接').props.onClick()
   let tree = await h.settle()
   assert.equal(f.calls.length, 1)
-  assert.ok(button(tree, '重试原 MCP 操作'))
-  assert.equal(button(tree, '核查原 MCP 请求'), undefined)
+  assert.ok(button(tree, '重试'))
+  assert.equal(button(tree, '核对上次操作'), undefined)
   assert.match(text(tree), /上次操作未完成/)
-  button(tree, '重试原 MCP 操作').props.onClick()
+  button(tree, '重试').props.onClick()
   tree = await h.settle()
   assert.equal(f.calls.length, 2)
   assert.deepEqual(f.calls[1], f.calls[0])
@@ -345,12 +359,12 @@ test('a credential retry after verified failure reads a new form input and prese
   h.render(); h.form.values.set('bearer', 'first-synthetic-input')
   find(h.render(), 'form').props.onSubmit({ preventDefault() {}, currentTarget: h.form })
   let tree = await h.settle()
-  button(tree, '核查原凭据请求').props.onClick()
+  button(tree, '核对上次操作').props.onClick()
   tree = await h.settle()
   assert.equal(posts.length, 1)
   assert.equal(h.form.values.size, 0)
   assert.equal(find(tree, 'fieldset').props.disabled, false)
-  assert.ok(button(tree, '重新输入后重试原凭据请求'))
+  assert.ok(button(tree, '重试'))
   h.form.values.set('bearer', 'reentered-synthetic-input')
   find(h.render(), 'form').props.onSubmit({ preventDefault() {}, currentTarget: h.form })
   tree = await h.settle()
@@ -419,6 +433,6 @@ test('real MCP settings component consumes production authenticated routes and a
   for (let n = 0; n < 100; n++) { tree = await h.settle(); if (text(tree).includes('已停用') && !button(tree, '添加 MCP 连接').props.disabled) break; await new Promise(resolve => setTimeout(resolve, 5)) }
   assert.match(text(tree), /已停用/)
   button(tree, '移除').props.onClick()
-  for (let n = 0; n < 100; n++) { tree = await h.settle(); if (text(tree).includes('尚未添加外部 MCP 连接')) break; await new Promise(resolve => setTimeout(resolve, 5)) }
+  for (let n = 0; n < 100; n++) { tree = await h.settle(); if (text(tree).includes('还没有 MCP 连接')) break; await new Promise(resolve => setTimeout(resolve, 5)) }
   assert.deepEqual(await client.connections(), [])
 })

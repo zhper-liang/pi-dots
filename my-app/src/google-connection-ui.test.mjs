@@ -34,4 +34,8 @@ test('R3-02 UI: switches use Switch.tsx and secret inputs stay uncontrolled', as
   assert.ok(!/type="checkbox"/.test(source))
   for (const name of ['google-client-secret', 'google-redirect-url']) assert.ok(!new RegExp(`name="${name}"[^>]*value=`).test(source), `${name} must not be a controlled input`)
   assert.match(source, /粘贴跳转地址/)
+  assert.match(source, /onSummary\?: \(text: string\) => void/)
+  assert.match(source, /response.status === 503[^\n]+onSummary\?\.\('未启用'\)/)
+  assert.match(source, /onSummary\?\.\(status.connected \? status.email \?\? '已连接' : '未连接'\)/)
+  assert.ok(GOOGLE_SERVICE_ROWS.every(row => !/\bBot\b|来源|不会/.test(row.note)))
 })

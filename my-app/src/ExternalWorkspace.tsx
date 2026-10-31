@@ -3,11 +3,11 @@ import { createWorkspaceRequestGuard } from './workspace-request-guard.mjs'
 import ExternalSync from './ExternalSync'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-type Source = { id: string; calendarId: string; epoch: number; authorized: boolean; readScope: string }
+type Source = { id: string; calendarId: string; calendarName: string; epoch: number; authorized: boolean; readScope: string }
 type Event = { id: string; remoteId: string; title: string; start: string | object; end: string | object; timezone: string; version: number; remoteVersion: string; readOnly: boolean; description?: string }
 type Operation = { requestId: string; payloadHash: string; state: string; normalizedArgs: object; external: { before: object | null; expiresAt: string; notice: string }; receipt?: object; error?: { message: string } }
 const initial = { title: '', description: '', start: '', end: '', timezone: 'Asia/Shanghai', freeBusy: 'busy' }
-export default function ExternalWorkspace({ token }: { token: string }) {
+export default function ExternalWorkspace({ token, onSummary }: { token: string; onSummary?: (text: string) => void }) {
   const [source, setSource] = useState<Source | null>(null), [events, setEvents] = useState<Event[]>([]), [op, setOp] = useState<Operation | null>(null)
   const [form, setForm] = useState(initial), [target, setTarget] = useState<Event | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [requestId, setRequestId] = useState(''), [message, setMessage] = useState('')
   const [window, setWindow] = useState(() => ({ start: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), end: new Date(Date.now() + 7 * 86400000).toISOString().replace(/\.\d{3}Z$/, 'Z') }))
@@ -15,7 +15,7 @@ export default function ExternalWorkspace({ token }: { token: string }) {
   const api = useCallback(async (path: string, body: object = {}) => {
     const identity = queries.current.capture()
     const r = await fetch(`/api/workspace/external-${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) })
-    const j = await r.json(); if (path !== 'sources' && !queries.current.sameIdentity(identity)) throw Error('请求期间来源或权限已变化，已隐藏迟到结果；请按原请求标识查询持久回执，不重发。'); if (!r.ok) throw Error(`${j.error?.code ?? r.status}: ${j.error?.message ?? '请求失败'}`); return j.data
+    const j = await r.json(); if (path !== 'sources' && !queries.current.sameIdentity(identity)) throw Error('日历或权限变了，点「刷新飞书日历」重新读取。'); if (!r.ok) throw Error(`${j.error?.code ?? r.status}: ${j.error?.message ?? '请求失败'}`); return j.data
   }, [token])
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current
@@ -24,9 +24,10 @@ export default function ExternalWorkspace({ token }: { token: string }) {
     queries.current.identity(identity)
     if (sourceIdentity.current !== identity) { setEvents([]); setOp(null); setTarget(null); setForm(initial); setMessage(''); sourceIdentity.current = identity }
     setSource(s)
+    onSummary?.(s ? s.calendarName : '未绑定')
     if (!s?.authorized || s.readScope !== 'full') { setEvents([]); setOp(null); setTarget(null); setForm(initial); setMessage('') }
     return s as Source | null
-  }, [api])
+  }, [api, onSummary])
   useEffect(() => {
     let active = true
     const queryGuard = queries.current, sequence = refreshSequence
@@ -47,16 +48,17 @@ export default function ExternalWorkspace({ token }: { token: string }) {
     const result = await api('prepare', { sourceId: source.id, requestId: id, action, arguments: { ...args, ...(target ? { eventId: target.remoteId, beforeHash: target.remoteVersion } : {}) }, ...(target ? { expectedVersion: target.version } : {}) })
     setOp(result)
   }
-  return <section className="panel" aria-label="飞书统一工作区" style={{ gridColumn: '1 / -1', minWidth: 0, overflowWrap: 'anywhere', padding: 12 }}>
-    <h2>飞书统一工作区（无模型）</h2>
-    <p>这里管理用户的飞书来源许可与手动操作；Bot 按当前工具、资源和规则执行。手动改动先预览再批准；结果未知时先查询原请求。</p>
-    {busy && <p role="status">正在处理来源请求；写入是否成功以持久回执为准。</p>}{error && <p role="alert">{error}</p>}
-    <button disabled={busy} onClick={() => void run(async () => { await refresh() })}>刷新飞书来源</button>
-    {source ? <><WorkspaceIdentity sourceId={source.id} authority="external" scope={source.authorized ? source.readScope : 'none'} epoch={source.epoch} /><p>飞书应用日历账号/容器：{source.calendarId}（服务端绑定；不展示凭证）</p>
-      {!source.authorized && <button disabled={busy} onClick={() => void run(async () => { await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: true, readScope: 'full', confirmed: true }); await refresh() })}>恢复使用此来源</button>}
-      <button disabled={busy || !source.authorized} onClick={() => void run(async () => { await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: false, readScope: 'full', confirmed: true }); setEvents([]); setOp(null); setTarget(null); setForm(initial); setMessage(''); await refresh() })}>撤销飞书来源</button>
+  return <section className="panel" aria-label="飞书日历" style={{ gridColumn: '1 / -1', minWidth: 0, overflowWrap: 'anywhere', padding: 12 }}>
+    <h3>飞书日历</h3>
+    <p>绑定一个飞书日历后，开着「日程与待办」的机器人都能读写它。</p>
+    {busy && <p role="status">正在处理…</p>}{error && <p role="alert">{error}</p>}
+    <button disabled={busy} onClick={() => void run(async () => { await refresh() })}>刷新飞书日历</button>
+    {source ? <><WorkspaceIdentity sourceId={source.id} authority="external" scope={source.authorized ? source.readScope : 'none'} epoch={source.epoch} /><p>已绑定日历：{source.calendarId}</p>
+      {!source.authorized && <button disabled={busy} onClick={() => void run(async () => { await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: true, readScope: 'full', confirmed: true }); await refresh() })}>恢复使用这个日历</button>}
+      <button disabled={busy || !source.authorized} onClick={() => void run(async () => { await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: false, readScope: 'full', confirmed: true }); setEvents([]); setOp(null); setTarget(null); setForm(initial); setMessage(''); await refresh() })}>停用这个日历</button>
       {source.authorized && <>
         <ExternalSync token={token} sourceId={source.id} epoch={source.epoch} readScope={source.readScope} />
+        <details className="tech-info"><summary>手动改飞书日程</summary>
         <div>{(['start', 'end'] as const).map(k => <label key={k}>查询{k}<input value={window[k]} onChange={e => setWindow({ ...window, [k]: e.target.value })} style={{ maxWidth: '100%' }} /></label>)}<button disabled={busy} onClick={() => void run(query)}>查询飞书日程</button></div>
         <p role="status">{message}</p>{message && events.length === 0 && <p className="workspace-empty">当前查询窗口没有可见日程；不代表其他窗口或未授权来源为空。</p>}
         <ul>{events.map((e, i) => <li key={e.id ?? i}>{e.title ?? '忙碌'} · {typeof e.start === 'string' ? e.start : JSON.stringify(e.start)} {source.readScope === 'full' && <button disabled={busy} onClick={() => void run(async () => { const ticket = queries.current.begin(); const d = (await api('get', { sourceId: source.id, eventId: e.remoteId })).items[0]; if (!queries.current.current(ticket)) return; setTarget(d); setForm({ ...initial, title: d.title, description: d.description ?? '' }); setOp(null); setMessage('已读取精确ID与版本。编辑时请明确输入带偏移起止；不支持全天/重复/邀请/会议室。') })}>读取精确事件 {e.remoteId}</button>}</li>)}</ul>
@@ -72,7 +74,8 @@ export default function ExternalWorkspace({ token }: { token: string }) {
           </div>}
           <label>原请求标识<input value={requestId} onChange={e => setRequestId(e.target.value)} style={{ maxWidth: '100%' }} /></label><button disabled={busy || !requestId} onClick={() => void run(async () => setOp(await api('operation', { requestId })))}>查询原操作回执（不重发）</button>
         </>}
+        </details>
       </>}
-    </> : <p>当前无绑定来源；不会自动连接、授权或创建容器。</p>}
+    </> : <p>还没有绑定飞书日历。</p>}
   </section>
 }

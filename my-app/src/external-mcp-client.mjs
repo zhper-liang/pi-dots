@@ -25,7 +25,7 @@ export function mcpConfigInput(form, connectionId) {
 
 export class McpRequestError extends Error {
   constructor(code, { status = 0, unknown = false } = {}) {
-    super(unknown ? '操作结果未确认，请用原请求核查。' : ['MCP_REVISION_CONFLICT', 'MCP_CONFIG_CONFLICT'].includes(code) ? '连接配置已更新，请重新读取后再操作。' : '操作未完成，请检查配置或连接状态。')
+    super(unknown ? '上次操作没确认结果，先点「核对上次操作」。' : ['MCP_REVISION_CONFLICT', 'MCP_CONFIG_CONFLICT'].includes(code) ? '连接配置已更新，请重新读取后再操作。' : '操作未完成，请检查配置或连接状态。')
     this.name = 'McpRequestError'; this.code = code; this.status = status; this.unknown = unknown
   }
 }

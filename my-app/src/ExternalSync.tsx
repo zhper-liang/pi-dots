@@ -17,7 +17,7 @@ export default function ExternalSync({ token, sourceId, epoch, readScope }: { to
     return () => { active = false; clearInterval(timer) }
   }, [api, epoch, readScope])
   const run = async (action: string, body: object) => { setBusy(true); setError(''); try { setState(await api(action, body)) } catch (e) { setError(String(e)) } finally { setBusy(false) } }
-  return <section aria-label="外部同步缓存" style={{ minWidth: 0, overflowWrap: 'anywhere' }}><h3>外部变化同步（只读窗口重扫）</h3>
+  return <details className="tech-info"><summary>同步设置</summary><section aria-label="外部同步缓存" style={{ minWidth: 0, overflowWrap: 'anywhere' }}><h3>外部变化同步（只读窗口重扫）</h3>
     <p>来源 {sourceId}。后台同步不调用模型，不发送通知；停机不执行。</p>
     {error && <p role="alert">{error}</p>}
     {readScope !== 'full' ? <p>忙闲权限不读取正文缓存，请使用实时忙闲查询。</p> : <>
@@ -31,5 +31,5 @@ export default function ExternalSync({ token, sourceId, epoch, readScope }: { to
       <button disabled={busy || !state?.enabled || state?.runState === 'running'} onClick={() => { if (globalThis.confirm('立即执行当前配置的只读窗口重扫？不发送外部写入或通知。')) void run('refresh', { confirmed: true }) }}>手动刷新同步缓存</button>
       <p>{state?.notice}</p>
     </>}
-  </section>
+  </section></details>
 }

@@ -34,7 +34,7 @@ function CredentialFields({ connectionId, expectedRevision, transport, secretEnv
     original.current = null; setUncertain(null); setRetryable(false); onPendingChange?.(false)
     onSaved?.({ connectionId: receipt.connectionId, revision: receipt.revision, status: receipt.status, saved: true,
       ...(typeof receipt.replayed === 'boolean' ? { replayed: receipt.replayed } : {}) })
-    setNotice('凭据已保存；请检查连接。此操作不会分配任何 Bot 工具。')
+    setNotice('凭据已保存，点「检查连接」后，到机器人的「能力 → MCP」里打开。')
   }
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -52,7 +52,7 @@ function CredentialFields({ connectionId, expectedRevision, transport, secretEnv
     } catch (failure) {
       if (!active.signal.aborted) {
         if (failure instanceof McpRequestError && !failure.unknown) { original.current = null; setUncertain(null); setRetryable(false); onPendingChange?.(false); setError(failure.message) }
-        else { setUncertain(metadata); setError('凭据保存结果未确认，输入已清空。请核查原请求，不会自动重新提交。') }
+        else { setUncertain(metadata); setError('没确认凭据保存成功，先点「核对上次操作」。') }
       }
     } finally { if (!active.signal.aborted) { controller.current = null; setBusy(false) } }
   }
@@ -64,12 +64,12 @@ function CredentialFields({ connectionId, expectedRevision, transport, secretEnv
       const status = await onVerify(metadata.requestId, active.signal)
       if (active.signal.aborted) return
       if (status?.requestId === metadata.requestId && status.state === 'succeeded' && status.operation === 'credential' && status.result?.saved === true) complete(status.result)
-      else if (status?.state === 'failed' && status.operation === 'credential') { setRetryable(true); setError('原凭据请求已失败。请重新输入原凭据，用同一请求标识显式重试；旧输入不会保留。') }
-      else setError('原请求尚未确认完成，请保留此请求并稍后核查。')
+      else if (status?.state === 'failed' && status.operation === 'credential') { setRetryable(true); setError('上次保存失败了，重新填凭据后点「重试」。') }
+      else setError('上次保存还没有结果，稍后再点「核对上次操作」。')
     } catch (failure) {
       if (!active.signal.aborted) {
-        if (failure instanceof McpRequestError && failure.status === 404) { setRetryable(true); setError('尚未找到原请求。可重新输入原凭据，用同一请求标识显式重试。') }
-        else setError('暂时无法核查原请求；输入保持清空，请稍后再核查。')
+        if (failure instanceof McpRequestError && failure.status === 404) { setRetryable(true); setError('没找到上次保存的记录，重新填凭据后点「重试」。') }
+        else setError('现在核对不了，稍后再试。')
       }
     }
     finally { if (!active.signal.aborted) { controller.current = null; setBusy(false) } }
@@ -80,10 +80,10 @@ function CredentialFields({ connectionId, expectedRevision, transport, secretEnv
       {(transport === 'streamable-http' ? ['bearer'] : validKeys ? secretEnvKeys : []).map(key => <label className="mcp-credential-row" key={key}>
         <span>{key === 'bearer' ? 'Bearer 凭据' : key}</span><input name={key} type="password" required maxLength={4096} autoComplete="new-password" spellCheck={false} aria-describedby={helpId} />
       </label>)}
-      <button className="primary" type="submit">{busy ? '正在安全保存…' : retryable ? '重新输入后重试原凭据请求' : '保存凭据'}</button>
+      <button className="primary" type="submit">{busy ? '正在安全保存…' : retryable ? '重试' : '保存凭据'}</button>
     </fieldset>
     {unavailable && <p role="status">此配置未声明可输入的凭据字段，请先修改连接配置。</p>}
-    {uncertain && <div role="status"><p>待核查请求：<code>{uncertain.requestId}</code></p><button type="button" disabled={disabled || busy} onClick={() => void verify()}>核查原凭据请求</button></div>}
+    {uncertain && <div role="status"><details className="tech-info"><summary>技术信息</summary><p>待核查请求：<code>{uncertain.requestId}</code></p></details><button type="button" disabled={disabled || busy} onClick={() => void verify()}>核对上次操作</button></div>}
     {notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
   </form>
 }

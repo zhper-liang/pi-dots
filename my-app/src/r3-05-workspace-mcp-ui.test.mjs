@@ -21,6 +21,7 @@ test('R3-05 UI: the public status keeps only contract fields', () => {
 test('R3-05 UI: running, not running and connected are told apart honestly', () => {
   const ready = workspaceMcpView(status(), connected)
   assert.equal(ready.runtime.text, '正在运行（2.2.1）'); assert.equal(ready.runtime.tone, 'ok')
+  assert.equal(ready.connection.hint, '连好以后，到机器人的「能力 → MCP」里打开。')
   assert.equal(ready.connection.text, '已连接 · 41 个工具'); assert.equal(ready.canCheck, true); assert.equal(ready.checkLabel, '重新检查')
   const down = workspaceMcpView(status('not_running'), connected)
   assert.equal(down.runtime.text, '没有运行'); assert.equal(down.runtime.tone, 'bad'); assert.match(down.runtime.hint, /启动 workspace-mcp/)
@@ -33,7 +34,7 @@ test('R3-05 UI: running, not running and connected are told apart honestly', () 
 })
 
 test('R3-05 UI: connection states follow Google, restart and the last check', () => {
-  assert.match(workspaceMcpView(status('running', { connection: null }), connected).connection.hint, /对 Chief 说/)
+  assert.match(workspaceMcpView(status('running', { connection: null }), connected).connection.hint, /对 Chief 说.*机器人/)
   const restarted = workspaceMcpView(status('running', { connection: { ...connection, status: 'configured' } }), connected)
   assert.equal(restarted.connection.text, '已保存，需重新检查'); assert.equal(restarted.canCheck, true); assert.equal(restarted.checkLabel, '检查连接')
   const noGoogle = workspaceMcpView(status(), { connected: false, services: [] })

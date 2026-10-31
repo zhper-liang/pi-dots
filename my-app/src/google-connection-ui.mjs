@@ -4,8 +4,8 @@ const list = value => Array.isArray(value) ? value.filter(item => SERVICES.inclu
 
 // UI checkboxes (D13): Calendar, Tasks, and the four workspace-mcp services as one row.
 export const GOOGLE_SERVICE_ROWS = Object.freeze([
-  Object.freeze({ id: 'calendar', label: 'Google 日历', note: '全部日历显示在日历视图，Bot 可读写', services: Object.freeze(['calendar']) }),
-  Object.freeze({ id: 'tasks', label: 'Google 任务', note: '任务列表按截止日显示，Bot 可读写', services: Object.freeze(['tasks']) }),
+  Object.freeze({ id: 'calendar', label: 'Google 日历', note: '全部日历显示在日历视图，机器人可读写', services: Object.freeze(['calendar']) }),
+  Object.freeze({ id: 'tasks', label: 'Google 任务', note: '任务列表按截止日显示，机器人可读写', services: Object.freeze(['tasks']) }),
   Object.freeze({ id: 'workspace', label: 'Gmail、Drive、Docs、Sheets', note: '经 workspace-mcp 使用，共用这一次登录', services: Object.freeze(['gmail', 'drive', 'docs', 'sheets']) }),
 ])
 
@@ -43,8 +43,8 @@ export function googleResultText(last) {
   return '这次授权没有完成，请重新连接。'
 }
 export function disconnectText(result) {
-  if (result?.revoked === false) return '已断开：本机凭据已删除，Google 来源已从所有 Bot 移除。但 Google 端撤销没有确认，请到 Google 账号的“第三方应用和服务”页面手动移除 Pidot。'
-  return '已断开：Google 授权已撤销，本机凭据已删除，Google 来源已从所有 Bot 移除。'
+  if (result?.revoked === false) return '已断开。本机凭据已删除，请到 Google 账号的“第三方应用和服务”页面手动移除 Pidot。'
+  return '已断开：Google 授权已撤销，本机凭据已删除。'
 }
 /** Server Google errors carry fixed Chinese text; anything else gets a generic line. */
 export function googleErrorText(status, body) {

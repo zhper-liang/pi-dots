@@ -22,14 +22,14 @@ function UserPreferencesContent({ token, active = true, api: adapter, onOpenSour
     if (sourceRequest.current) return
     const controller = new AbortController()
     sourceRequest.current = controller
-    setSourceNotice('正在打开来源对话…')
+    setSourceNotice('正在打开原对话…')
     try {
       const hash = await resolveMemorySourceHash(token, source, controller.signal)
       if (controller.signal.aborted) return
       window.location.hash = hash
       setSourceNotice('')
     } catch {
-      if (!controller.signal.aborted) setSourceNotice('无法打开这条来源，原消息可能已不可见。请刷新后核对。')
+      if (!controller.signal.aborted) setSourceNotice('原消息可能已不可见，刷新后再试。')
     } finally {
       if (sourceRequest.current === controller) sourceRequest.current = null
     }
@@ -40,10 +40,10 @@ function UserPreferencesContent({ token, active = true, api: adapter, onOpenSour
     return result
   }
   return <div className="memory-view" aria-label="共享偏好设置" aria-busy={resource.loading && !resource.data}>
-    <div className="memory-actions"><p className="memory-intro">所有 Bot 共用。纠正后，所有会话的下一次模型调用会读取最新偏好。</p><button type="button" disabled={resource.loading} onClick={() => { void resource.refresh() }}>{resource.loading ? '正在读取…' : '刷新'}</button></div>
+    <div className="memory-actions"><p className="memory-intro">所有机器人共用。在对话里说一声就记住了，这里可以改或删。</p><button type="button" disabled={resource.loading} onClick={() => { void resource.refresh() }}>{resource.loading ? '正在读取…' : '刷新'}</button></div>
     {sourceNotice && <p role="status" className="memory-hint">{sourceNotice}</p>}
     {resource.error && <p role="alert" className="memory-error">{resource.error}</p>}
     {!resource.data && !resource.error && <p role="status" className="memory-hint">正在读取共享偏好…</p>}
-    {resource.data && <MemoryDocumentSection title="共享偏好" description="可纠正或删除已有偏好。新增偏好请在对话中说明，保留可核实的来源。" document={resource.data} history={resource.data.history} truncated={resource.data.historyNextBeforeVersion != null} onEdit={edit} onRefresh={resource.refresh} onOpenSource={onOpenSource ?? (source => { void openSource(source) })} />}
+    {resource.data && <MemoryDocumentSection title="共享偏好" description="可以改或删已有偏好，新增偏好请在对话里说。" document={resource.data} history={resource.data.history} truncated={resource.data.historyNextBeforeVersion != null} onEdit={edit} onRefresh={resource.refresh} onOpenSource={onOpenSource ?? (source => { void openSource(source) })} />}
   </div>
 }

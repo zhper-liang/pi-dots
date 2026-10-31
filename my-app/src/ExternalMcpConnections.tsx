@@ -5,7 +5,7 @@ import { createExternalMcpClient, McpRequestError, MCP_ENV_KEYS, mcpConfigInput,
   type ExternalMcpClient, type McpConfigForm, type McpConnection, type McpMutation, type McpOperation, type McpReceipt } from './external-mcp-client.mjs'
 import './mcp-connection.css'
 
-type Props = { token: string; client?: ExternalMcpClient }
+type Props = { token: string; client?: ExternalMcpClient; onSummary?: (text: string) => void }
 type Pending = { operation: McpOperation; input: McpMutation; connectionId: string; retryable?: boolean }
 const blankForm = (): McpConfigForm => ({ name: '', description: '', transport: 'streamable-http', url: '', allowLoopback: false,
   credentialRequired: false, executable: '', args: '', envKeys: [], secretEnvKeys: '' })
@@ -13,7 +13,7 @@ const blankForm = (): McpConfigForm => ({ name: '', description: '', transport: 
 export default function ExternalMcpConnections(props: Props) {
   return <ConnectionPanel key={props.token} {...props} />
 }
-function ConnectionPanel({ token, client: provided }: Props) {
+function ConnectionPanel({ token, client: provided, onSummary }: Props) {
   const client = useMemo(() => provided ?? createExternalMcpClient({ token }), [provided, token])
   const id = useId()
   const [items, setItems] = useState<McpConnection[] | null>(null), [listError, setListError] = useState('')
@@ -27,8 +27,8 @@ function ConnectionPanel({ token, client: provided }: Props) {
     const version = ++readVersion.current
     try {
       const fresh = await client.connections(signal)
-      if (live.current && !signal?.aborted && version === readVersion.current) { setItems(fresh); setListError('') }
-    } catch { if (live.current && !signal?.aborted && version === readVersion.current) setListError('连接列表未能读取，请重新读取；现有配置不会因此改变。') }
+      if (live.current && !signal?.aborted && version === readVersion.current) { setItems(fresh); setListError(''); onSummary?.(fresh.length ? `${fresh.length} 个` : '未添加') }
+    } catch { if (live.current && !signal?.aborted && version === readVersion.current) setListError('连接列表没读到，点「重新读取连接」再试。') }
   }
   useEffect(() => {
     live.current = true
@@ -61,7 +61,7 @@ function ConnectionPanel({ token, client: provided }: Props) {
       if (!controller.signal.aborted && live.current) await complete(result, original, controller.signal)
     } catch (failure) {
       if (!controller.signal.aborted && live.current) {
-        if (!(failure instanceof McpRequestError) || failure.unknown) { setPending(original); setError('操作结果未确认。请核查原请求，确认前不能发起另一项修改。') }
+        if (!(failure instanceof McpRequestError) || failure.unknown) { setPending(original); setError('上次操作没确认结果，先点「核对上次操作」。') }
         else { setPending({ ...original, retryable: true }); setError(failure.message); await load(controller.signal) }
       }
     } finally { working.current = false; if (live.current && !controller.signal.aborted) { active.current = null; setBusy(false) } }
@@ -75,7 +75,7 @@ function ConnectionPanel({ token, client: provided }: Props) {
   }
   function change(item: McpConnection, operation: Exclude<McpOperation, 'configure'>) {
     if (locked) return
-    if (operation === 'remove' && !window.confirm(`移除「${item.name}」？引用它的 Bot 将无法继续调用，已有外部效果不会撤回。`)) return
+    if (operation === 'remove' && !window.confirm(`移除「${item.name}」？用到它的机器人以后都调不了它。`)) return
     void mutate(operation, { requestId: crypto.randomUUID(), connectionId: item.connectionId, expectedRevision: item.revision,
       ...(operation === 'remove' ? { confirmGlobal: true as const } : {}) })
   }
@@ -88,25 +88,25 @@ function ConnectionPanel({ token, client: provided }: Props) {
       const status = await client.requestStatus(original.input.requestId, controller.signal)
       if (!live.current || controller.signal.aborted) return
       if (status?.state === 'succeeded' && status.operation === ledgerOperation && status.result) await complete(status.result, original, controller.signal)
-      else if (status?.state === 'failed' && status.operation === ledgerOperation) { setPending({ ...original, retryable: true }); setError('原请求已失败。可显式重试原请求，或取消重试后修改配置。'); await load(controller.signal) }
-      else setError('原请求尚未确认完成，请保留当前请求并稍后核查。')
+      else if (status?.state === 'failed' && status.operation === ledgerOperation) { setPending({ ...original, retryable: true }); setError('上次操作失败了，可以「重试」或改配置后再保存。'); await load(controller.signal) }
+      else setError('上次操作还没有结果，稍后再点「核对上次操作」。')
     } catch (failure) {
       if (live.current && !controller.signal.aborted) {
-        if (failure instanceof McpRequestError && failure.status === 404) { setPending({ ...original, retryable: true }); setError('尚未找到原请求。可显式使用同一请求重试，不会自动重新提交。') }
-        else setError('暂时无法核查原请求，请稍后再次核查；不会重新提交。')
+        if (failure instanceof McpRequestError && failure.status === 404) { setPending({ ...original, retryable: true }); setError('没找到上次操作的记录，可以「重试」。') }
+        else setError('现在核对不了，稍后再试。')
       }
     }
     finally { working.current = false; if (live.current && !controller.signal.aborted) { active.current = null; setBusy(false) } }
   }
-  const recovery = pending && <div className="external-mcp-pending" role="status"><p>原请求：<code>{pending.input.requestId}</code>。原操作与配置保持不变。</p>
-    {pending.retryable ? <div className="external-mcp-actions"><button type="button" disabled={busy} onClick={() => void mutate(pending.operation, pending.input, true)}>重试原 MCP 操作</button><button type="button" disabled={busy} onClick={() => { setPending(null); setError('原失败请求保留在服务端记录中；可重新读取后发起新的修改。') }}>取消重试</button></div>
-      : <button type="button" disabled={busy} onClick={() => void verify()}>核查原 MCP 请求</button>}
+  const recovery = pending && <div className="external-mcp-pending" role="status"><details className="tech-info"><summary>技术信息</summary><p>原请求：<code>{pending.input.requestId}</code>。原操作与配置保持不变。</p></details>
+    {pending.retryable ? <div className="external-mcp-actions"><button type="button" disabled={busy} onClick={() => void mutate(pending.operation, pending.input, true)}>重试</button><button type="button" disabled={busy} onClick={() => { setPending(null); setError('已取消重试，可以重新读取后再改。') }}>取消重试</button></div>
+      : <button type="button" disabled={busy} onClick={() => void verify()}>核对上次操作</button>}
   </div>
   return <div className="external-mcp-connections">
-    <p className="shell-muted small">就绪表示握手和工具发现成功。保存配置或凭据不会给任何 Bot 启用工具；在 Bot 的工具列表启用后，调用直接执行，暂停自动化期间改为先问你。</p>
+    <p className="shell-muted small">连好以后，到机器人的「能力 → MCP」里打开。</p>
     <div className="external-mcp-actions"><button type="button" disabled={locked} onClick={() => edit()}>添加 MCP 连接</button><button type="button" disabled={busy} onClick={() => void load()}>重新读取连接</button></div>
     {items === null && !listError && <p role="status">正在读取 MCP 连接…</p>}
-    {items?.length === 0 && <p className="shell-muted small">尚未添加外部 MCP 连接。</p>}
+    {items?.length === 0 && <p className="shell-muted small">还没有 MCP 连接。</p>}
     {!!items?.length && <ul className="external-mcp-list" aria-label="外部 MCP 连接">
       {items.map(item => <li key={item.connectionId} className="external-mcp-row">
         <div><strong>{item.name}</strong><p className="shell-muted small">{item.description || '暂无说明'}</p>
@@ -132,7 +132,7 @@ function ConnectionPanel({ token, client: provided }: Props) {
     {!editor && recovery}
     <EditorDialog open={editor} title={editing ? '修改 MCP 连接' : '添加 MCP 连接'} pending={busy} disabled={pending !== null} error={error}
       footer={recovery}
-      onClose={() => setEditor(false)} initialFocus={`#mcp-name-${id}`} description="仅连接已安装的本机程序或指定 HTTP 服务，不安装软件，也不会自动启用 Bot 工具。">
+      onClose={() => setEditor(false)} initialFocus={`#mcp-name-${id}`} description="连接本机已经装好的程序，或一个 HTTP 地址。">
       <form className="external-mcp-form" onSubmit={save}>
         {editing && <p className="shell-muted small">修改时请重新填写连接地址或启动信息。保存后须重新检查连接。</p>}
         <label htmlFor={`mcp-name-${id}`}>连接名称</label><input id={`mcp-name-${id}`} required maxLength={200} value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} />
@@ -141,7 +141,7 @@ function ConnectionPanel({ token, client: provided }: Props) {
         {form.transport === 'streamable-http' ? <><label htmlFor={`mcp-url-${id}`}>MCP 地址</label><input id={`mcp-url-${id}`} type="url" required maxLength={4096} placeholder="https://example.com/mcp" value={form.url} onChange={event => setForm(current => ({ ...current, url: event.target.value }))} />
           <label className="external-mcp-check"><input type="checkbox" checked={form.allowLoopback} onChange={event => setForm(current => ({ ...current, allowLoopback: event.target.checked }))} />允许本机 loopback 测试服务</label></> : <>
           <label htmlFor={`mcp-executable-${id}`}>已安装程序的绝对路径</label><input id={`mcp-executable-${id}`} required maxLength={2048} value={form.executable} placeholder="/absolute/path/to/mcp-server" onChange={event => setForm(current => ({ ...current, executable: event.target.value }))} />
-          <label htmlFor={`mcp-args-${id}`}>启动参数（每行一个）</label><textarea id={`mcp-args-${id}`} rows={3} value={form.args} onChange={event => setForm(current => ({ ...current, args: event.target.value }))} /><p className="shell-muted small">只启动已安装程序，不运行安装器或 shell 命令；秘密请放在下面声明的凭据变量中。</p>
+          <label htmlFor={`mcp-args-${id}`}>启动参数（每行一个）</label><textarea id={`mcp-args-${id}`} rows={3} value={form.args} onChange={event => setForm(current => ({ ...current, args: event.target.value }))} /><p className="shell-muted small">只启动已装好的程序，密钥填在下面的凭据变量里。</p>
           <label htmlFor={`mcp-secret-keys-${id}`}>秘密环境变量名（逗号分隔）</label><input id={`mcp-secret-keys-${id}`} value={form.secretEnvKeys} placeholder="SERVICE_API_KEY" onChange={event => setForm(current => ({ ...current, secretEnvKeys: event.target.value }))} />
           <details><summary>可继承的非秘密环境变量</summary><div className="external-mcp-env">{MCP_ENV_KEYS.map(key => <label key={key}><input type="checkbox" checked={form.envKeys.includes(key)} onChange={event => setForm(current => ({ ...current, envKeys: event.target.checked ? [...current.envKeys, key] : current.envKeys.filter(value => value !== key) }))} />{key}</label>)}</div></details>
         </>}

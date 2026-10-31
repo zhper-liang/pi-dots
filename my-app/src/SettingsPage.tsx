@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import StdioCredentials from './StdioCredentials'
 import ExternalMcpConnections from './ExternalMcpConnections'
 import ModelSettings from './ModelSettings'
@@ -8,38 +8,37 @@ import ExternalWorkspace from './ExternalWorkspace'
 import GoogleConnection from './GoogleConnection'
 import { AutomationSettings } from './AutomationControls'
 import { AssistSettings, MutedDetectors } from './Findings'
+import './settings.css'
 
 export default function SettingsPage({ token, footer }: { token: string; footer?: ReactNode }) {
+  const [feishu, setFeishu] = useState('读取中…')
+  const [google, setGoogle] = useState('读取中…')
+  const [mcp, setMcp] = useState('读取中…')
   return <div className="settings">
-    <section className="today-card" aria-labelledby="settings-sources">
-      <h2 id="settings-sources">来源与状态</h2>
-      <WorkspaceStatus token={token} />
-      <details className="shell-more"><summary>飞书日历来源</summary><p className="shell-muted small">只读同步不会授予写权限。</p><ExternalWorkspace token={token} /></details>
-    </section>
-    <section className="today-card" aria-labelledby="settings-google">
-      <h2 id="settings-google">连接 Google</h2>
-      <GoogleConnection key={token} token={token} />
-    </section>
-    <section className="today-card" aria-labelledby="settings-mcp">
-      <h2 id="settings-mcp">MCP 工具连接</h2>
-      <ExternalMcpConnections key={`external:${token}`} token={token} />
-      <StdioCredentials key={token} token={token} />
-    </section>
-    <section className="today-card" aria-labelledby="settings-automation">
-      <h2 id="settings-automation">自动化</h2>
-      <AutomationSettings token={token} />
-    </section>
-    <section className="today-card" aria-labelledby="settings-findings">
-      <h2 id="settings-findings">主动提醒</h2>
-      <MutedDetectors token={token} />
-      <AssistSettings token={token} />
+    <section className="today-card" aria-labelledby="settings-connections">
+      <h2 id="settings-connections">连接</h2>
+      <details className="settings-connection"><summary>飞书日历<span className="settings-state">{feishu}</span></summary><ExternalWorkspace token={token} onSummary={setFeishu} /></details>
+      <details className="settings-connection"><summary>Google<span className="settings-state">{google}</span></summary><GoogleConnection key={token} token={token} onSummary={setGoogle} /></details>
+      <details className="settings-connection"><summary>MCP 连接<span className="settings-state">{mcp}</span></summary><ExternalMcpConnections key={`external:${token}`} token={token} onSummary={setMcp} /></details>
     </section>
     <section className="today-card" aria-labelledby="settings-model">
       <h2 id="settings-model">模型</h2>
       <ModelSettings key={token} token={token} />
     </section>
-    <section className="today-card" aria-label="共享偏好">
+    <section className="today-card" aria-labelledby="settings-automation">
+      <h2 id="settings-automation">自动化</h2>
+      <AutomationSettings token={token} />
+      <MutedDetectors token={token} />
+      <AssistSettings token={token} />
+    </section>
+    <section className="today-card" aria-labelledby="settings-preferences">
+      <h2 id="settings-preferences">偏好</h2>
       <UserPreferences token={token} />
+    </section>
+    <section className="today-card" aria-labelledby="settings-advanced">
+      <h2 id="settings-advanced">高级</h2>
+      <StdioCredentials key={token} token={token} />
+      <details className="tech-info"><summary>技术信息</summary><WorkspaceStatus token={token} /></details>
     </section>
     {footer && <section className="today-card settings-account" aria-label="连接">{footer}</section>}
   </div>

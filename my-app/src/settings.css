@@ -1,0 +1,16 @@
+.settings { display: grid; gap: var(--space-4); min-width: 0; }
+.settings > .today-card { min-width: 0; }
+.settings-connection { min-width: 0; padding-block: var(--space-3); border-top: 1px solid var(--c-border); }
+.settings-connection > summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-4); cursor: pointer; list-style: none; }
+.settings-connection > summary::before { content: '▸'; }
+.settings-connection[open] > summary::before { content: '▾'; }
+.settings-connection > summary::-webkit-details-marker { display: none; }
+.settings-connection > summary:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 4px; }
+.settings-state { flex: 1 1 120px; min-width: 0; color: var(--c-text-2); font-size: var(--fs-small); text-align: right; overflow-wrap: anywhere; }
+.settings-connection[open] > summary { margin-bottom: var(--space-3); }
+.settings-connection > .panel { margin: 0; border: 0; box-shadow: none; background: transparent; }
+.settings .stdio-clients { min-width: 0; overflow-wrap: anywhere; }
+.settings .stdio-clients fieldset, .settings .stdio-clients label { min-width: 0; }
+.settings .stdio-clients input:not([type="checkbox"]), .settings .stdio-clients select { max-width: 100%; box-sizing: border-box; }
+.settings .stdio-client-list { padding-left: var(--space-4); }
+.settings-account { overflow-wrap: anywhere; }

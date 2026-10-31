@@ -18,7 +18,7 @@ function useAutomation(token: string) {
 export function AutomationBanner({ token, onOpenSettings }: { token: string; onOpenSettings: () => void }) {
   const { state } = useAutomation(token)
   if (!state?.paused) return null
-  return <p role="status" className="shell-note automation-banner">自动化已暂停（{pausedBy(state)}{state.since ? ` · ${new Date(state.since).toLocaleString('zh-CN')}` : ''}）。例行任务不运行，自动执行改为先问你。<button type="button" className="text-button" onClick={onOpenSettings}>去设置恢复</button></p>
+  return <p role="status" className="shell-note automation-banner">自动化已暂停（{pausedBy(state)}{state.since ? ` · ${new Date(state.since).toLocaleString('zh-CN')}` : ''}）。定时任务不运行，机器人要改东西需要你确认。<button type="button" className="text-button" onClick={onOpenSettings}>去设置恢复</button></p>
 }
 
 export function AutomationSettings({ token }: { token: string }) {
@@ -31,7 +31,7 @@ export function AutomationSettings({ token }: { token: string }) {
   if (!state) return <p className="shell-muted">正在读取…</p>
   return <div>
     <p>{state.paused ? `已暂停（${pausedBy(state)}${state.since ? ` · ${new Date(state.since).toLocaleString('zh-CN')}` : ''}）` : '正在运行'}</p>
-    <p className="shell-muted small">暂停后：例行任务不运行，恢复后不补跑；原本自动执行的改动改为先问你；正在进行的任务继续，但写入要你确认。Bot 可以替你暂停，只有你能在这里恢复。</p>
+    <p className="shell-muted small">暂停后：定时任务不运行，恢复后也不补；机器人要改东西会等你确认。机器人可以替你暂停，只有你能在这里恢复。</p>
     <button type="button" className={state.paused ? 'primary' : ''} disabled={busy} onClick={() => void toggle(!state.paused)}>{state.paused ? '恢复自动化' : '暂停全部自动化'}</button>
     {error && <p role="alert" className="shell-note">{error}</p>}
   </div>

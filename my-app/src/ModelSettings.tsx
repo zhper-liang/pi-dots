@@ -58,7 +58,7 @@ export default function ModelSettings({ token }: { token: string }) {
         // Never render arbitrary backend text: providers may echo request credentials.
         const unknown = response.status >= 500
         setUncertain(unknown)
-        setError(unknown ? '保存结果未确认，草稿已保留。可重试原请求确认结果；关闭不会撤销已发出的保存。' : response.status === 409 ? '设置未保存：配置可能由环境变量提供或处于测试模式。草稿已保留，可关闭后重新读取。' : '模型设置未保存，草稿已保留。请检查地址、模型名和凭证后重试。')
+        setError(unknown ? '没确认保存成功，草稿还在，点「重试」核对。' : response.status === 409 ? '设置未保存：配置可能由环境变量提供或处于测试模式。草稿已保留，可关闭后重新读取。' : '模型设置未保存，草稿已保留。请检查地址、模型名和凭证后重试。')
         return
       }
       const view = publicModelSettings((await response.json()).data)
@@ -69,7 +69,7 @@ export default function ModelSettings({ token }: { token: string }) {
     } catch {
       if (active.current === generation) {
         setUncertain(true)
-        setError('保存结果未确认，草稿已保留。可重试原请求确认结果；关闭不会撤销已发出的保存。')
+        setError('没确认保存成功，草稿还在，点「重试」核对。')
       }
     } finally {
       if (active.current === generation) { saving.current = false; setBusy(false) }
@@ -84,7 +84,7 @@ export default function ModelSettings({ token }: { token: string }) {
       <dl className="model-settings-summary">
         <div><dt>地址摘要</dt><dd>{summary.address}</dd></div>
         <div><dt>API key</dt><dd>{summary.key}</dd></div>
-        <div><dt>配置来源</dt><dd>{locked ? '环境变量 · 只读' : settings.source === 'file' ? '本机保存' : '尚未配置'}</dd></div>
+        <div><dt>保存位置</dt><dd>{locked ? '环境变量 · 只读' : settings.source === 'file' ? '本机保存' : '尚未配置'}</dd></div>
       </dl>
       <button type="button" ref={editButton} onClick={edit}>{locked ? '查看配置' : '编辑连接'}</button>
     </div>
@@ -93,12 +93,12 @@ export default function ModelSettings({ token }: { token: string }) {
     <EditorDialog open={open} title={locked ? '查看模型连接' : '编辑模型连接'} onClose={close} pending={busy} disabled={locked || uncertain} error={error}
       initialFocus={locked ? undefined : 'input[name="model-base-url"]'} returnFocus={editButton}
       description={locked ? '当前由环境变量提供，整块只读；请在服务端修改环境配置。' : '编辑当前唯一模型连接；仅保存后生效，取消不写入。'}
-      footer={<><button type="button" className="editor-control-button" onClick={close}>{locked ? '关闭' : uncertain ? '关闭并重新读取' : '取消'}</button>{!locked && (uncertain ? <button type="button" className="editor-control-button is-primary" onClick={() => void save()}>重试原请求</button> : <button type="submit" className="editor-control-button is-primary" form={formId}>{busy ? '正在保存…' : '保存连接'}</button>)}</>}>
+      footer={<><button type="button" className="editor-control-button" onClick={close}>{locked ? '关闭' : uncertain ? '关闭并重新读取' : '取消'}</button>{!locked && (uncertain ? <button type="button" className="editor-control-button is-primary" onClick={() => void save()}>重试</button> : <button type="submit" className="editor-control-button is-primary" form={formId}>{busy ? '正在保存…' : '保存连接'}</button>)}</>}>
       <form id={formId} className="model-settings-form" onSubmit={event => void save(event)}>
         <label className="model-settings-row"><span>Base URL</span><input name="model-base-url" type="url" value={baseUrl} required maxLength={2048} autoComplete="off" spellCheck={false} onChange={event => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" /></label>
         <label className="model-settings-row"><span>模型名</span><input value={model} required maxLength={200} autoComplete="off" spellCheck={false} onChange={event => setModel(event.target.value)} /></label>
         <label className="model-settings-row"><span>API key <small className="shell-muted">{summary.key}</small></span><input type="password" value={apiKey} required={!settings.hasKey} autoComplete="new-password" spellCheck={false} onChange={event => setApiKey(event.target.value)} placeholder={settings.hasKey ? '留空保留已保存的凭证' : '输入 API key'} aria-describedby={`${formId}-key-help`} /></label>
-        <p id={`${formId}-key-help`} className="shell-muted small">已保存的 key 永不回显；仅保存在服务端独立凭证文件。输入仅用于本次保存，成功或取消后清空。</p>
+        <p id={`${formId}-key-help`} className="shell-muted small">保存后不再显示 key，只存在本机。</p>
       </form>
     </EditorDialog>
   </section>
