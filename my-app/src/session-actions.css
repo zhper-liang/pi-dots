@@ -3,12 +3,12 @@
 .pd-row-wrap:has(> .session-actions) > .pd-pin { right: 31px; }
 .session-actions { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); z-index: 2; }
 .session-actions:has(.session-actions-menu) { z-index: 12; }
-.session-actions-trigger { display: grid; place-items: center; width: 26px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm, 2px); background: var(--c-sidebar, #f6f5f2); color: var(--c-muted, #666); cursor: pointer; font-size: 20px; }
+.session-actions-trigger { display: grid; place-items: center; width: 26px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--c-muted, #666); cursor: pointer; font-size: 20px; }
 .session-actions-trigger:hover, .session-actions-trigger[aria-expanded="true"] { background: var(--c-hover, #eae8e3); color: var(--c-text, #222); }
 .session-actions-trigger:focus-visible, .session-actions-menu button:focus-visible { outline: 2px solid var(--c-accent, #456f5b); outline-offset: 2px; }
 .session-actions-trigger:disabled { cursor: wait; opacity: .6; }
-.session-actions-menu { position: absolute; top: 100%; right: 0; width: min(208px, calc(100vw - 32px)); padding: 5px; border: 1px solid var(--c-border, #ddd); border-radius: var(--radius, 6px); background: var(--c-bg, #fff); color: var(--c-text, #222); box-shadow: 0 6px 20px #0002; }
-.session-actions-menu button { display: block; width: 100%; padding: 9px 10px; border: 0; border-radius: var(--radius-sm, 2px); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.session-actions-menu { position: absolute; top: 100%; right: 0; width: min(208px, calc(100vw - 32px)); padding: 6px; border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-elevated); color: var(--c-text); box-shadow: var(--shadow-lg); transform-origin: top right; animation: pd-pop var(--dur-2) var(--ease-out); }
+.session-actions-menu button { display: block; width: 100%; padding: 9px 12px; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .session-actions-menu button:hover, .session-actions-menu button:focus-visible { background: var(--c-hover, #eae8e3); }
 .session-actions-menu .session-action-danger { color: var(--c-danger, #b42318); }
 .session-actions-menu button:disabled { opacity: .5; cursor: not-allowed; }

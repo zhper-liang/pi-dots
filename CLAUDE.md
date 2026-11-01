@@ -45,7 +45,7 @@ pnpm build                                                 # tsc -b + vite build
 - **记忆**：每 Bot 的 `PROFILE.md`、`MEMORY.md` 和共享的 `shared/USER.md` 放在数据库同级的 `bot-workspaces/`，是内容真源；`pidot.bot-memory.*` Document 改作台账（版本、来源、防复活、提取水位）。只有 `memory-files.mjs` 的对账读写这些文件，读之前对账，不用 fs.watch。测试 store 默认只用台账，文件模式用 `openTaskStore({ memoryFiles: { enabled: true } })` 开启（ADR-019）。
 - **Google**：Calendar、Tasks 是 workspace-service 的原生 provider 适配，进 Event/Todo；Gmail、Drive、Docs、Sheets 经 loopback HTTP 上固定版本的 workspace-mcp，Pidot 登录 Google 一次，每次调用把访问令牌传给它。refresh token 只在数据库同级的 `google/credentials.json`。测试只打 `fixtures/fake-google.mjs` 与 `fixtures/fake-workspace-mcp.mjs`，请求真实 Google 主机即失败（ADR-020、ADR-021）。
 - **会话删除**：`session-lifecycle.mjs` 负责持久删除和主会话换新；读取时会过滤已删除的来源，不新增会话库。
-- **前端**：React 19 + React Compiler（babel 插件），没有 UI 框架和路由库，使用 hash 路由。纯逻辑放在 `src/*.mjs` 并配手写的 `*.d.mts` 类型声明，这样 `server/*.test.mjs` 能直接 import 测试。Hermes 风格外壳（T03–T07）已落地；开关用 `Switch.tsx`，弹窗和时间选择复用 `EditorDialog.tsx`、`LocalTimePicker.tsx`。
+- **前端**：React 19 + React Compiler（babel 插件），没有 UI 框架和路由库，使用 hash 路由。纯逻辑放在 `src/*.mjs` 并配手写的 `*.d.mts` 类型声明，这样 `server/*.test.mjs` 能直接 import 测试。外壳 2026-10-31 由 Hermes 直角风格改为圆润风格：大圆角、胶囊按钮、轻阴影、动效、对话气泡，深色跟随系统。颜色、圆角、阴影、动效全是 `shell.css` `:root` 里的 token（深色在同文件的 `prefers-color-scheme` 块），新样式只引用 token，不写死颜色；动效要在 `prefers-reduced-motion` 下停住。机器人形象是同一个电视机器人（`BotAvatar.tsx` + `bot-figure.css`，颜色和配饰存在 localStorage），按运行状态播放动作；颜文字只留在状态胶囊和「正在回复」里。主管 Bot 的 id 仍是 `chief`，显示名 2026-10-31 起叫 pipi；应用图标 `public/favicon.svg` 是平面版 pipi。开关用 `Switch.tsx`，弹窗和时间选择复用 `EditorDialog.tsx`、`LocalTimePicker.tsx`。
 
 ## 测试写法
 

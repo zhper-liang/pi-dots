@@ -5,11 +5,13 @@
 .bot-directory-search { max-width: 480px; }
 .bot-directory-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); list-style: none; padding: 0; margin: 0; gap: 20px; }
 .bot-directory-grid > li { min-width: 0; }
-.bot-directory-card { position: relative; height: 100%; border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-surface); overflow: hidden; }
+.bot-directory-card { position: relative; height: 100%; border: 1px solid var(--c-border); border-radius: var(--radius-lg); background: var(--c-elevated); box-shadow: var(--shadow-sm); overflow: hidden; transition: translate var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out); }
+.bot-directory-card:hover { box-shadow: var(--shadow-md); }
+@media (prefers-reduced-motion: no-preference) { .bot-directory-card:hover:not(.is-loading) { translate: 0 -2px; } }
 .bot-directory-chat { display: flex; width: 100%; height: 100%; text-align: left; gap: 16px; padding: 20px 56px 20px 20px; background: transparent; color: var(--c-text); }
 .bot-directory-chat:hover, .bot-directory-settings:hover { background: var(--c-hover); }
 .bot-directory-chat:focus-visible { outline-offset: -2px; }
-.bot-directory-settings { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border-radius: var(--radius-sm); background: var(--c-surface); color: var(--c-muted); }
+.bot-directory-settings { position: absolute; top: 10px; right: 10px; display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border-radius: var(--radius-pill); background: transparent; color: var(--c-muted); }
 .bot-directory-card-body { display: grid; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
 .bot-directory-card strong { font-size: 20px; font-weight: 500; }
 .bot-directory-state { font-size: 12px; color: var(--c-muted); }
@@ -18,9 +20,10 @@
 .bot-detail-page > .bot-detail-head, .bot-detail-page > .shell-note { width: 100%; max-width: var(--column-w); margin-inline: auto; }
 .bot-detail-nav { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; max-width: var(--column-w); width: 100%; margin-inline: auto; }
 .bot-detail-nav button { min-height: 44px; }
-.bot-detail-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--c-border); max-width: var(--column-w); width: 100%; margin-inline: auto; }
-.bot-detail-tabs button { background: transparent; color: var(--c-muted); border-bottom: 2px solid transparent; padding: 10px 14px; min-height: 44px; font-size: 13px; }
-.bot-detail-tabs button[aria-selected=true] { color: var(--c-text); border-bottom-color: var(--c-accent); font-weight: 600; }
+.bot-detail-tabs { display: flex; flex-wrap: wrap; gap: 4px; max-width: var(--column-w); width: 100%; margin-inline: auto; }
+.bot-detail-tabs button { background: transparent; color: var(--c-muted); border-radius: var(--radius-pill); padding: 8px 18px; min-height: 40px; font-size: 14px; }
+.bot-detail-tabs button:hover:not([aria-selected=true]) { background: var(--c-hover); color: var(--c-text); }
+.bot-detail-tabs button[aria-selected=true] { background: var(--c-accent-soft); color: var(--c-accent-text); font-weight: 600; }
 .bot-tab-panel { min-width: 0; max-width: var(--column-w); width: 100%; margin-inline: auto; }
 .bot-tab-panel[hidden] { display: none; }
 .bot-tab-panel > .bot-edit-section { margin-bottom: 24px; }

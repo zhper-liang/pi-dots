@@ -15,4 +15,4 @@
   .routine-weekdays label { min-height: 44px; }
 }
 
-.routine-bot-label { display: inline-flex; max-width: 100%; padding: 2px 8px; border-radius: 6px; background: var(--c-hover); color: var(--c-text-2); font-size: 12px; overflow-wrap: anywhere; }
+.routine-bot-label { display: inline-flex; max-width: 100%; padding: 2px 10px; border-radius: var(--radius-pill); background: var(--c-hover); color: var(--c-text-2); font-size: 12px; overflow-wrap: anywhere; }

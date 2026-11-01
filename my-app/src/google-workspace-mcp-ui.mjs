@@ -41,7 +41,7 @@ export function workspaceMcpView(status, google) {
     : { text: '地址配置无效', tone: 'bad', hint: 'PIDOT_WORKSPACE_MCP_URL 只能是本机地址（127.0.0.1 或 localhost）。' }
   let connection
   if (!status.googleTokenSource) connection = { text: '本实例没有接通 Google 令牌', tone: 'bad', hint: '服务端未把 Google 连接交给外部 MCP；需要按说明接线后重启。' }
-  else if (!c) connection = { text: '尚未接入', tone: 'muted', hint: '对 Chief 说“接上 Google 邮件和文件，给某个机器人用”，它会按模板接入并分配。' }
+  else if (!c) connection = { text: '尚未接入', tone: 'muted', hint: '对 pipi 说“接上 Google 邮件和文件，给某个机器人用”，它会按模板接入并分配。' }
   else if (!c.enabled) connection = { text: '已停用', tone: 'muted', hint: '这个连接已停用，机器人暂时用不了它。' }
   else if (!granted) connection = { text: '等待 Google 授权', tone: 'bad', hint: '上方连接 Google 并勾选 Gmail、Drive、Docs、Sheets 后，再检查连接。' }
   else if (r.state !== 'running') connection = { text: '不可用：workspace-mcp 没有运行', tone: 'bad', hint: c.status === 'ready' ? '先启动 workspace-mcp，再检查连接。' : '' }

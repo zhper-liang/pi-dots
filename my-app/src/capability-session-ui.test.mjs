@@ -38,7 +38,7 @@ async function harness(t, filename, initialProps, fetchImpl = async () => respon
     // ${Math.random()}
   `)
   const hooks = await import(hooksUrl)
-  const lookUrl = dataModule('export const avatarColors = [], avatarShapes = [], shapeLabels = {}; export function loadLook() { return {} } export function saveLook() {}')
+  const lookUrl = dataModule('export const lookColors = [], accessories = [], accessoryLabels = {}; export function loadLook() { return {} } export function saveLook() {}')
   let hookUrl
   async function compile(name) {
     const source = await readFile(new URL(name, import.meta.url), 'utf8')

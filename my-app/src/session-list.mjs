@@ -28,6 +28,21 @@ export function relativeTime(at, now) {
   return `${d.getMonth() + 1}月${d.getDate()}日`
 }
 
+/** The line under a sidebar row: the last thing said, flattened to plain text. Your own words start
+ *  with 你：, and in a group chat a reply starts with who said it. Empty when nothing was said yet. */
+export function sessionPreview(messages = [], { group = false } = {}) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if ((m.role !== 'user' && m.role !== 'assistant') || (m.systemKind && m.systemKind !== 'group-reply') || m.intermediate || m.undone) continue
+    const text = (m.content ?? '').replace(/```[\s\S]*?```/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/^\s*(?:[-*+]|\d+\.|#{1,6}|>)\s+/gm, '').replace(/[`*~]+/g, '').replace(/\s+/g, ' ').trim()
+    if (!text) continue
+    const who = m.role === 'user' ? '你：' : group && m.botName ? `${m.botName}：` : ''
+    return (who + text).slice(0, 80)
+  }
+  return ''
+}
+
 /** Case-insensitive match on the title and the Bot name; a blank query matches everything. */
 export function matchesQuery(item, query) {
   const needle = query.trim().toLowerCase()

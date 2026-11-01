@@ -171,7 +171,7 @@ export function collaborationService({TaskCard,ChatInput,createTask,bots}) {
     if(!toolSets(card,bots,await tx.doc(ToolAccess)).authorized.includes(REVIEW_TOOL)) fail('REVIEW_NOT_AUTHORIZED','验收能力未授予或已撤销。')
     if(!validReviewArgs(call)) fail('TOOL_INVALID_ARGUMENTS','验收须提供精确子任务、修订、状态及理由。')
     const a=call.arguments, state=await tx.doc(Collaboration), r=state.items.find(i=>i.childTaskId===a.childTaskId)
-    if(!r || !r.reviewRequired || r.parentTaskId!==card.taskId || r.supervisorBotId!==card.bot.id || r.rootWorkId!==a.rootWorkId || r.parentInputId!==entryId) fail('REVIEW_IDENTITY_DENIED','仅原工作绑定主管能验收，不接受Chief或执行者旁路。')
+    if(!r || !r.reviewRequired || r.parentTaskId!==card.taskId || r.supervisorBotId!==card.bot.id || r.rootWorkId!==a.rootWorkId || r.parentInputId!==entryId) fail('REVIEW_IDENTITY_DENIED','仅原工作绑定主管能验收，不接受pipi或执行者旁路。')
     await assertNotCancelled(tx,r.childTaskId,await tx.task(r.childTaskId))
     await assertBotActive(tx,r.executorBotId)
     const child=await tx.doc(TaskCard,r.childTaskId)

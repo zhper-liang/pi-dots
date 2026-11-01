@@ -5,7 +5,7 @@
 .settings-connection > summary::before { content: '▸'; }
 .settings-connection[open] > summary::before { content: '▾'; }
 .settings-connection > summary::-webkit-details-marker { display: none; }
-.settings-connection > summary:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 4px; }
+.settings-connection > summary:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 4px; border-radius: var(--radius-sm); }
 .settings-state { flex: 1 1 120px; min-width: 0; color: var(--c-text-2); font-size: var(--fs-small); text-align: right; overflow-wrap: anywhere; }
 .settings-connection[open] > summary { margin-bottom: var(--space-3); }
 .settings-connection > .panel { margin: 0; border: 0; box-shadow: none; background: transparent; }

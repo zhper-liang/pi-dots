@@ -1,0 +1,96 @@
+/* The TV robot (BotAvatar.tsx). Body shades come from the bot's chosen color; everything else is
+   tokens. The face slides inside the screen for gaze and the two rods pivot on the dome. Static
+   per-mood tweaks use the individual scale/rotate/translate properties so they stack with the
+   keyframe transforms. All motion stops under reduced motion. */
+.tv { display: block; overflow: visible; }
+.tv .tv-accent { fill: var(--tv-accent); }
+.tv .tv-rig { transform-origin: 50px 94px; }
+.tv .tv-ant { transform-origin: 50px 30px; }
+.tv .tv-ant.is-l { rotate: -24deg; }
+.tv .tv-ant.is-r { rotate: 24deg; }
+.tv .tv-eyes, .tv .tv-mouth, .tv .tv-halo, .tv .tv-tear, .tv .tv-z { transform-box: fill-box; transform-origin: center; }
+.tv .tv-halo, .tv .tv-scan { opacity: 0; }
+.tv[data-mood="working"] .tv-eyes { scale: 1 .75; }
+.tv[data-mood="working"] .tv-face { translate: 0 2px; }
+.tv[data-mood="waiting"] .tv-eyes { scale: 1.12; }
+.tv[data-mood="error"] .tv-eyes { scale: 1 .7; }
+.tv[data-mood="error"] .tv-face { translate: 0 3px; }
+.tv[data-mood="error"] .tv-rig { translate: 0 2px; }
+.tv[data-mood="resting"] .tv-face { opacity: .75; }
+.tv[data-mood="done"] .tv-mouth { scale: 1.3; }
+.tv:is([data-mood="error"], [data-mood="resting"]) .tv-mouth { scale: .7; }
+.tv:is([data-mood="error"], [data-mood="resting"]) .tv-ant.is-l { rotate: -48deg; }
+.tv:is([data-mood="error"], [data-mood="resting"]) .tv-ant.is-r { rotate: 48deg; }
+/* A near-black body would melt into a dark page. */
+@media (prefers-color-scheme: dark) { .tv.is-dark .tv-shell { stroke: var(--c-border-strong); stroke-width: 1.5; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .tv[data-mood] .tv-eyes { animation: tv-blink 4.6s var(--tv-delay, 0s) infinite; }
+  .tv[data-mood="idle"] .tv-rig { animation: tv-breathe 3.4s ease-in-out var(--tv-delay, 0s) infinite; }
+  .tv[data-mood="idle"] .tv-face { animation: tv-look 9s ease-in-out var(--tv-delay, 0s) infinite; }
+  .tv[data-mood="idle"] .tv-ant { animation: tv-sway 3.4s ease-in-out var(--tv-delay, 0s) infinite; }
+  .tv[data-mood="greet"] .tv-rig { animation: tv-hop 2.4s ease-in-out infinite; }
+  .tv[data-mood="greet"] .tv-ant { animation: tv-wiggle .8s ease-in-out infinite; }
+  .tv[data-mood="greet"] .tv-ant.is-l, .tv[data-mood="done"] .tv-ant.is-l { animation-direction: reverse; }
+  .tv[data-mood="thinking"] .tv-rig { animation: tv-ponder 3s ease-in-out infinite; }
+  .tv[data-mood="thinking"] .tv-face { animation: tv-glance 3s ease-in-out infinite; }
+  .tv[data-mood="thinking"] .tv-halo { animation: tv-glow 1.4s ease-in-out infinite; }
+  .tv[data-mood="thinking"] .tv-ant.is-l .tv-halo { animation-delay: .7s; }
+  .tv[data-mood="working"] .tv-rig { animation: tv-bounce .5s ease-in-out infinite; }
+  .tv[data-mood="working"] .tv-face { animation: tv-scan-eyes 1.2s ease-in-out infinite; }
+  .tv[data-mood="working"] .tv-scan { animation: tv-scanline 1.6s linear infinite; }
+  .tv[data-mood="working"] .tv-ant { animation: tv-buzz .25s linear infinite; }
+  .tv[data-mood="waiting"] .tv-rig { animation: tv-bob 1.8s ease-in-out infinite; }
+  .tv[data-mood="done"] .tv-rig { animation: tv-jump 1.6s var(--ease-spring) infinite; }
+  .tv[data-mood="done"] .tv-ant { animation: tv-wiggle .5s ease-in-out infinite; }
+  .tv[data-mood="error"] .tv-rig { animation: tv-sad 3.6s ease-in-out infinite; }
+  .tv[data-mood="error"] .tv-tear { animation: tv-tear 2.2s ease-in infinite; }
+  .tv[data-mood="resting"] .tv-rig { animation: tv-breathe 4.8s ease-in-out infinite; }
+  .tv[data-mood="resting"] .tv-z { animation: tv-z 3s ease-out infinite; }
+  .tv[data-mood="resting"] .tv-z + .tv-z { animation-delay: 1.5s; }
+  /* Glasses stay put, so the eyes only glance a little behind them. */
+  .tv.has-glasses[data-mood="idle"] .tv-face { animation-name: tv-look-small; }
+  .tv.has-glasses[data-mood="thinking"] .tv-face { animation-name: tv-glance-small; }
+}
+@keyframes tv-blink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+@keyframes tv-look { 0%, 18%, 46%, 60%, 88%, 100% { transform: translate(0, 0); } 24%, 40% { transform: translate(-5px, 0); } 66%, 82% { transform: translate(5px, -2px); } }
+@keyframes tv-look-small { 0%, 18%, 46%, 60%, 88%, 100% { transform: translate(0, 0); } 24%, 40% { transform: translate(-2.5px, 0); } 66%, 82% { transform: translate(2.5px, -1px); } }
+@keyframes tv-glance { 0%, 100% { transform: translate(-4px, -4px); } 50% { transform: translate(-1px, -5px); } }
+@keyframes tv-glance-small { 0%, 100% { transform: translate(-2px, -2px); } 50% { transform: translate(-.5px, -2.5px); } }
+@keyframes tv-scan-eyes { 0%, 100% { transform: translateX(-3px); } 50% { transform: translateX(3px); } }
+@keyframes tv-scanline { 0% { opacity: 0; transform: translateY(0); } 15%, 85% { opacity: .5; } 100% { opacity: 0; transform: translateY(32px); } }
+@keyframes tv-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.02, .98); } }
+@keyframes tv-sway { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+@keyframes tv-wiggle { 0%, 100% { transform: rotate(-10deg); } 50% { transform: rotate(10deg); } }
+@keyframes tv-buzz { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+@keyframes tv-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes tv-hop {
+  0%, 55%, 100% { transform: translateY(0) scale(1, 1); }
+  62% { transform: translateY(0) scale(1.06, .92); }
+  72% { transform: translateY(-8px) scale(.96, 1.05); }
+  82% { transform: translateY(0) scale(1.05, .95); }
+  90% { transform: translateY(0) scale(1, 1); }
+}
+@keyframes tv-jump {
+  0%, 100% { transform: translateY(0) scale(1, 1); }
+  12% { transform: translateY(0) scale(1.08, .9); }
+  40% { transform: translateY(-12px) scale(.95, 1.06); }
+  62% { transform: translateY(0) scale(1.06, .92); }
+  76% { transform: translateY(0) scale(1, 1); }
+}
+@keyframes tv-ponder { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(-1.5deg); } }
+@keyframes tv-glow { 0%, 100% { opacity: 0; transform: scale(.7); } 50% { opacity: .45; transform: scale(1.3); } }
+@keyframes tv-bounce { 0%, 100% { transform: translateY(0) scale(1.02, .98); } 50% { transform: translateY(-3px) scale(.99, 1.01); } }
+@keyframes tv-sad { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
+@keyframes tv-tear { 0% { opacity: 0; transform: translateY(-2px); } 15% { opacity: 1; } 80% { opacity: 1; transform: translateY(7px); } 100% { opacity: 0; transform: translateY(9px); } }
+@keyframes tv-z { 0% { opacity: 0; transform: translate(0, 4px) scale(.7); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(6px, -10px) scale(1.1); } }
+
+/* A group chat's members, stacked: one on top, two below. */
+.bot-crew { position: relative; display: inline-block; flex: none; }
+.bot-crew > .bot-avatar { position: absolute; }
+.bot-crew.is-1 > .bot-avatar { inset: 0; margin: auto; }
+.bot-crew.is-3 > .bot-avatar:nth-child(1) { top: 0; left: 22%; }
+.bot-crew.is-2 > .bot-avatar:nth-child(1) { top: 0; left: 0; }
+.bot-crew.is-2 > .bot-avatar:nth-child(2) { right: 0; bottom: 0; }
+.bot-crew.is-3 > .bot-avatar:nth-child(2) { left: 0; bottom: 0; }
+.bot-crew.is-3 > .bot-avatar:nth-child(3) { right: 0; bottom: 0; }

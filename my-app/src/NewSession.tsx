@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import BotAvatar from './BotAvatar'
-import { loadLook } from './botLook'
+import { BotFace } from './BotAvatar'
 import { GroupIcon } from './Icons'
 
 type Bot = { id: string; name: string; status?: string }
@@ -18,14 +17,14 @@ export default function NewSession({ bots, busy, onStart, onGroup }: { bots: Bot
     onStart(chosen.id, text)
   }
   return <section className="pd-new-session" aria-labelledby="new-session-title">
-    <span className="shell-brand-mark pd-new-mark" aria-hidden="true">p</span>
+    <BotFace id={chosen?.id ?? 'chief'} size={96} mood="greet" />
     <h1 id="new-session-title">有什么要做的？</h1>
     <p className="shell-muted">选一个机器人，写下第一句话。要几个一起做，就开群聊。</p>
     <form className="pd-new-form" onSubmit={submit}>
       <fieldset className="pd-chips"><legend className="sr-only">交给谁</legend>
         {active.map((bot) => <label key={bot.id} className={`pd-chip${chosen?.id === bot.id ? ' is-picked' : ''}`}>
           <input type="radio" name="new-session-bot" checked={chosen?.id === bot.id} onChange={() => setBotId(bot.id)} />
-          <BotAvatar name={bot.name} look={loadLook(bot.id)} size={16} />{bot.name}
+          <BotFace id={bot.id} size={22} />{bot.name}
         </label>)}
         <button type="button" className="pd-chip" onClick={onGroup}><GroupIcon size={14} />群聊</button>
       </fieldset>

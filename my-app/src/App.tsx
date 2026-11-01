@@ -1,6 +1,10 @@
 import ModelPicker, { type ComposerModel } from './ModelPicker'
 import UnifiedWorkspace from './UnifiedWorkspace'
 import { GearIcon } from './Icons'
+import { BotFace } from './BotAvatar'
+import { ChatStatus, MoodFace } from './BotMood'
+import { refineMood } from './bot-mood.mjs'
+import { sidebarFigure } from './bot-figure.mjs'
 import GroupIssueControls, {type GroupIssue} from './GroupIssueControls'
 import GroupCreation from './GroupCreation'
 import CollaborationOverview, {type Overview} from './CollaborationOverview'
@@ -21,7 +25,7 @@ import { AutoAppliedCard } from './AutomationControls'
 import { MirrorCard, type MirrorMessage } from './MainSession'
 import ShellSidebar, { type SidebarBot, type SidebarSession } from './ShellSidebar'
 import NewSession from './NewSession'
-import { lastActivity, type SessionActionResult, type SessionActionTarget } from './session-list.mjs'
+import { lastActivity, sessionPreview, type SessionActionResult, type SessionActionTarget } from './session-list.mjs'
 import { createSessionActionHandlers, removeSessionState, replaceMainSession } from './session-lifecycle-client.mjs'
 import { FindingCard } from './Findings'
 import type { ItemTab, WorkspaceView } from './workspace-navigation.mjs'
@@ -48,9 +52,27 @@ type ConfigRef = { botId: string; version: string }
 type Bot = { status?: 'active' | 'inactive'; deactivatedAt?: string; id: string; name: string; description: string; configRef: ConfigRef }
 type ChatMessage = SkillMessage & { externalMcp?: { connectionId: string; connectionName?: string; originalName?: string }; afterControlStop?: boolean; afterCancellation?: boolean; purpose?: string; intermediate?: boolean; targetInputId?: number; appliedAt?: string; botId?: string; botName?: string; childTaskId?: number; deliveryStatus?: 'steer-pending' | 'steer-applied' | 'queued' | 'processing' | 'blocked' | 'waiting' | 'completed' | 'failed' | 'received' | 'cancelled'; queuePosition?: number; id: number; role: 'user' | 'assistant' | 'error' | 'tool' | 'system'; systemKind?: string; requestId?: string; summary?: string; undone?: boolean; findingId?: string; detector?: string; lines?: string[]; findingState?: string; handledTaskId?: number | null; assist?: boolean; assistTaskId?: number | null; callId?: string; toolName?: string; turnId?: number; inReplyTo?: number; arguments?: Record<string, unknown>; result?: { ok: boolean; data?: { simulated?: boolean }; error?: { code: string; message: string } }; assistant?: { content: { type: string; id?: string; name?: string; arguments?: Record<string, unknown> }[] }; content: string; createdAt: string; mode?: string; errorCode?: string; execution?: { provider: string; api: string; model: string; thinkingLevel: string; thinking: { type: string }; responseModel?: string; timeoutMs: number } }
 type TaskState = { goal: string; completionCriteria: string[]; constraints: string[] }
+// Who a chat row belongs to, so a run of rows from one speaker shows the avatar and name once.
+function speakerOf(item: ChatMessage, fallbackBotId: string) {
+  if (item.role === 'system') return null
+  if (item.role === 'user') return 'user'
+  return item.systemKind === 'group-reply' && item.botId ? item.botId : fallbackBotId
+}
+function continuedRuns(messages: ChatMessage[], fallbackBotId: string) {
+  return messages.map((item, index) => {
+    const speaker = speakerOf(item, fallbackBotId), previous = messages[index - 1]
+    return speaker !== null && previous !== undefined && speakerOf(previous, fallbackBotId) === speaker
+  })
+}
+const chatSkeleton = <div className="pd-skeleton-chat" aria-hidden="true">
+  <div className="pd-skeleton-row is-user"><span className="pd-skeleton-bubble" /></div>
+  <div className="pd-skeleton-row"><span className="pd-skeleton-avatar" /><span className="pd-skeleton-bubble" /></div>
+  <div className="pd-skeleton-row is-short"><span className="pd-skeleton-avatar" /><span className="pd-skeleton-bubble" /></div>
+</div>
 type MessageControl = { activeInputId: number | null; waitingInputId: number | null; queuedInputIds: number[]; pendingSteers: { entryId: number; targetInputId: number }[]; appliedSteerIds: number[]; cancellationEntryId: number | null }
 type Task = {
   capabilitySetups?: unknown[]
+  lastMessage?: { role: 'user' | 'assistant'; content: string; systemKind?: string; botName?: string }
   scheduledWorkflow?: { scheduleId: string; revision: number; occurrenceId: string; promptVersion: string; writes?: boolean; test?: boolean };
   groupIssues?: GroupIssue[]; kind?: string; groupId?: string; group?: { adminBotId: string; members: { id: string; name: string; status: string }[] }; collaborationOverview?: Overview | null; sharedInformation?: SharedRecord[]; collaborations?: Relation[]; managementTools?: string[]; archived?: boolean;
   botLifecycle?: string
@@ -114,6 +136,13 @@ function sessionNote(task: Task): string {
   if (task.activeInputId !== null) return '正在回复'
   if ((task.messageControl?.queuedInputIds.length ?? 0) > 0) return '有排队消息'
   return ''
+}
+// The line under a sidebar row: why it waits or what it is doing, else the last thing said.
+function rowPreview(task: Task): string {
+  const note = sessionNote(task)
+  // List items carry only their last message; the open session carries its whole history.
+  const said = task.messages?.length ? task.messages : task.lastMessage ? [task.lastMessage] : []
+  return note === '正在回复' ? '正在回复…' : note || sessionPreview(said, { group: task.kind === 'group' })
 }
 class ApiError extends Error {
   status: number
@@ -644,12 +673,12 @@ function App() {
   const groupTasks = tasks.filter(t => t.kind === 'group')
   // Sidebar data (T03): sessions are every non-main Task including group chats; Bots open their main session.
   const sidebarSessions: SidebarSession[] = tasks.filter(t => t.kind !== 'main').map(t => ({ id: t.taskId, owner: ownerOf(t), title: t.title, botId: t.bot.id, botName: t.bot.name,
-    at: lastActivity(t), confirm: confirmReason(t) !== null, archived: Boolean(t.archived), group: t.kind === 'group', note: sessionNote(t), running: t.activeInputId !== null || (t.messageControl?.queuedInputIds.length ?? 0) > 0 }))
-  const sidebarBots: SidebarBot[] = bots.map(b => ({ id: b.id, name: b.name, inactive: b.status === 'inactive', mainTaskId: mainSessions[b.id] ?? null, mainRunning: detail?.taskId === mainSessions[b.id] && (detail.activeInputId !== null || (detail.messageControl?.queuedInputIds.length ?? 0) > 0) }))
+    at: lastActivity(t), confirm: confirmReason(t) !== null, archived: Boolean(t.archived), group: t.kind === 'group', preview: rowPreview(t), figure: sidebarFigure(refineMood(taskStatus(t).mood, t.messages?.at(-1))), crew: t.group?.members.filter(m => m.status !== 'inactive').map(m => m.id) ?? [], running: t.activeInputId !== null || (t.messageControl?.queuedInputIds.length ?? 0) > 0 }))
+  const sidebarBots: SidebarBot[] = bots.map(b => ({ id: b.id, name: b.name, inactive: b.status === 'inactive', mainTaskId: mainSessions[b.id] ?? null, ...(detail?.taskId === mainSessions[b.id] && status ? { mainFigure: sidebarFigure(refineMood(status.mood, detail.messages.at(-1))), mainPreview: rowPreview(detail), mainConfirm: confirmReason(detail) !== null } : {}), mainRunning: detail?.taskId === mainSessions[b.id] && (detail.activeInputId !== null || (detail.messageControl?.queuedInputIds.length ?? 0) > 0) }))
   const botSettingsActive = view === 'chats' && botTab !== 'chat'
   const botPage = view === 'chats' && selectedId === null && !newBot && !newSession && !directory ? botId : null
   // The phone top bar names where you are; on desktop the page itself does.
-  const mobileTitle = home ? (bots.find(b => b.id === 'chief')?.name ?? 'Chief')
+  const mobileTitle = home ? (bots.find(b => b.id === 'chief')?.name ?? 'pipi')
     : view === 'chats' ? (directory ? '机器人' : newSession ? '新建会话' : newBot ? '新建机器人' : selectedId !== null ? (detail?.title ?? '会话') : botId === 'groups' ? '群聊' : (selectedBot?.name ?? '机器人'))
     : view === 'items' ? '事项' : view === 'inbox' ? '通知' : '设置'
   async function deactivate(target: Bot) {
@@ -683,10 +712,11 @@ function App() {
     setRefresh((value) => value + 1)
   }} /></fieldset>
   const limited = detail !== null && detail.runtime.checkpoint?.lastOutcome === 'limited' && !taskCancelled(detail)
-  const chatView = !detail ? <div className="shell-placeholder" role="status"><h2 id="detail-title">{detailError ? '无法读取会话' : '正在读取会话…'}</h2>{detailError && <p>{detailError}。请刷新后核对记录。</p>}</div> : <div className={`shell-chat ${detailsOpen ? 'details-open' : ''}`}>
+  const runs = detail ? continuedRuns(detail.messages, detail.bot.id) : []
+  const chatView = !detail ? <div className="shell-placeholder" role="status"><h2 id="detail-title" className={detailError ? undefined : 'sr-only'}>{detailError ? '无法读取会话' : '正在读取会话…'}</h2>{detailError ? <p>{detailError}。请刷新后核对记录。</p> : chatSkeleton}</div> : <div className={`shell-chat ${detailsOpen ? 'details-open' : ''}`}>
             <header className="shell-chat-header">
               <h2 id="detail-title">{detail.title}</h2>
-              {status!.tone !== 'neutral' && <span className={`status-badge tone-${status!.tone}`} role="status">{status!.label}</span>}
+              <ChatStatus taskId={detail.taskId} botId={detail.bot.id} label={status!.label} tone={status!.tone} mood={refineMood(status!.mood, detail.messages.at(-1))} />
               {detail.kind !== 'main' && <button type="button" className="text-button shell-archive" title="归档后从列表隐藏" onClick={() => void toggleArchive(detail)}>{detail.archived ? '取消归档' : '归档'}</button>}
               {!detail.group && <button type="button" className="shell-icon-button" aria-label="机器人设置" onClick={() => selectBot(detail.bot.id, 'capabilities')}><GearIcon /></button>}
               <button type="button" className="shell-icon-button" aria-label="会话详情" aria-expanded={detailsOpen} aria-controls="chat-details" onClick={() => setDetailsOpen(v => !v)}>ⓘ</button>
@@ -711,13 +741,14 @@ function App() {
                 {detail.runtime.checkpoint?.lastOutcome === 'limited' && !taskCancelled(detail) && <p className="pd-composer-notice" role="status">已到调用上限，进度已保存。<button type="button" className="text-button" onClick={() => setDetailsOpen(true)}>提高上限</button></p>}
               </div>
               {pane === 'timeline' ? <><button type="button" className="text-button timeline-back" onClick={() => setPane('chat')}>← 回到对话</button><TaskTimeline task={detail} toolLabels={toolLabels} /></> : <><ol className="messages" aria-label="会话历史" aria-live="polite">
-                {detail.messages.map((item) => item.role === 'system' ? <li id={`message-${item.id}`} key={item.id} className="message message-system">
+                {detail.messages.map((item, index) => item.role === 'system' ? <li id={`message-${item.id}`} key={item.id} className="message message-system">
                   {item.systemKind === 'auto-applied' && item.requestId ? <AutoAppliedCard token={token} requestId={item.requestId} summary={item.summary ?? item.content} undone={item.undone} createdAt={item.createdAt} />
                     : item.systemKind === 'finding' && item.findingId ? <FindingCard token={token} finding={{ id: item.findingId, detector: item.detector ?? '', summary: item.summary ?? item.content, lines: item.lines, state: item.findingState, handledTaskId: item.handledTaskId, assist: item.assist, assistTaskId: item.assistTaskId }} onOpenTask={(id, owner) => selectTask(id, owner)} />
                     : item.systemKind === 'mirror' ? <MirrorCard token={token} item={item as unknown as MirrorMessage} onOpenTask={(id, owner) => selectTask(id, owner)} />
                     : item.systemKind === 'skill' ? <SkillNote item={item} />
                     : <p className={item.systemKind === 'context-floor' ? 'shell-muted small' : undefined}>{item.content}</p>}
-                </li> : <li id={`message-${item.id}`} key={item.id} className={`message message-${item.role}`}>
+                </li> : <li id={`message-${item.id}`} key={item.id} className={`message message-${item.role}${item.role === 'user' ? '' : ' message-bot'}${runs[index] ? ' is-cont' : ''}`}>
+                  {(item.role === 'assistant' || item.role === 'error') && !runs[index] && <span className="message-avatar">{item.systemKind === 'group-reply' && item.botId ? <BotFace id={item.botId} /> : <BotFace id={detail.bot.id} />}</span>}
                   <div className="message-heading">{item.role === 'user' && item.skillId && <span className="skill-tag">Skill · {detail.messages.find(m => m.systemKind === 'skill' && m.inReplyTo === item.id)?.skillName ?? item.skillId}</span>}<strong>{item.systemKind === 'group-reply' ? `${item.botName ?? '机器人'} 的回复` : item.role === 'user' ? '你' : item.role === 'error' ? '执行失败' : item.role === 'tool' ? displayTool(item.toolName, externalOf(item, detail.approvals)) : item.assistant ? detail.bot.name : `${detail.bot.name}${item.mode === 'model' ? '' : ' · 测试回复'}`}</strong><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString('zh-CN')}</time>{item.intermediate && <span className="delivery-status">插入前返回的结果</span>}{item.role === 'user' && item.deliveryStatus && <span className={`delivery-status delivery-${item.deliveryStatus}`} data-testid={`delivery-${item.id}`}>{taskCancelled(detail) && item.deliveryStatus === 'steer-applied' ? '已生效 · 取消前记录' : taskCancelled(detail) && item.deliveryStatus === 'steer-pending' ? '未生效插入 · 已取消，记录保留' : taskCancelled(detail) && item.deliveryStatus === 'queued' ? '未处理 · 已取消' : deliveryLabels[item.deliveryStatus]}{item.deliveryStatus === 'queued' ? ` · 第 ${item.queuePosition} 条` : ''}</span>}</div>
                   {item.assistant ? <div className="tool-calls">{item.content && <p>{item.content}</p>}{item.assistant.content.filter((block) => block.type === 'toolCall').map((call) => <details className="tech-info" key={call.id}><summary>调用 · {displayTool(call.name, externalOf(detail.messages.find(message => message.callId === call.id && message.role === 'tool') ?? { callId: call.id } as ChatMessage, detail.approvals))}</summary><p className="muted small">调用 ID：{call.id} · 工具回合：{item.id} · 用户消息：{item.inReplyTo}</p><pre>{JSON.stringify(call.arguments, null, 2)}</pre></details>)}</div> : item.role === 'tool' && ['mcp_manage', 'skill_manage'].includes(item.toolName ?? '') ? (() => {
                     const notice = capabilityManagerNotice(item, detail.taskId, detail.messages, detail.approvals?.items)
@@ -736,8 +767,8 @@ function App() {
                   {item.errorCode && <details className="tech-info"><summary>技术信息</summary><small>{item.errorCode}</small></details>}
                 </li>)}
               </ol>{[...setupEntries.values()].filter(entry => entry.messageId === null).map(entry => setupCard(entry.receipt))}</>}
-              {pane === 'chat' && detail.messages.length === 0 && <div className="conversation-empty"><h3>会话已就绪</h3><p>在下方输入第一条消息。{detail.parameters.mode !== 'model' && ' · 测试模式'}</p></div>}
-              {!taskCancelled(detail) && !taskInactive(detail) && !detail.blockers?.activeId && !detail.approvals?.activeId && detail.activeInputId !== null && <p className="shell-typing" role="status">正在回复…</p>}
+              {pane === 'chat' && detail.messages.length === 0 && <div className="conversation-empty"><BotFace id={detail.bot.id} size={88} mood="greet" /><h3>会话已就绪</h3><p>在下方输入第一条消息。{detail.parameters.mode !== 'model' && ' · 测试模式'}</p></div>}
+              {!taskCancelled(detail) && !taskInactive(detail) && !detail.blockers?.activeId && !detail.approvals?.activeId && detail.activeInputId !== null && <p className="shell-typing" role="status"><MoodFace botId={detail.bot.id} mood={refineMood('thinking', detail.messages.at(-1))} />正在回复…</p>}
               {taskInactive(detail) && <p className="queue-notice" role="status">这个机器人已停用，不再处理新消息，记录都保留。</p>}
               {Boolean(detail.queueLength) && <p className="queue-notice" role="status" data-testid="queue-status">已排队 {detail.queueLength} 条，{taskCancelled(detail) ? '会话已取消，不再处理' : detail.waiting?.kind === 'action-outcome' ? '核对结果后处理' : detail.approvals?.activeId ? '等你确认后处理' : detail.blockers?.activeId ? '等你回答后处理' : detail.runtime.checkpoint?.lastOutcome === 'limited' ? '提高调用上限后处理' : '当前回复结束后按顺序处理'}。</p>}
               {detailError && <p role="alert" className="shell-alert-card">读取状态失败：{detailError}。请刷新后核对记录。</p>}
@@ -849,7 +880,7 @@ function App() {
       {error && <div role="alert" className="error-banner shell-alert">{error}<button onClick={() => setError('')} aria-label="关闭提示">×</button></div>}
       {!token ? (
         <main className="login-panel shell-login">
-          <span className="shell-brand-mark" aria-hidden="true">p</span><h1>连接你的 Pidot</h1>
+          <img className="shell-brand-mark" src="/favicon.svg" alt="" /><h1>连接你的 Pidot</h1>
           <p>你的个人助理，运行在本机。</p>
           <form onSubmit={connect}>
             <label htmlFor="token">本地访问 token</label>
@@ -872,7 +903,7 @@ function App() {
               onOpenBot={(bot) => selectBot(bot.id)} onOpenDirectory={openDirectory}
               onBotSettings={id => selectBot(id, 'capabilities')} onNewBot={openNewBot} onNewGroup={() => selectBot('groups')} onView={(next) => goView(next)} />}
             footer={<><span>仅本机 · 本地存储</span> <button type="button" className="text-button" onClick={disconnect}>断开连接</button></>}
-            home={chiefMain === null ? <div className="shell-placeholder" role="status"><h2>{loading ? '正在读取…' : '找不到 Chief 主会话'}</h2></div> : home ? chatView : null}
+            home={chiefMain === null ? <div className="shell-placeholder" role="status"><h2 className={loading ? 'sr-only' : undefined}>{loading ? '正在读取…' : '找不到 pipi 的主会话'}</h2>{loading && chatSkeleton}</div> : home ? chatView : null}
             inboxSummary={<InboxPage token={token} active={view === 'inbox'} onCount={setInboxCount} onOpenTask={(id, owner) => { const t = tasks.find(x => x.taskId === id); selectTask(id, t ? ownerOf(t) : owner) }} />}>
           {selectedId === null ? (directory ? <BotDirectory bots={bots} loading={loading} onOpen={selectBot} onSettings={id => selectBot(id, 'capabilities')} onCreate={openNewBot} /> : newSession ? <NewSession key={`new-session:${token}`} bots={bots} busy={creating} onStart={(id, text) => void startSession(id, text)} onGroup={() => selectBot('groups')} />
             : newBot ? <BotCreation key={`new-bot:${token}`} token={token} onCancel={openDirectory} onCreated={(bot, mainTaskId) => {

@@ -16,7 +16,7 @@ export async function gateManagement(tx, card, call, entryId, turnId) {
   // Admission failures and inspect are answered by executeManagement itself; no card is created.
   if (call.name === 'bot_inspect' || await admissionDenied(tx, card, call) || !validManagementArgs(call)) return { execute: true }
   const args = call.arguments
-  if (args.action === 'deactivate' && args.botId === 'chief') return { result: denied('CHIEF_MANAGEMENT_FORBIDDEN', '不能停用Chief。') }
+  if (args.action === 'deactivate' && args.botId === 'chief') return { result: denied('CHIEF_MANAGEMENT_FORBIDDEN', '不能停用pipi。') }
   const verdict = await decide(tx, { botId: card.bot.id, tool: 'bot_manage', action: args.action, args, selfBotId: card.bot.id, origin: card.origin ?? (card.scheduledWorkflow ? 'routine' : 'user') })
   if (verdict.effect === 'allow') return { execute: true }
   if (verdict.effect === 'deny') return { result: denied('POLICY_DENIED', '规则禁止该动作。') }
@@ -37,7 +37,7 @@ async function admissionDenied(tx, card, call) {
 export async function executeManagement(tx, card, call, entryId, models, hooks = {}) {
   const d = await tx.doc(BotDirectory), access = await tx.doc(ToolAccess)
   const denied = (code, message) => ({ ok: false, error: { code, message } })
-  if (await admissionDenied(tx, card, call)) return denied('MANAGEMENT_NOT_AUTHORIZED', '仅服务端授权的Chief会话可使用管理工具。')
+  if (await admissionDenied(tx, card, call)) return denied('MANAGEMENT_NOT_AUTHORIZED', '仅服务端授权的pipi会话可使用管理工具。')
   if (!validManagementArgs(call)) return denied('TOOL_INVALID_ARGUMENTS', '管理参数无效；不能覆盖身份或调用其他管理动作。')
   if (call.name === 'bot_inspect') return { ok: true, data: { source: 'chief-management-directory', bots: d.items.map(b => ({ botId: b.id, name: b.name, description: b.description, status: b.status ?? 'active', configRef: copy(b.configRef), assigned: copy(access.assignments[b.id]), parameters: copy(b.defaults) })), notice: '可按Bot当前工具与资源分配执行管理。目标不明确须询问用户。' } }
   const args = copy(call.arguments)
@@ -59,7 +59,7 @@ export async function executeManagement(tx, card, call, entryId, models, hooks =
       if (response.created && hooks.botCreated) await hooks.botCreated(tx, response.bot.id, card)
     } else {
       if (!before) return remember(denied('BOT_NOT_FOUND', '目标必须是目录中明确的botId；名称或模糊目标无效。'))
-      if (before.id === 'chief' && args.action === 'deactivate') return remember(denied('CHIEF_MANAGEMENT_FORBIDDEN', '不能停用Chief。'))
+      if (before.id === 'chief' && args.action === 'deactivate') return remember(denied('CHIEF_MANAGEMENT_FORBIDDEN', '不能停用pipi。'))
       if (before.configRef.version !== args.expectedVersion) return remember(denied('CONFIG_VERSION_CONFLICT', '配置已更新；请重新读取并由用户重新决策。'))
       if (args.action === 'configure') {
         const { action: _action, botId: _botId, ...input } = args

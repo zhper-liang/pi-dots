@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import BotAvatar, { ShapeIcon } from './BotAvatar'
-import { avatarColors, avatarShapes, loadLook, saveLook, shapeLabels, type BotLook } from './botLook'
+import BotAvatar from './BotAvatar'
+import { accessories, accessoryLabels, lookColors, loadLook, saveLook, type BotLook } from './botLook'
 import BotConfiguration from './BotConfiguration'
 import BotMemory from './BotMemory'
 import { resolveMemorySourceHash } from './memory-helpers.mjs'
@@ -54,7 +54,7 @@ export default function BotTemplatePage({ bot, token, tab, mainTaskId, onTab, on
   const panelProps = (id: Exclude<BotTab, 'chat'>) => ({ id: `bot-panel-${id}`, role: 'tabpanel', 'aria-labelledby': `bot-tab-${id}`, hidden: tab !== id, tabIndex: 0, className: 'bot-tab-panel' })
   return <div className="bot-page bot-detail-page">
     <nav className="bot-detail-nav" aria-label="机器人导航"><button type="button" className="text-button" onClick={onChat}>← 回到对话</button></nav>
-    <header className="bot-detail-head"><BotAvatar name={bot.name} look={look} size={56} /><div><h1>{bot.name}</h1><p className="shell-muted">{look.role ?? (chief ? '主管 · 负责分派与验收' : '机器人')}{inactive ? ' · 已停用' : ''}</p></div></header>
+    <header className="bot-detail-head"><BotAvatar look={look} size={56} mood="idle" /><div><h1>{bot.name}</h1><p className="shell-muted">{look.role ?? (chief ? '主管 · 负责分派与验收' : '机器人')}{inactive ? ' · 已停用' : ''}</p></div></header>
     {inactive && <p role="status" className="shell-note">这个机器人已停用，只能查看。</p>}
     <div className="bot-detail-tabs" role="tablist" aria-label="机器人设置">{botTabs.map(item => <button key={item.id} ref={el => { tabRefs.current[item.id] = el }} type="button" role="tab" id={`bot-tab-${item.id}`} aria-controls={`bot-panel-${item.id}`} aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => onTab(item.id)} onKeyDown={onTabKey}>{item.label}</button>)}</div>
     <div {...panelProps('capabilities')}><BotCapabilities key={`capabilities:${bot.id}:${token}`} token={token} botId={bot.id} readOnly={inactive} active={active && tab === 'capabilities'} /></div>
@@ -65,11 +65,11 @@ export default function BotTemplatePage({ bot, token, tab, mainTaskId, onTab, on
         <ul className="pd-rows">
           <li className="pd-row"><span className="pd-row-title">颜色</span>
             <fieldset className="bot-picker" disabled={inactive}><legend className="sr-only">颜色</legend>
-              {avatarColors.map((c, i) => <label key={c} className="swatch" style={{ background: c }}><input type="radio" name={`look-color-${bot.id}`} checked={look.color === c} onChange={() => updateLook({ ...look, color: c })} aria-label={`颜色 ${i + 1}`} /></label>)}
+              {lookColors.map((c, i) => <label key={c} className="swatch" style={{ background: c }}><input type="radio" name={`look-color-${bot.id}`} checked={look.color === c} onChange={() => updateLook({ ...look, color: c })} aria-label={i === 0 ? '黑色' : `颜色 ${i}`} /></label>)}
             </fieldset></li>
-          <li className="pd-row"><span className="pd-row-title">形状</span>
-            <fieldset className="bot-picker" disabled={inactive}><legend className="sr-only">形状</legend>
-              {avatarShapes.map(s => <label key={s} className="shape-option" title={shapeLabels[s]}><input type="radio" name={`look-shape-${bot.id}`} checked={look.shape === s} onChange={() => updateLook({ ...look, shape: s })} aria-label={shapeLabels[s]} /><ShapeIcon shape={s} color={look.shape === s ? look.color : 'var(--c-muted)'} size={28} /></label>)}
+          <li className="pd-row"><span className="pd-row-title">配饰</span>
+            <fieldset className="bot-picker" disabled={inactive}><legend className="sr-only">配饰</legend>
+              {accessories.map(a => <label key={a} className="shape-option accessory-option" title={accessoryLabels[a]}><input type="radio" name={`look-accessory-${bot.id}`} checked={look.accessory === a} onChange={() => updateLook({ ...look, accessory: a })} aria-label={accessoryLabels[a]} /><BotAvatar look={{ ...look, accessory: a }} size={36} /></label>)}
             </fieldset></li>
           <li className="pd-row"><label className="pd-row-title" htmlFor={`look-role-${bot.id}`}>显示标签</label>
             <input id={`look-role-${bot.id}`} className="pd-input" maxLength={40} placeholder="仅用于展示，例如：日程管家" value={look.role ?? ''} disabled={inactive} onChange={e => updateLook({ ...look, role: e.target.value || undefined })} /></li>

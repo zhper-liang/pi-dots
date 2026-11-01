@@ -1,5 +1,5 @@
 .model-settings, .model-settings-form { display: grid; gap: var(--space-3); min-width: 0; }
-.model-settings-card { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--c-border); border-radius: 12px; }
+.model-settings-card { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--c-border); border-radius: var(--radius-lg); }
 .model-settings-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-2); min-width: 0; }
 .model-settings-heading h3 { margin: 0; font-size: inherit; overflow-wrap: anywhere; }
 .model-settings-status { color: var(--c-text-2); font-size: var(--fs-small); }
@@ -7,7 +7,7 @@
 .model-settings-summary > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: var(--space-2); }
 .model-settings-summary dt { color: var(--c-text-2); }
 .model-settings-summary dd { margin: 0; overflow-wrap: anywhere; }
-.model-settings-card > button { justify-self: start; min-height: 44px; padding: 8px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-bg); color: var(--c-text); }
+.model-settings-card > button { justify-self: start; min-height: 44px; padding: 8px 18px; border: 1px solid var(--c-border-strong); border-radius: var(--radius-pill); background: var(--c-elevated); color: var(--c-text); }
 .model-settings-card > button:hover { background: var(--c-hover); }
 .model-settings-card > button:focus-visible, .model-settings-row input:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
 .model-settings-row { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 288px); gap: var(--space-3); align-items: center; min-height: 42px; }

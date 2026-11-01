@@ -305,7 +305,7 @@ test('production CLI reads server config, real transport and restart reuse the s
   assert.equal(completed.messages.length, 4)
   assert.deepEqual(requests[1].body.messages.map((message) => message.role), ['system', 'user', 'assistant', 'user'])
   assert.deepEqual(requests[1].body.messages.slice(1).map((message) => message.content), ['CLI 输入', 'CLI 模型回复', 'CLI 重启后续聊'])
-  assert.ok(requests[1].body.messages[0].content[0].text.includes('Chief'))
+  assert.ok(requests[1].body.messages[0].content[0].text.includes('pipi'))
   assert.equal(requests.length, 2)
   assert.equal((await readFile(file)).includes(Buffer.from(secret)), false)
 })

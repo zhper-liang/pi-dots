@@ -3,6 +3,7 @@ export type SessionItem = { id: number; title: string; botName: string; at: numb
 export function lastActivity(task: { createdAt: string; messages?: { createdAt: string }[] }): number
 export function timeBucket(at: number, now: number): 'today' | 'yesterday' | 'week' | 'earlier'
 export function relativeTime(at: number, now: number): string
+export function sessionPreview(messages?: { role: string; content?: string; systemKind?: string; botName?: string; intermediate?: boolean; undone?: boolean }[], options?: { group?: boolean }): string
 export function matchesQuery(item: { title: string; botName: string }, query: string): boolean
 export const PIN_KEY: string
 export function parsePins(raw: string | null): number[]

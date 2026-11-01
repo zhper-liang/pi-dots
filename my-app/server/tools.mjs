@@ -177,7 +177,7 @@ export function checkToolCall({ card, record, conversation, call, displayed, set
   }
   if (skillTools.some((tool) => tool.name === call.name)) return validSkillArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', 'Skill 参数无效；不接受路径、规则或版本覆盖。')
   if (CAPABILITY_MANAGEMENT_TOOLS.includes(call.name)) return validCapabilityManagementArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '能力配置参数无效；不得提供凭据或授权标志。')
-  if (MANAGEMENT_TOOLS.includes(call.name)) return card.bot.id === 'chief' && validManagementArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', 'Chief管理参数无效；必须明确目标、版本与变更。')
+  if (MANAGEMENT_TOOLS.includes(call.name)) return card.bot.id === 'chief' && validManagementArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', 'pipi管理参数无效；必须明确目标、版本与变更。')
   if (SHARED_TOOLS.includes(call.name)) return validSharedArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '共享参数无效。')
   if (COLLABORATION_TOOLS.includes(call.name)) return validCollaborationArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '协作参数无效。')
   if (call.name === REVIEW_TOOL) return validReviewArgs(call) ? { ok:true } : denied('TOOL_INVALID_ARGUMENTS','验收参数无效；须绑定确切修订与状态。')

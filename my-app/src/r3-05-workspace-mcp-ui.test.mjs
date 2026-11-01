@@ -34,7 +34,7 @@ test('R3-05 UI: running, not running and connected are told apart honestly', () 
 })
 
 test('R3-05 UI: connection states follow Google, restart and the last check', () => {
-  assert.match(workspaceMcpView(status('running', { connection: null }), connected).connection.hint, /对 Chief 说.*机器人/)
+  assert.match(workspaceMcpView(status('running', { connection: null }), connected).connection.hint, /对 pipi 说.*机器人/)
   const restarted = workspaceMcpView(status('running', { connection: { ...connection, status: 'configured' } }), connected)
   assert.equal(restarted.connection.text, '已保存，需重新检查'); assert.equal(restarted.canCheck, true); assert.equal(restarted.checkLabel, '检查连接')
   const noGoogle = workspaceMcpView(status(), { connected: false, services: [] })

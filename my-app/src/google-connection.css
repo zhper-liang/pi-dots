@@ -1,6 +1,6 @@
 .google-connection { display: grid; gap: var(--space-3); min-width: 0; }
 .google-connection p { margin: 0; overflow-wrap: anywhere; }
-.google-connection-card { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--c-border); border-radius: 12px; }
+.google-connection-card { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--c-border); border-radius: var(--radius-lg); }
 .google-connection-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-2); min-width: 0; }
 .google-connection-head h3 { margin: 0; font-size: inherit; }
 .google-connection-state { color: var(--c-muted); font-size: var(--fs-small, 13px); overflow-wrap: anywhere; min-width: 0; }

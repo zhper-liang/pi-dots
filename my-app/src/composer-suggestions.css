@@ -14,10 +14,13 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  background: var(--c-bg, #fff);
-  border: 1px solid var(--c-border-strong, #a1a1aa);
-  border-radius: var(--radius, 8px);
+  background: var(--c-elevated, #fff);
+  border: 1px solid var(--c-border, #e3e7f0);
+  border-radius: var(--radius, 14px);
+  box-shadow: var(--shadow-lg);
   color: var(--c-text, #18181b);
+  transform-origin: bottom center;
+  animation: pd-pop var(--dur-2) var(--ease-out);
 }
 .composer-suggestion {
   display: flex;

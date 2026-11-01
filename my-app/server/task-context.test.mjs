@@ -109,7 +109,7 @@ test('normal reopen restores full history, state and pinned Bot even if ordinary
   assert.deepEqual(restored.taskStateSources, updated.taskStateSources)
   assert.deepEqual(restored.taskStateHistory, updated.taskStateHistory)
   const second = await send(reopened, task, '还记得我的名字吗？')
-  assert.ok(calls[1].messages[0].content[0].text.includes('Chief'))
+  assert.ok(calls[1].messages[0].content[0].text.includes('pipi'))
   assert.ok(!calls[1].messages[0].content[0].text.includes('新身份'))
   assert.ok(calls[1].messages[0].content[0].text.includes('只用中文'))
   assert.ok(calls[1].messages.some((message) => message.content === '重启前的名字是青禾。'))

@@ -1,6 +1,6 @@
 // Top-level destinations of the shell. "Home" is the Chief main session; 今天 moved into 事项.
 export const workspaceViews = [
-  { id: 'home', label: 'Chief', description: '和 Chief 对话，派活给其他机器人' },
+  { id: 'home', label: 'pipi', description: '和 pipi 对话，派活给其他机器人' },
   { id: 'chats', label: '会话', description: '和机器人或群聊对话' },
   { id: 'items', label: '事项', description: '日历、定时任务和执行记录' },
   { id: 'inbox', label: '通知', description: '需要你处理的事和提醒' },

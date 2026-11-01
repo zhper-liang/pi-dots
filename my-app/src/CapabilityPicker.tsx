@@ -17,8 +17,8 @@ export default function CapabilityPicker({ items, enabled, partial = [], disable
   const [query, setQuery] = useState('')
   const filtered = filterCapabilities(items, tab, query)
   const empty = query.trim() ? '没有匹配的能力。' : tab === 'skill'
-    ? '还没有 Skill，可以让 Chief 帮你导入。' : tab === 'mcp'
-      ? '还没有 MCP 连接，到「设置 → 连接」添加，或让 Chief 帮你接上。' : '还没有工具集。'
+    ? '还没有 Skill，可以让 pipi 帮你导入。' : tab === 'mcp'
+      ? '还没有 MCP 连接，到「设置 → 连接」添加，或让 pipi 帮你接上。' : '还没有工具集。'
 
   return <div className="capability-picker">
     <div className="pd-subtabs capability-tabs" role="tablist" aria-label="能力分类">

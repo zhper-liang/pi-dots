@@ -80,7 +80,7 @@ export async function deactivateDirectoryBot(tx, botId) {
   const directory = await tx.doc(BotDirectory)
   const bot = directory.items.find(b => b.id === botId)
   if (!bot) throw new TaskInputError(404, 'BOT_NOT_FOUND', '指定的Bot不存在。')
-  if (bot.id === 'chief' || bot.role === 'chief') throw new TaskInputError(409, 'CHIEF_DEACTIVATION_FORBIDDEN', '本轮不能停用 Chief。')
+  if (bot.id === 'chief' || bot.role === 'chief') throw new TaskInputError(409, 'CHIEF_DEACTIVATION_FORBIDDEN', '不能停用 pipi。')
   if (bot.status === 'inactive') return JSON.parse(JSON.stringify(bot))
   bot.status = 'inactive'; bot.deactivatedAt = new Date().toISOString()
   directory.managementAudit.push({ id: directory.managementAudit.length + 1, type: 'bot-deactivated', botId, source: 'authenticated-user', createdAt: bot.deactivatedAt })

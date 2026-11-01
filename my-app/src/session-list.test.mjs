@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { lastActivity, timeBucket, relativeTime, matchesQuery, parsePins, togglePin, sessionSections } from './session-list.mjs'
+import { lastActivity, timeBucket, relativeTime, matchesQuery, parsePins, togglePin, sessionSections, sessionPreview } from './session-list.mjs'
 
 // Local wall-clock times, so the tests hold in any timezone.
 const at = (y, m, d, h = 12, min = 0) => new Date(y, m - 1, d, h, min).getTime()
@@ -118,8 +118,23 @@ test('sidebar confirmation uses shared EditorDialog, stable retry identity and n
   assert.match(source, /已有记忆和操作记录保留/)
   assert.match(sidebar, /title="机器人设置"/)
   assert.match(sidebar, />新建机器人</)
-  assert.match(sidebar, />派活和验收</)
+  assert.match(sidebar, /'派活和验收'/)
   assert.doesNotMatch(source, /fetch\(|\/archive|\.send\(/)
   assert.match(sidebar, /sessions\.filter\(item => !deletedIds\.includes\(item.id\)\)/)
   assert.match(sidebar, /removeSessionPin\(previous, result.taskId\)/)
+})
+
+test('sidebar preview is the last thing said, flattened, with who said it', () => {
+  const user = content => ({ role: 'user', content }), bot = (content, extra = {}) => ({ role: 'assistant', content, ...extra })
+  assert.equal(sessionPreview([]), '')
+  assert.equal(sessionPreview([user('明天几点开会？'), bot('**10 点**，在 `A` 会议室。')]), '10 点，在 A 会议室。')
+  assert.equal(sessionPreview([bot('好的'), user('改到 2026-11-02')]), '你：改到 2026-11-02')
+  assert.equal(sessionPreview([bot('- 第一项\n- 第二项')]), '第一项 第二项')
+  assert.equal(sessionPreview([bot('看 [日程](#bot=calendar)')]), '看 日程')
+  // Tool rows, system cards, interim and undone turns, and empty tool-call turns are skipped.
+  assert.equal(sessionPreview([bot('结论在这'), { role: 'tool', content: 'raw' }, { role: 'system', content: '卡片' }, bot(''), bot('草稿', { intermediate: true }), { ...user('撤回'), undone: true }]), '结论在这')
+  assert.equal(sessionPreview([bot('提醒卡', { systemKind: 'finding' })]), '')
+  assert.equal(sessionPreview([bot('周六天气不错', { systemKind: 'group-reply', botName: '日程助理' })], { group: true }), '日程助理：周六天气不错')
+  assert.equal(sessionPreview([bot('周六天气不错', { botName: '日程助理' })]), '周六天气不错')
+  assert.equal(sessionPreview([user('长'.repeat(200))]).length, 80)
 })

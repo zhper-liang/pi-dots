@@ -85,9 +85,9 @@ export function AssistSettings({ token }: { token: string }) {
   const offerRead = !value.chiefRead.enabled
   return <div className="assist-settings">
     <h3>帮我想办法</h3>
-    <p className="shell-muted small">打开后，提醒卡上多一个「帮我想办法」：Chief 只看不改地分析这条提醒，把办法发到对话里，每次会用一点模型额度。</p>
-    <p role="status">{value.assist ? '已打开' : '已关闭（默认）'}{value.chiefRead.enabled ? ' · Chief 能查看本地待办和日程（只读）' : ' · Chief 看不到本地待办和日程，只能凭卡上的内容分析'}</p>
-    {offerRead && <label className="assist-read"><input type="checkbox" checked={read} disabled={busy || !value.chiefRead.available} onChange={e => setRead(e.target.checked)} /> 同时让 Chief 能查看本地待办和日程（只读）{!value.chiefRead.available && <span className="shell-muted small">：本地查看工具暂不可用，请检查工具安装。</span>}</label>}
+    <p className="shell-muted small">打开后，提醒卡上多一个「帮我想办法」：pipi 只看不改地分析这条提醒，把办法发到对话里，每次会用一点模型额度。</p>
+    <p role="status">{value.assist ? '已打开' : '已关闭（默认）'}{value.chiefRead.enabled ? ' · pipi 能查看本地待办和日程（只读）' : ' · pipi 看不到本地待办和日程，只能凭卡上的内容分析'}</p>
+    {offerRead && <label className="assist-read"><input type="checkbox" checked={read} disabled={busy || !value.chiefRead.available} onChange={e => setRead(e.target.checked)} /> 同时让 pipi 能查看本地待办和日程（只读）{!value.chiefRead.available && <span className="shell-muted small">：本地查看工具暂不可用，请检查工具安装。</span>}</label>}
     <div className="bot-actions">
       {!value.assist && <button type="button" className="primary" disabled={busy} onClick={() => void save(true, read)}>打开</button>}
       {value.assist && offerRead && read && <button type="button" className="primary" disabled={busy} onClick={() => void save(true, true)}>保存</button>}

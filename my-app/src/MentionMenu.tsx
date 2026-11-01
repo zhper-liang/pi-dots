@@ -1,7 +1,6 @@
 import { useMemo, type RefObject } from 'react'
 import ComposerSuggestions from './ComposerSuggestions'
-import BotAvatar from './BotAvatar'
-import { loadLook } from './botLook'
+import { BotFace } from './BotAvatar'
 import { applyMention, buildMentionCandidates, findMentionToken, type MentionBinding, type MentionBot, type MentionContext, type MentionPick } from './mentions.mjs'
 
 export type MentionMenuProps = {
@@ -37,7 +36,7 @@ export default function MentionMenu({ bots, context, draft, selectionStart, sele
       const pick = applyMention(draft, token, candidate, { bindings, maxLength })
       if (pick) onPick(pick)
     }}
-    renderLeading={candidate => <BotAvatar name={candidate.label} look={loadLook(candidate.botId)} size={28} />}
+    renderLeading={candidate => <BotFace id={candidate.botId} size={28} />}
     renderLabel={candidate => <>{candidate.label}<span className="composer-suggestion-id">{candidate.botId}</span></>}
     renderDetail={candidate => candidate.actionLabel} />
 }

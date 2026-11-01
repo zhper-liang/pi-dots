@@ -55,13 +55,56 @@ async function apiFixture(t, options = {}) {
   return { ...f, base, request: (path, method = 'GET', body) => fetch(base + path, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) }
 }
 
+test('a directory still on the old Chief default becomes pipi once, live sessions included, history kept', async (t) => {
+  const { open, close, store } = await fixture(t)
+  const live = await store.create({ botId: 'chief' }), ended = await store.create({ botId: 'chief' })
+  await store.cancel(ended.taskId, {})
+  await until(() => store.get(ended.taskId), task => task.runtime.status === 'terminal')
+  const mainId = (await store.mainSessions()).chief
+  // A database initialized before 2026-10-31 holds the old default name everywhere.
+  const rewind = name => store.harness.commit(async (tx) => {
+    (await tx.doc(BotDirectory)).items.find(bot => bot.id === 'chief').name = name
+    for (const id of [live.taskId, mainId]) (await tx.doc(TaskCard, id)).bot.name = name
+    ;(await tx.doc(TaskCard, mainId)).title = name
+  }, context)
+  await rewind('Chief')
+  const endedSnapshot = await store.get(ended.taskId)
+  await close(store)
+  let next = await open()
+  assert.equal(next.bots()[0].name, 'pipi')
+  assert.equal((await next.get(live.taskId)).bot.name, 'pipi')
+  assert.deepEqual([(await next.get(mainId)).title, (await next.get(mainId)).bot.name], ['pipi', 'pipi'])
+  // Ended sessions cannot be written; the rename skips them instead of failing startup.
+  assert.deepEqual((await next.get(ended.taskId)).bot, endedSnapshot.bot)
+  // A name the user chose is never touched.
+  await next.harness.commit(async (tx) => { (await tx.doc(BotDirectory)).items.find(bot => bot.id === 'chief').name = '大管家' }, context)
+  await close(next); next = await open()
+  assert.equal(next.bots()[0].name, '大管家')
+})
+
+test('list items carry the last visible message for the sidebar, never hidden content', async (t) => {
+  const { store } = await fixture(t)
+  const empty = await store.create({ botId: 'calendar' }), task = await store.create({ botId: 'calendar' })
+  await store.send(task.taskId, '下周三下午有空吗？')
+  await until(() => store.get(task.taskId), idle)
+  const item = id => store.list().then(list => list.find(x => x.taskId === id))
+  assert.equal((await item(empty.taskId)).lastMessage, undefined)
+  assert.equal((await item(task.taskId)).messages.length, 0)
+  const last = (await item(task.taskId)).lastMessage
+  assert.equal(last.role, 'assistant')
+  assert.equal(last.content, (await store.get(task.taskId)).messages.at(-1).content)
+  // Replies the full view hides (here: below a retired external source's floor) are skipped.
+  await store.harness.commit(async (tx) => { (await tx.doc(TaskCard, task.taskId)).externalMcpHistoryFloor = Number.MAX_SAFE_INTEGER }, context)
+  assert.deepEqual((await item(task.taskId)).lastMessage, { role: 'user', content: '下周三下午有空吗？' })
+})
+
 test('directory initializes three stable presets once; seeds cannot replace persisted config or Task snapshots', async (t) => {
   const { store, open, close } = await fixture(t)
   const before = store.bots(), old = await store.create({ botId: 'calendar' })
   const { bot } = await store.createBot(creation())
   const snapshot = await store.get(old.taskId)
   before[0].name = 'mutated caller copy'
-  assert.equal(store.bots()[0].name, 'Chief')
+  assert.equal(store.bots()[0].name, 'pipi')
   await close(store)
   const changed = listBots(config).map((item) => ({ ...item, name: 'changed seed', configRef: { ...item.configRef, version: 'changed' } }))
   let next = await open({ bots: changed })

@@ -13,7 +13,7 @@ export const TOOL_GROUPS = Object.freeze([
   Object.freeze({ id: 'history', label: '历史与回读', description: '回读这个会话的历史、工具结果和 Skill 资料。', requiresMainSession: false, tools: Object.freeze(['task_history_read', 'tool_result_read']) }),
   Object.freeze({ id: 'automation', label: '自动化控制', description: '在对话里一键暂停全部自动化，只在主会话里有。', requiresMainSession: true, tools: Object.freeze(['automation_pause']) }),
   Object.freeze({ id: 'capabilities', label: '能力配置', description: '在对话里添加、更新和停用 MCP 与 Skill。', requiresMainSession: false, tools: Object.freeze(['mcp_manage', 'skill_manage']) }),
-  Object.freeze({ id: 'bots', label: '机器人管理', description: '创建、配置和停用机器人，只有 Chief 有。', requiresMainSession: false, tools: Object.freeze(['bot_manage']) }),
+  Object.freeze({ id: 'bots', label: '机器人管理', description: '创建、配置和停用机器人，只有 pipi 有。', requiresMainSession: false, tools: Object.freeze(['bot_manage']) }),
 ])
 const byTool = new Map(TOOL_GROUPS.flatMap((group) => group.tools.map((tool) => [tool, group.id])))
 export const groupOfTool = (tool) => byTool.get(tool) ?? null
