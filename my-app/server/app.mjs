@@ -299,6 +299,18 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
           req.url=`/api/tasks/${child.taskId}${childRoute[2]}`
         } else req.url = `/api/tasks/${groupTask.taskId}${groupRoute[2] ?? ''}`
       }
+      if (tasks && req.url === '/api/tasks/continuous') {
+        if (req.method !== 'POST') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 POST。' } }, { Allow: 'POST' }); return }
+        const data = await tasks.startContinuous(await readJson(req))
+        sendJson(res, data.replayed ? 200 : 201, { data }, { Location: `/api/tasks/${data.rootTaskId}` }); return
+      }
+      const continuousOriginList = /^\/api\/tasks\?continuousOriginTaskId=([1-9]\d*)$/.exec(req.url)
+      if (tasks && continuousOriginList) {
+        if (req.method !== 'GET') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET。' } }, { Allow: 'GET' }); return }
+        req.resume()
+        sendJson(res, 200, { tasks: await tasks.list(undefined, { continuousOriginTaskId: Number(continuousOriginList[1]) }) })
+        return
+      }
       const ownedTask = /^\/api\/tasks\/([1-9]\d*)(?:\/|$)/.exec(req.url)
       if (tasks && ownedTask) await tasks.get(Number(ownedTask[1]), false)
       // Optional Bot-qualified routes bind ALL existing task controls to the selected Bot.
@@ -311,6 +323,12 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         req.url = scoped[2] ? `/api/tasks/${scoped[2]}${scoped[3] ?? ''}` : '/api/tasks'
       }
       const skillMatch = /^\/api\/tasks\/([1-9]\d*)\/skills$/.exec(req.url)
+      const continuousControl = /^\/api\/tasks\/([1-9]\d*)\/continuous\/control$/.exec(req.url)
+      if (tasks && continuousControl) {
+        if (req.method !== 'POST') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 POST。' } }, { Allow: 'POST' }); return }
+        sendJson(res, 200, { task: await tasks.controlContinuous(Number(continuousControl[1]), await readJson(req)) })
+        return
+      }
       if (tasks && (req.url === '/api/skills' || skillMatch)) {
         const method = skillMatch ? 'POST' : 'GET'
         if (req.method !== method && !(skillMatch && ['DELETE', 'GET'].includes(req.method))) {

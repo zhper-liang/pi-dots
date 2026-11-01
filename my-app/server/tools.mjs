@@ -1,3 +1,4 @@
+import { CONTINUOUS_TOOLS, continuousTools, validContinuousCall } from './continuous-work-tools.mjs'
 import { SESSION_HISTORY_TOOLS, sessionHistoryTools, validSessionHistoryArgs } from './history-search.mjs'
 import { MEMORY_TOOLS, MAIN_MEMORY_TOOLS, memoryTools, validMemoryCall } from './memory-tools.mjs'
 import { nativeTools, NATIVE_TOOLS, validNativeCall } from './native-tools.mjs'
@@ -65,18 +66,19 @@ export const calendarEventTool = Object.freeze({
       } },
   } },
 })
-const installed = [...nativeTools, ...managementTools, calendarTool, calendarEventTool, resultReadTool, historyTool, ...sessionHistoryTools, ...memoryTools, ...skillTools, blockerTool, calendarWriteTool, ...collaborationTools, reviewTool, ...sharedTools, ...blockerActions, ...feishuTools, feishuCreateTool, ...feishuMutationTools, ...workspaceTools, automationPauseTool, ...mainTools, ...capabilityManagementTools]
+const installed = [...continuousTools, ...nativeTools, ...managementTools, calendarTool, calendarEventTool, resultReadTool, historyTool, ...sessionHistoryTools, ...memoryTools, ...skillTools, blockerTool, calendarWriteTool, ...collaborationTools, reviewTool, ...sharedTools, ...blockerActions, ...feishuTools, feishuCreateTool, ...feishuMutationTools, ...workspaceTools, automationPauseTool, ...mainTools, ...capabilityManagementTools]
 const copy = (value) => JSON.parse(JSON.stringify(value))
 export function toolSets(card, bots, access) {
   const bot = bots.find((item) => item.id === card.bot.id)
   // This metadata is a per-store cache, never a grant; live assignments and provider checks still win.
   const externalTools = copy(access.externalMcp?.tools ?? [])
-  const names = [...installed, ...externalTools].map((tool) => tool.name).filter(name => (![...SESSION_HISTORY_TOOLS, ...MAIN_MEMORY_TOOLS].includes(name) || card.kind === 'main') && (!CAPABILITY_MANAGEMENT_TOOLS.includes(name) || access.capabilityManagementReady === true) && (!MANAGEMENT_TOOLS.includes(name) || card.bot.id === 'chief' && card.managementTools?.includes(name)) && (!MAIN_TOOLS.includes(name) || card.kind === 'main'))
+  const continuous = card.executionPolicy?.kind === 'continuous' && card.executionPolicy.rootTaskId === card.taskId
+  const names = [...installed, ...externalTools].map((tool) => tool.name).filter(name => (!CONTINUOUS_TOOLS.includes(name) || continuous) && (![...SESSION_HISTORY_TOOLS, ...MAIN_MEMORY_TOOLS].includes(name) || card.kind === 'main') && (!CAPABILITY_MANAGEMENT_TOOLS.includes(name) || access.capabilityManagementReady === true) && (!MANAGEMENT_TOOLS.includes(name) || card.bot.id === 'chief' && card.managementTools?.includes(name)) && (!MAIN_TOOLS.includes(name) || card.kind === 'main'))
   const assigned = access.assignments?.[card.bot.id] ?? { tools: bot?.defaults.tools ?? [], resources: bot?.defaults.toolResources ?? [] }
   const intrinsic = card.bot.id === 'chief' && card.kind === 'main' && access.mainAssignments?.bots?.includes(card.bot.id)
     ? [...MAIN_TOOLS, AUTOMATION_PAUSE_TOOL]
     : []
-  const effectiveTools = new Set([...INTRINSIC_TOOLS, ...(card.kind === 'main' ? [...SESSION_HISTORY_TOOLS, ...MAIN_MEMORY_TOOLS] : []), ...assigned.tools, ...intrinsic])
+  const effectiveTools = new Set([...(continuous ? CONTINUOUS_TOOLS : []), ...INTRINSIC_TOOLS, ...(card.kind === 'main' ? [...SESSION_HISTORY_TOOLS, ...MAIN_MEMORY_TOOLS] : []), ...assigned.tools, ...intrinsic])
   // Native abilities are intrinsic. Optional tools use installed ∩ assignment − revoked.
   const authorized = names.filter((name) => effectiveTools.has(name) && (INTRINSIC_TOOLS.includes(name) || SESSION_HISTORY_TOOLS.includes(name) || MAIN_MEMORY_TOOLS.includes(name) || !access.revoked[card.bot.id]?.includes(name)) &&
     (!externalTools.some(tool => tool.name === name) || externalTools.find(tool => tool.name === name).enabledBotIds.includes(card.bot.id)))
@@ -141,7 +143,7 @@ export function toolDefinitions(names, { externalTools = [] } = {}) {
     return copy({ name, description: label === name ? description : `【${label}】${description}`, parameters })
   })
 }
-export function toolCatalog({ externalTools = [] } = {}) { return copy([...installed, ...externalTools.map(tool => ({ ...tool, parameters: tool.inputSchema }))].filter(t => !INTRINSIC_TOOLS.includes(t.name) && !SESSION_HISTORY_TOOLS.includes(t.name) && !MAIN_MEMORY_TOOLS.includes(t.name) && !MANAGEMENT_TOOLS.includes(t.name) && (!MAIN_TOOLS.includes(t.name) || TOOL_GROUPS.some(group => group.tools.includes(t.name))))) }
+export function toolCatalog({ externalTools = [] } = {}) { return copy([...installed, ...externalTools.map(tool => ({ ...tool, parameters: tool.inputSchema }))].filter(t => !CONTINUOUS_TOOLS.includes(t.name) && !INTRINSIC_TOOLS.includes(t.name) && !SESSION_HISTORY_TOOLS.includes(t.name) && !MAIN_MEMORY_TOOLS.includes(t.name) && !MANAGEMENT_TOOLS.includes(t.name) && (!MAIN_TOOLS.includes(t.name) || TOOL_GROUPS.some(group => group.tools.includes(t.name))))) }
 export function callLimits(parameters) {
   return { ...DEFAULT_CALL_LIMITS, ...(parameters.callLimits ?? {}) }
 }
@@ -173,7 +175,10 @@ export function checkToolCall({ card, record, conversation, call, displayed, set
     return denied('TOOL_IDENTITY_DENIED', 'Task、Bot 或 conversation 身份不匹配。')
   }
   if (!sets.installed.includes(call.name)) return denied('TOOL_NOT_INSTALLED', '工具未登记。')
-  if (!sets.authorized.includes(call.name) || !displayed.includes(call.name)) return denied('TOOL_NOT_AUTHORIZED', '工具未授权、已撤权或未在本轮展示。')
+  if (!sets.authorized.includes(call.name)) return denied('TOOL_NOT_AUTHORIZED', '工具未授权、已撤权或未在本轮展示。')
+  if (!displayed.includes(call.name) && [CALENDAR_TOOL, CALENDAR_EVENT_TOOL, CALENDAR_WRITE_TOOL, RESULT_READ_TOOL, ...FEISHU_TOOLS, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) && typeof call.arguments?.resource === 'string' && !sets.resources.includes(call.arguments.resource)) return denied('TOOL_RESOURCE_DENIED', '工具来源资源已撤权，未执行。')
+  if (!displayed.includes(call.name)) return denied('TOOL_NOT_AUTHORIZED', '工具未授权、已撤权或未在本轮展示。')
+  if (CONTINUOUS_TOOLS.includes(call.name)) return card.executionPolicy?.kind === 'continuous' && card.executionPolicy.rootTaskId === card.taskId && validContinuousCall(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '持续目标工具参数或角色无效。')
   if (NATIVE_TOOLS.includes(call.name)) return validNativeCall(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '原生能力参数无效。')
   if ([...MEMORY_TOOLS, ...MAIN_MEMORY_TOOLS].includes(call.name)) return (!MAIN_MEMORY_TOOLS.includes(call.name) || card.kind === 'main') && validMemoryCall(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '记忆工具参数无效。')
   const external = sets.externalTools?.find(tool => tool.name === call.name)

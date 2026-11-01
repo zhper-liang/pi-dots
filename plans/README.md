@@ -10,11 +10,11 @@
 
 ## 进行中
 
-长任务持续执行已完成计划与分票，代码未开始；其余下列计划已实现、等用户验收。验证结果见 [NEXT_STAGE](../NEXT_STAGE.md)。
+长任务持续执行 LR-01 至 LR-09 已按修订范围完成并本地验证，未提交部署；下列计划均等用户验收。验证结果见 [NEXT_STAGE](../NEXT_STAGE.md)。
 
 | 计划 | 更新 | 内容 |
 |---|---|---|
-| [长任务持续执行](active/long-running-agent/README.md) | 2026-11-02 | 四类职责、九张本地票、设计契约与验收矩阵已发布；当前可领取 LR-01，尚未开发 |
+| [长任务持续执行](active/long-running-agent/README.md) | 2026-11-02 | 持续推进、证据核验、总额度、群协作与目标卡；1753/1753，短例/中断验收通过，未做长时评估 |
 | [协作、会话与模型故障修复](active/collaboration-session-reliability/task_plan.md) | 2026-11-01 | 协作结果交付、机器人主会话列表、目录和时间提示；本地验证完成，真实模型原因待查 |
 | [会话提问与能力管理优化](active/conversation-capabilities/task_plan.md) | 2026-11-01 | 表单与输入挂起恢复、能力同步、飞书来源统一入口、自动诊断（ADR-027）；实现完成，待验收 |
 | [主会话长期记忆与经验沉淀](active/memory-learning/README.md) | 2026-11-01 | 按会话整理记忆、持久作业、历史搜索、学成 Skill（ADR-026） |

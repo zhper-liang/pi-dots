@@ -38,10 +38,16 @@ const svc=s=>collaborationService({TaskCard,ChatInput,bots:s.bots(),createTask:(
 test('05 root stop is durable/idempotent, cancels only matching children, FIFO survives and same Bot unrelated Task stays live',async t=>{
  const {s,p,r}=await fixture(t);await until(s,r.childTaskId,x=>x.blockers.activeId!==null)
  const other=await s.create({botId:'calendar'})
- const usageBefore=(await s.get(p.taskId)).callUsage.modelCalls
+ // Publishing the child's question also wakes one supervisor notice reply. Wait for
+ // that real receipt and the next child wait before measuring the stop boundary.
+ const ready=await until(s,p.taskId,x=>x.runtime.checkpoint?.phase==='awaitChildren'&&x.callUsage.unknownTokenCalls===0&&
+  x.messages.some(m=>m.role==='assistant'&&m.content==='主管如实收到取消，不自动重建'))
+ const usageBefore=ready.callUsage.modelCalls
+ assert.equal(usageBefore,2)
  await s.stopWork(p.taskId,{rootWorkId:r.rootWorkId})
  await until(s,r.childTaskId,x=>x.runtime.status==='terminal')
  const after=await until(s,p.taskId,x=>x.activeInputId===null)
+ assert.equal(after.callUsage.modelCalls,usageBefore)
  assert.equal(after.cancellation,null);assert.equal(after.collaborationOverview.stops.length,1);assert.equal(after.collaborations[0].result.status,'cancelled');assert.equal(after.collaborations[0].consumedEntryId,null);assert.ok(after.blockers.related.every(b=>b.status==='cancelled'))
  await Promise.all([s.stopWork(p.taskId,{rootWorkId:r.rootWorkId}),s.stopWork(p.taskId,{rootWorkId:r.rootWorkId})]);assert.equal((await s.get(p.taskId)).collaborationOverview.stops.length,1)
  assert.equal((await s.get(other.taskId)).cancellation,null)

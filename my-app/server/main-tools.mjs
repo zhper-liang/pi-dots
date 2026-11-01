@@ -32,8 +32,10 @@ export const ROUTINE_RULE_SCHEMA = { oneOf: [
   { type: 'object', additionalProperties: false, required: ['type', 'event'], properties: { type: { const: 'event' }, event: { enum: ['todo_due', 'event_changed', 'task_finished'] } } },
 ] }
 export const mainTools = [
-  { name: TASK_CREATE_TOOL, description: '把较长执行或要等待的工作派给本Bot的一个独立任务（执行者就是自己）。立即返回taskId，不等待结果；进度用task_status查，结束后会在下一轮出现概述。operationId在同一用户输入内唯一标识这次派活，重复调用返回原回执。目标与完成标准要写清楚；执行者固定是自己，不能指定其他Bot（要交给别的Bot时，在目标里写明，由派出的任务用task_assign交出去）。',
+  { name: TASK_CREATE_TOOL, description: '把较长执行或要等待的工作派给本Bot的一个独立任务（执行者就是自己）。立即返回taskId，不等待结果；进度用task_status查，结束后会在下一轮出现概述。operationId在同一用户输入内唯一标识这次派活，重复调用返回原回执。只有用户明确要求持续推进时才传executionPolicy:{kind:"continuous"}及有限limits（modelCalls/toolCalls/totalTokens/durationMs，最长8小时）；普通派发省略。目标与完成标准要写清楚；执行者固定是自己，不能指定其他Bot（要交给别的Bot时，在目标里写明，由派出的任务用task_assign交出去）。',
     parameters: { type: 'object', additionalProperties: false, required: ['operationId', 'goal', 'completionCriteria'], properties: {
+      executionPolicy: { type: 'object', additionalProperties: false, required: ['kind'], properties: { kind: { const: 'continuous' } } },
+      limits: { type: 'object', additionalProperties: false, required: ['modelCalls', 'toolCalls', 'totalTokens', 'durationMs'], properties: Object.fromEntries(['modelCalls', 'toolCalls', 'totalTokens', 'durationMs'].map(key => [key, { type: 'integer', minimum: 1, ...(key === 'durationMs' ? { maximum: 28800000 } : {}) }])) },
       operationId: { type: 'string', pattern: '^[a-zA-Z0-9_.:-]+$', maxLength: 80 },
       goal: { type: 'string', minLength: 1, maxLength: 4000 },
       completionCriteria: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1000 } } } } },
@@ -58,7 +60,10 @@ export function validMainArgs(call) {
       Array.isArray(a.sourceIds) && a.sourceIds.length >= 1 && a.sourceIds.length <= 8 && new Set(a.sourceIds).size === a.sourceIds.length && a.sourceIds.every(id => typeof id === 'string' && /^[a-zA-Z0-9_.:-]{1,120}$/.test(id))
   }
   if (call.name === TASK_STATUS_TOOL) return Object.keys(a).every(k => k === 'taskId') && (a.taskId === undefined || Number.isSafeInteger(a.taskId) && a.taskId > 0)
-  if (call.name !== TASK_CREATE_TOOL || Object.keys(a).some(k => !['operationId', 'goal', 'completionCriteria'].includes(k))) return false
+  if (call.name !== TASK_CREATE_TOOL || Object.keys(a).some(k => !['operationId', 'goal', 'completionCriteria', 'executionPolicy', 'limits'].includes(k))) return false
+  if (a.executionPolicy !== undefined || a.limits !== undefined) {
+    if (!a.executionPolicy || Object.keys(a.executionPolicy).length !== 1 || a.executionPolicy.kind !== 'continuous' || !a.limits || typeof a.limits !== 'object' || Object.keys(a.limits).length !== 4 || !['modelCalls', 'toolCalls', 'totalTokens', 'durationMs'].every(key => Number.isSafeInteger(a.limits[key]) && a.limits[key] > 0) || a.limits.durationMs > 28800000) return false
+  }
   return typeof a.operationId === 'string' && /^[a-zA-Z0-9_.:-]{1,80}$/.test(a.operationId) &&
     typeof a.goal === 'string' && a.goal.trim().length > 0 && a.goal.length <= 4000 &&
     Array.isArray(a.completionCriteria) && a.completionCriteria.length >= 1 && a.completionCriteria.length <= 20 &&

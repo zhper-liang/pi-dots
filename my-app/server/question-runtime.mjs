@@ -8,6 +8,7 @@ const counters = ['modelCalls', 'toolCalls', 'totalTokens', 'unknownTokenCalls']
 
 // A question parks one input inside the existing Task, never a second execution slot.
 export async function parkQuestionInput(tx, card, item, { ChatInput, ChatQueue, admitNextInput, TaskCard }) {
+  if (item.continuousRoot) return
   if (!item.parked) {
     const skills = await tx.doc(TaskSkills, card.taskId)
     const usage = await tx.doc(CallUsage, card.taskId)
@@ -49,6 +50,7 @@ export async function restoreQuestionInput(tx, card, entryId) {
 }
 
 export async function enqueueQuestionInput(tx, card, item, { ChatInput, ChatQueue, TaskCard, admitNextInput }) {
+  if (item.continuousRoot) return
   if (!item.parked || item.resumeQueued) return
   const queue = await tx.doc(ChatQueue, card.taskId)
   // Resumptions precede normal FIFO messages, but retain their own arrival order.

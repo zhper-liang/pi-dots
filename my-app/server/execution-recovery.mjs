@@ -4,7 +4,7 @@ export function executionDisposition(record, slot, cancellation) {
   if (record.state.status === 'terminal' || cancellation) return 'ended'
   if (['waiting', 'completing'].includes(record.state.status)) return 'waiting'
   const checkpoint = record.state.checkpoint
-  if (['awaitApproval', 'awaitBlocker'].includes(checkpoint?.phase) || (checkpoint?.lastOutcome === 'limited' && slot.entryId == null)) return 'waiting'
+  if (['awaitApproval', 'awaitBlocker', 'continuousWait', 'continuousRetry'].includes(checkpoint?.phase) || (checkpoint?.lastOutcome === 'limited' && slot.entryId == null)) return 'waiting'
   if (checkpoint?.phase === 'awaitInput' && slot.entryId == null) return 'idle'
   return 'resumable'
 }

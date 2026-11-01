@@ -30,13 +30,18 @@ export async function readTaskHistory(tx, card, args, inputId, sets, { collect =
     ['pidot.model-reply', 'pidot.test-reply', 'pidot.model-error', 'pidot.test-error'].includes(item.kind) && item.data.inReplyTo < inputId).map((item) => item.data.inReplyTo))
   consumed.add(inputId)
   const visible = entries.filter((item) => (item.kind === 'pidot.user' && consumed.has(item.id)) || (['pidot.blocker-reported', 'pidot.blocker-resolved', 'pidot.approval-requested', 'pidot.approval-decided', 'pidot.approval-executed'].includes(item.kind) && consumed.has(item.data.inReplyTo)) || item.byTaskId === card.taskId && consumed.has(item.data.inReplyTo) &&
-    ['pidot.tool-result', 'pidot.model-tool-turn', 'pidot.model-reply', 'pidot.test-reply', 'pidot.context-compaction', 'pidot.steer-applied'].includes(item.kind))
+    ['pidot.tool-result', 'pidot.model-tool-turn', 'pidot.model-reply', 'pidot.test-reply', 'pidot.context-compaction', 'pidot.steer-applied', 'pidot.continuous-stage', 'pidot.continuous-decision', 'pidot.continuous-work'].includes(item.kind))
   const deniedInputs=card.kind==='group'||card.forkSource?await deniedGroupInputs(tx,card,entries,{...(await import('./tasks.mjs')),bots:(await tx.doc((await import('./bot-directory.mjs')).BotDirectory)).items}):new Set()
   const realAllowed = await (await import('./feishu-calendar.mjs')).feishuTaskAllowed(tx, card, sets)
   const sourceAllowed = (entry, seen = new Set()) => {
     if (card.externalMcpHistoryFloor && entry.id < card.externalMcpHistoryFloor && entry.kind !== 'pidot.user') return false
     if (!realAllowed && entry.kind !== 'pidot.user') return false
     if(entry.kind!=='pidot.user'&&(deniedInputs.has(entry.data.inReplyTo)||deniedInputs.size&&entry.kind==='pidot.context-compaction'))return false
+    if (entry.kind.startsWith('pidot.continuous-')) {
+      // Stage text can summarize any earlier source from this root input. Fail closed
+      // if one of those sources has since lost its current read authorization.
+      return entries.filter(item => item.kind === 'pidot.tool-result' && item.data.inReplyTo === entry.data.inReplyTo && item.id < entry.id && ![HISTORY_TOOL, 'tool_result_read'].includes(item.data.toolName)).every(item => sourceAllowed(item, new Set(seen)))
+    }
     if (entry.kind !== 'pidot.tool-result') return true
     if (SHARED_TOOLS.includes(entry.data.toolName)) return false // Shared content must be re-read through live scope/version checks.
     if (seen.has(entry.id)) return false

@@ -5,6 +5,7 @@ import { parseEnv } from 'node:util'
 import { stream } from '@earendil-works/pi-ai/api/openai-completions'
 import { DEFAULT_CALL_LIMITS } from './tools.mjs'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
+import { safeRetryMetadata } from './continuous-retry.mjs'
 
 // OpenAI-compatible function names exclude dots; MCP names remain canonical.
 const toModelTool = name => WORKSPACE_TOOLS.includes(name) ? name.replace('.', '_') : name
@@ -92,7 +93,7 @@ export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fet
     }
     const maxOutputTokens = parameters.maxOutputTokens ?? 4096
     if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 32768) throw new ModelReplyError('MODEL_CONFIG_UNAVAILABLE')
-    let status, sent, responseModel, receivedExecution, usageKnown = false
+    let status, retryAfter, responseAt, networkCode, sent, responseModel, receivedExecution, usageKnown = false
     const controller = new AbortController()
     const abort = () => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
@@ -116,7 +117,18 @@ export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fet
       ] }), {
         apiKey: config.apiKey, signal: controller.signal, timeoutMs: parameters.requestTimeoutMs, maxTokens: maxOutputTokens, maxRetries: 0,
         ...(reasoning ? { reasoningEffort: parameters.thinkingLevel } : {}),
-        fetch: async (url, init) => { const result = await fetchImpl(url, { ...init, redirect: 'error' }); status = result.status; return result },
+        fetch: async (url, init) => {
+          try {
+            const result = await fetchImpl(url, { ...init, redirect: 'error' })
+            status = result.status
+            retryAfter = result.headers.get('retry-after')
+            responseAt = Date.now()
+            return result
+          } catch (error) {
+            networkCode = error?.code ?? error?.cause?.code
+            throw error
+          }
+        },
         onPayload: (payload) => {
           // DeepSeek's thinking extension is not part of Chat Completions.
           // Strict GPT gateways reject it even when explicitly disabled.
@@ -173,12 +185,11 @@ export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fet
           stopReason: 'toolUse', usage, timestamp: Date.now() } } : {}), reply: { role: 'assistant', content: redactText(text) },
         execution: { ...sent, ...(responseModel ? { responseModel } : {}), finishReason: response.stopReason, usage } }
     } catch (error) {
-      if (timedOut) throw new ModelReplyError('MODEL_TIMEOUT')
-      if (error instanceof ModelReplyError) {
-        if (receivedExecution) error.execution = receivedExecution
-        throw error
-      }
-      throw new ModelReplyError(signal?.aborted ? 'MODEL_ABORTED' : 'MODEL_FAILED')
+      const failure = timedOut ? new ModelReplyError('MODEL_TIMEOUT') : error instanceof ModelReplyError ? error : new ModelReplyError(signal?.aborted ? 'MODEL_ABORTED' : 'MODEL_FAILED')
+      if (receivedExecution) failure.execution = receivedExecution
+      // Keep retry classification separate from user text and credential-bearing transport errors.
+      failure.retryMetadata = safeRetryMetadata({ status, retryAfter, networkCode, now: responseAt ?? Date.now() })
+      throw failure
     } finally {
       clearTimeout(timer)
       signal?.removeEventListener('abort', abort)

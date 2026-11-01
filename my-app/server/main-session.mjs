@@ -74,8 +74,18 @@ export async function ensureMainSession(tx, botId, deps) {
   return existing ?? createMainSession(tx, botId, deps)
 }
 
-export function mainSessionService({ TaskCard, ChatInput, createTask }) {
-  const create = (tx, card, call, entryId) => derive(tx, card, { entryId, ...call.arguments })
+export function mainSessionService({ TaskCard, ChatInput, createTask, continuousService }) {
+  const create = async (tx, card, call, entryId) => {
+    if (call.arguments.executionPolicy?.kind === 'continuous') {
+      if ((await tx.doc(ChatInput, card.taskId)).entryId !== entryId) fail(409, 'CONTINUOUS_ORIGIN_DENIED', '只能从当前活动输入启动持续目标。')
+      const a = call.arguments
+      const receipt = await continuousService.start(tx, { requestId: `${card.taskId}:${entryId}:${a.operationId}`,
+        origin: { kind: 'main', taskId: card.taskId, sourceMessageId: entryId }, goal: a.goal,
+        completionCriteria: a.completionCriteria, limits: a.limits })
+      return { ok: true, data: { ...receipt, taskId: receipt.rootTaskId, status: 'running', notice: '已启动独立持续目标；主会话可继续交流。' } }
+    }
+    return derive(tx, card, { entryId, ...call.arguments })
+  }
   // Shared by task_create and finding actions (PLAN §8.2 "处理"): same snapshot, brief and limits.
   async function derive(tx, card, a) {
     const entryId = a.entryId, doc = await tx.doc(MainSessions)
@@ -158,7 +168,9 @@ export async function markMainChildOver(tx, childCard, outcome, content = null, 
   }
   // D-20: a "帮我想办法" card shows its conclusion (user-facing system card only; never model context, I-08).
   const result = childCard.findingAssist && outcome === 'succeeded' && typeof content === 'string' && content.trim() ? { result: content.length > 500 ? `${content.slice(0, 500)}…` : content } : {}
-  await mirrorToMain(tx, childCard, { mirrorKind: 'finished', outcome, summary: `任务「${childCard.title}」${OUTCOME[outcome] ?? outcome}`, ...result })
+  if (childCard.executionPolicy?.kind !== 'continuous' || outcome !== 'succeeded') {
+    await mirrorToMain(tx, childCard, { mirrorKind: 'finished', outcome, summary: `任务「${childCard.title}」${OUTCOME[outcome] ?? outcome}`, ...result })
+  }
   // Result mirror and fixed evidence commit together; the idle worker owns all writing.
   if (outcome === 'succeeded' && evidenceRefs.length) await enqueueMemoryEvidence(tx, { botId: childCard.bot.id, sourceTaskId: childCard.taskId, refs: evidenceRefs, trigger: 'task-result', revision: overAt, dueAt: Date.now() + 3600000 })
   // PLAN §8.5 "本 Bot 的派生 Task 结束" routine trigger.

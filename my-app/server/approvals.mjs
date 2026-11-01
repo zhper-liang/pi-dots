@@ -140,21 +140,35 @@ export async function finishManagementApproval(tx, card, item, execute) {
   else result = await execute()
   return saveApprovalReceipt(tx, card, item, result)
 }
-export async function waitForApproval(runtime, id, ctx) {
+export async function waitForApproval(runtime, id, ctx, { rootTaskId } = {}) {
   const watch = await runtime.watchDoc(TaskApprovals, runtime.taskId, ctx)
+  const { TaskProgress, ContinuousBudget } = await import('./continuous-task.mjs')
+  const { AutomationPause } = await import('./policy.mjs')
+  const progress = rootTaskId ? await runtime.watchDoc(TaskProgress, rootTaskId, ctx) : null
+  const budget = rootTaskId ? await runtime.watchDoc(ContinuousBudget, rootTaskId, ctx) : null
+  const automation = rootTaskId ? await runtime.watchDoc(AutomationPause, ctx) : null
   const {watchRootStop}=await import('./collaboration.mjs')
   const rootStop=await watchRootStop(runtime,ctx)
-  let abort
+  let abort, timer
   try {
-    await Promise.race([rootStop.promise,new Promise((resolve, reject) => {
+    return await Promise.race([rootStop.promise,new Promise((resolve, reject) => {
       abort = () => reject(runtime.signal.reason ?? new Error('Invocation stopped'))
       runtime.signal.addEventListener('abort', abort, { once: true })
       if (runtime.signal.aborted) { abort(); return }
       const check = (state) => { if (state?.items.some((item) => item.id === id && (item.receipt || (item.operation ? ['completed', 'retry'].includes(item.operation.resolution?.outcome) : item.decision && (item.decision.decision !== 'inserted' || item.insertion))))) resolve() }
+      const control = () => {
+        if (!progress) return
+        if (progress.value.pendingGoalRevision || progress.value.finalOutcome || ['pause', 'cancel'].includes(progress.value.controlIntent?.action) || automation.value.paused) return resolve({ controlChanged: true })
+        clearTimeout(timer)
+        const remaining = Date.parse(budget.value.deadlineAt) - Date.now()
+        if (remaining <= 0) resolve({ controlChanged: true })
+        else if (Number.isFinite(remaining)) timer = setTimeout(control, Math.min(remaining, 2147483647))
+      }
+      progress?.start(control); budget?.start(control); automation?.start(control); control()
       check(watch.value); watch.start(async (state) => { check(state) })
       void watch.closed.then(() => reject(new Error('Approval watch closed')))
     })])
-  } finally { runtime.signal.removeEventListener('abort', abort); await watch.stop(); await rootStop.stop() }
+  } finally { clearTimeout(timer); runtime.signal.removeEventListener('abort', abort); await watch.stop(); await progress?.stop(); await budget?.stop(); await automation?.stop(); await rootStop.stop() }
 }
 // The intent commits BEFORE dispatch; only an explicit tool guarantee can permit safe recovery.
 export function validApprovalBinding(card, item) {

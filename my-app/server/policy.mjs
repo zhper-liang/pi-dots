@@ -16,7 +16,7 @@ export const automationPauseTool = Object.freeze({ name: AUTOMATION_PAUSE_TOOL,
 export const validAutomationPauseArgs = call => !call.argumentsError && call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments) &&
   Object.keys(call.arguments).every(k => k === 'reason') && (call.arguments.reason === undefined || typeof call.arguments.reason === 'string' && call.arguments.reason.length <= 200)
 
-const READ_AND_INTERNAL = new Set(['bash', 'read', 'write', 'edit', 'calendar_read_schedule', 'calendar_read_event', 'calendar_feishu_read_schedule', 'calendar_feishu_read_event', 'calendar_feishu_freebusy',
+const READ_AND_INTERNAL = new Set(['work_plan', 'work_submit', 'work_complete', 'bash', 'read', 'write', 'edit', 'calendar_read_schedule', 'calendar_read_event', 'calendar_feishu_read_schedule', 'calendar_feishu_read_event', 'calendar_feishu_freebusy',
   'tool_result_read', 'task_history_read', 'session_search', 'session_history_read', 'memory_read', 'memory_edit', 'memory_review', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'workspace.list', 'workspace.get', 'workspace.operation_status',
   'collaborators_list', 'bot_inspect', 'shared_read', 'task_status', AUTOMATION_PAUSE_TOOL,
   'report_blocker', 'blocker_resolve', 'blocker_escalate', 'task_assign', 'task_review', 'shared_publish', 'shared_link', 'task_create'])

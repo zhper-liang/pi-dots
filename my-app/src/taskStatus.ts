@@ -4,6 +4,7 @@ import type { Mood } from './bot-mood.mjs'
 
 export type StatusTask = {
   botLifecycle?: string
+  continuous?: { state: string } | null
   cancellation?: unknown
   activeInputId: number | null
   waiting?: { kind?: string } | null
@@ -18,6 +19,22 @@ export type StatusTone = 'neutral' | 'busy' | 'attention' | 'danger' | 'muted'
 /** label and tone are the words and color; mood picks the bot's face (bot-mood.mjs). */
 export function taskStatus(task: StatusTask, sending = false): { label: string; tone: StatusTone; mood: Mood } {
   const checkpoint = task.runtime.checkpoint
+  if (task.continuous) {
+    const states: Record<string, { label: string; tone: StatusTone; mood: Mood }> = {
+      running: { label: '进行中', tone: 'busy', mood: 'thinking' },
+      pausing: { label: '正在暂停', tone: 'attention', mood: 'waiting' },
+      paused: { label: '已暂停', tone: 'muted', mood: 'resting' },
+      waiting: { label: '等待中', tone: 'attention', mood: 'waiting' },
+      limited: { label: '已到上限', tone: 'attention', mood: 'limited' },
+      blocked: { label: '遇到阻碍', tone: 'attention', mood: 'waiting' },
+      failed: { label: '执行失败', tone: 'danger', mood: 'error' },
+      cancelled: { label: '已停止', tone: 'muted', mood: 'resting' },
+      completed: { label: '已完成', tone: 'neutral', mood: 'done' },
+      revising: { label: '正在调整目标', tone: 'attention', mood: 'waiting' },
+      retrying: { label: '等待重试', tone: 'attention', mood: 'waiting' }
+    }
+    return states[task.continuous.state] ?? { label: '状态待确认', tone: 'muted', mood: 'waiting' }
+  }
   if (sending) return { label: '正在发送…', tone: 'busy', mood: 'thinking' }
   if (task.botLifecycle === 'inactive') return { label: '已停用', tone: 'muted', mood: 'resting' }
   if (Boolean(task.cancellation) || task.runtime.outcome?.status === 'aborted') return { label: '已取消', tone: 'muted', mood: 'resting' }

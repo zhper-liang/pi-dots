@@ -15,6 +15,7 @@ import {listBots} from './bots.mjs'
 import {TaskApprovals,requestCalendarApproval} from './approvals.mjs'
 import {TaskBlockers} from './blockers.mjs'
 import {readMockEvent} from './tools.mjs'
+import {assertNotCancelled} from './cancellation.mjs'
 const cfg={baseUrl:'https://fixture.invalid/v1',model:'review-fixture',apiKey:'fixture'}
 const text=content=>({mode:'model',reply:{content},execution:{usage:{totalTokens:5}}})
 let seq=0
@@ -23,7 +24,7 @@ const assignment={operationId:'one-child',botId:'calendar',goal:'模拟两版交
 const abortable=signal=>new Promise((resolve,reject)=>{const abort=()=>reject(signal.reason);signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort()})
 async function until(s,id,fn){for(let i=0;i<500;i++){const t=await s.get(id);if(fn(t))return t;await delay(10)}assert.fail(JSON.stringify((await s.get(id)).runtime))}
 const service=s=>collaborationService({TaskCard,ChatInput,bots:s.bots(),createTask:(tx,input,creationConversationId)=>createChatTask(tx,input,{ChatTask,TaskCard,ChatInput,ChatQueue,creationConversationId,configuredModels:[]})})
-const decide=(s,p,r,changes={})=>s.harness.commit(async tx=>service(s).review(tx,await tx.doc(TaskCard,p),{name:REVIEW_TOOL,arguments:{operationId:'decision-1',childTaskId:r.childTaskId,rootWorkId:r.rootWorkId,revision:r.result?.revision??1,expectedState:'submitted',decision:'accept',reason:'满足全部标准',...changes}},r.parentInputId),context)
+const decide=(s,p,r,changes={})=>s.harness.commit(async tx=>{await assertNotCancelled(tx,p,await tx.task(p));return service(s).review(tx,await tx.doc(TaskCard,p),{name:REVIEW_TOOL,arguments:{operationId:'decision-1',childTaskId:r.childTaskId,rootWorkId:r.rootWorkId,revision:r.result?.revision??1,expectedState:'submitted',decision:'accept',reason:'满足全部标准',...changes}},r.parentInputId)},context)
 async function fixture(t,{automatic=false,childTools=[],premature=false,readBeforeReview=false,childLimit}={}) {
  const dir=await mkdtemp(join(tmpdir(),'pidot-review-04-')),file=join(dir,'test.sqlite'),stores=new Set();let parentCalls=0,childCalls=0
  const modelReply=async(_m,o)=>{

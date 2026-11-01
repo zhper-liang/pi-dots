@@ -24,17 +24,25 @@ export function validBlockerArgs(args) {
 }
 export async function reportBlocker(tx, card, args, entryId, turnId, callId) {
   const state = await tx.doc(TaskBlockers, card.taskId)
-  if (state.items.some(item => item.status === 'pending' && item.inReplyTo === entryId)) return { ok: false, error: { code: 'TASK_BLOCKED', message: '请先处理原待办问题。' } }
+  const continuousRoot = card.executionPolicy?.kind === 'continuous' && card.executionPolicy.rootTaskId === card.taskId
+  const { TaskProgress } = await import('./continuous-task.mjs')
+  const progress = continuousRoot ? await tx.doc(TaskProgress, card.taskId) : null
+  const step = progress?.steps.find(row => row.stepId === progress.currentStepId)
+  if (continuousRoot && (!step || step.kind === 'verify' || step.status !== 'active')) return { ok: false, error: { code: 'CONTINUOUS_STEP_INVALID', message: '只能对当前执行步骤提出必要问题。' } }
+  if (state.items.some(item => item.status === 'pending' && item.inReplyTo === entryId && (!continuousRoot || item.continuousBinding?.goalRevision === progress.goalRevision && item.continuousBinding?.stepId === step.stepId))) return { ok: false, error: { code: 'TASK_BLOCKED', message: '请先处理原待办问题。' } }
   const {Collaboration}=await import('./collaboration.mjs')
   const relation = (await tx.doc(Collaboration)).items.find(r=>r.childTaskId===card.taskId && r.childInputId===entryId)
   if (args.assignee === 'supervisor' && !relation) return {ok:false,error:{code:'BLOCKER_HANDLER_DENIED',message:'此Task没有绑定主管。'}}
   const assignee=relation ? 'supervisor':'user'
   const item = { taskId: card.taskId, conversationId: card.conversationId, inReplyTo: entryId, turnId, callId,
+    ...(continuousRoot ? { continuousBinding: { rootTaskId: card.taskId, rootInputId: entryId, goalRevision: progress.goalRevision,
+      planRevision: progress.planRevision, stepId: step.stepId, submissionRevision: step.submissionRevision }, continuousRoot: true } : relation?.continuousBinding ? { continuousBinding: clone(relation.continuousBinding) } : {}),
     ...(args.questions ? { questions: clone(args.questions) } : {}), question: args.question, requiredInformation: args.requiredInformation, assignee, status: 'pending', version:1, ...(relation ? {rootWorkId:relation.rootWorkId,parentTaskId:relation.parentTaskId,supervisorBotId:relation.supervisorBotId}:{}), history:[{action:'reported',assignee,createdAt:new Date().toISOString()}],
     createdAt: new Date().toISOString(), answer: null }
   const audit = await tx.appendEntry(card.conversationId, { kind: 'pidot.blocker-reported', data: item })
   const blocker = { ...item, id: audit.id }
   state.items.push(blocker); state.activeId = blocker.id
+  if (step) step.status = 'blocked'
   await notifyBlocker(tx, relation, blocker)
   return { ok: true, data: { blockerId: blocker.id, taskId: card.taskId, status: assignee==='user'?'waiting-for-user':'waiting-for-supervisor',
     assignee, version:1, notice: '具体问题已保存在对应Task待办中，等待该事项当前处理人回答。' } }
@@ -43,21 +51,42 @@ export async function reportBlocker(tx, card, args, entryId, turnId, callId) {
 // Same watch mechanism as ChatInput: durable checkpoint, no polling/model calls.
 export async function waitForBlocker(runtime, id, ctx, ChatQueue) {
   const watch = await runtime.watchDoc(TaskBlockers, runtime.taskId, ctx)
+  const continuous = watch.value.items.find(item => item.id === id)?.continuousRoot
+  const { TaskProgress, ContinuousBudget } = await import('./continuous-task.mjs')
+  const progressWatch = continuous ? await runtime.watchDoc(TaskProgress, runtime.taskId, ctx) : null
+  const budgetWatch = continuous ? await runtime.watchDoc(ContinuousBudget, runtime.taskId, ctx) : null
   const {watchRootStop}=await import('./collaboration.mjs')
   const rootStop=await watchRootStop(runtime,ctx)
   const queueWatch = ChatQueue ? await runtime.watchDoc(ChatQueue, runtime.taskId, ctx) : null
-  let abort
+  let abort, timer
   try {
     await Promise.race([rootStop.promise,new Promise((resolve, reject) => {
       abort = () => reject(runtime.signal.reason ?? new Error('Invocation stopped'))
       runtime.signal.addEventListener('abort', abort, { once: true })
       if (runtime.signal.aborted) { abort(); return }
-      const check = (value) => { if (value?.items.some((item) => item.id === id && item.status !== 'pending')) resolve() }
+      const check = (value) => {
+        if (value?.items.some((item) => item.id === id && item.status !== 'pending')) return resolve()
+        if (!progressWatch) return
+        const progress = progressWatch.value
+        if (progress.controlIntent || progress.pendingGoalRevision || progress.finalOutcome) return resolve()
+        const pending = new Set(value.items.filter(item => item.status === 'pending' && item.continuousBinding?.goalRevision === progress.goalRevision).map(item => item.continuousBinding.stepId))
+        if (progress.steps.some(step => step.goalRevision === progress.goalRevision && step.kind !== 'verify' && ['pending', 'active', 'blocked'].includes(step.status) && !pending.has(step.stepId) && step.dependsOn.every(dep => progress.steps.find(other => other.stepId === dep)?.status === 'verified'))) resolve()
+      }
       check(watch.value); watch.start(async (value) => { check(value) })
+      progressWatch?.start(() => check(watch.value))
+      if (budgetWatch) {
+        const checkDeadline = () => {
+          clearTimeout(timer)
+          const remaining = Date.parse(budgetWatch.value.deadlineAt) - Date.now()
+          if (remaining <= 0) resolve()
+          else if (Number.isFinite(remaining)) timer = setTimeout(checkDeadline, Math.min(remaining, 2147483647))
+        }
+        budgetWatch.start(checkDeadline); checkDeadline()
+      }
       if (queueWatch) { const queued = value => { if (value?.entryIds.length) resolve() }; queued(queueWatch.value); queueWatch.start(async value => queued(value)) }
       void watch.closed.then(() => reject(new Error('Blocker watch closed')))
     })])
-  } finally { runtime.signal.removeEventListener('abort', abort); await watch.stop(); await queueWatch?.stop(); await rootStop.stop() }
+  } finally { clearTimeout(timer); runtime.signal.removeEventListener('abort', abort); await watch.stop(); await progressWatch?.stop(); await budgetWatch?.stop(); await queueWatch?.stop(); await rootStop.stop() }
 }
 export function blockerApi({ harness, context, TaskCard, ChatInput, ChatQueue, admitNextInput, get, bots, collaboration, afterQuestionAction }) {
   return {
@@ -129,6 +158,15 @@ export async function resolveInformation(tx,deps,id,blockerId,input,actor) {
  }
  const source=actor?'supervisor':'authenticated-user'
  const action=input.action ?? 'resolve'
+ let continuousProgress, continuousStep
+ if(item.continuousRoot) {
+  const {TaskProgress}=await import('./continuous-task.mjs')
+  continuousProgress=await tx.doc(TaskProgress,id)
+  continuousStep=continuousProgress.steps.find(step=>step.stepId===item.continuousBinding.stepId)
+  if(item.continuousBinding.rootTaskId!==id||item.continuousBinding.rootInputId!==card.executionPolicy?.rootInputId||item.continuousBinding.goalRevision!==card.taskState.goalRevision||!continuousStep||continuousStep.goalRevision!==card.taskState.goalRevision) reject('BLOCKER_VERSION_CONFLICT','问题属于已修订的目标，不能用旧回答推进新目标。')
+  if(!['resolve','skip'].includes(action)) reject('CONTINUOUS_CONTROL_REQUIRED','请使用持续目标控制修改或取消整个目标。')
+  if(input.version!==(item.status==='pending'?item.version:item.answer?.expectedVersion)||input.inReplyTo!==item.inReplyTo) reject('BLOCKER_VERSION_CONFLICT','持续步骤问题须绑定精确问题版本与原输入。')
+ }
  if (actor && action !== 'resolve' || relation && ['cancel', 'adjust'].includes(action)) reject('BLOCKER_HANDLER_DENIED','受管子任务仅接受原处理人的回答。')
  if (input.version !== undefined && item.status === 'pending' && input.version !== item.version || input.inReplyTo !== undefined && input.inReplyTo !== item.inReplyTo) reject('BLOCKER_VERSION_CONFLICT','问题版本或原请求不匹配。')
  let content=input.answer, answers
@@ -151,7 +189,8 @@ export async function resolveInformation(tx,deps,id,blockerId,input,actor) {
  if(item.assignee!==(actor?'supervisor':'user')) reject('BLOCKER_HANDLER_DENIED','只有当前处理人可以回答。')
  if(relation && (input.version!==item.version || input.rootWorkId!==item.rootWorkId || input.inReplyTo!==item.inReplyTo)) reject('BLOCKER_VERSION_CONFLICT','工作、输入或事项版本不匹配。')
  const waiting=state.activeId===blockerId && record.state.checkpoint?.phase==='awaitBlocker' && record.state.checkpoint.blockerId===blockerId && record.state.checkpoint.entryId===item.inReplyTo && (await tx.doc(deps.ChatInput,id)).entryId===item.inReplyTo
- if((!item.parked && !waiting) || item.taskId!==id || item.conversationId!==card.conversationId || !['pending','running'].includes(record.state.status)) reject('BLOCKER_UNAVAILABLE','原问题已不再可处理。')
+ const continuousWaiting=item.continuousRoot&&continuousStep?.status==='blocked'&&(await tx.doc(deps.ChatInput,id)).entryId===item.inReplyTo
+ if((!item.parked && !waiting && !continuousWaiting) || item.taskId!==id || item.conversationId!==card.conversationId || !['pending','running'].includes(record.state.status)) reject('BLOCKER_UNAVAILABLE','原问题已不再可处理。')
  const answer={blockerId,taskId:id,inReplyTo:item.inReplyTo,question:item.question,content,source,action,...(answers?{answers}:{}),expectedVersion:item.version,createdAt:new Date().toISOString(),...(actor?{actorTaskId:actor.taskId}: {})}
  const audit=await tx.appendEntry(card.conversationId,{kind:'pidot.blocker-resolved',data:answer})
  if (action === 'cancel') {
@@ -163,6 +202,7 @@ export async function resolveInformation(tx,deps,id,blockerId,input,actor) {
  item.status=action==='cancel'?'cancelled':action==='adjust'?'superseded':action==='skip'?'skipped':'resolved';item.version=(item.version??1)+1;item.answer={...answer,id:audit.id};if(state.activeId===blockerId)state.activeId=null
  item.history??=[];item.history.push({action:'resolved',assignee:item.assignee,source,createdAt:answer.createdAt})
  await notifyBlocker(tx,relation,item)
+ if(continuousStep) continuousStep.status='pending'
  if (item.parked) await (await import('./question-runtime.mjs')).enqueueQuestionInput(tx,card,item,deps)
 }
 export async function executeBlockerAction(tx,deps,actor,call) {

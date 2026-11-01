@@ -1,4 +1,6 @@
 import { defineDoc } from '@earendil-works/pi-durable'
+import { resolveContinuousSource } from './continuous-origin.mjs'
+const isContinuousTask=card=>card?.executionPolicy?.kind==='continuous'
 export const GroupResultSources=defineDoc({kind:'pidot.group-result-sources',version:1,scope:'task',initial:()=>({inputs:{}})})
 import { TaskInputError } from './task-config.mjs'
 
@@ -21,7 +23,7 @@ export async function projectGroupResult(tx, card, relation, result, services) {
   try {
     if((await tx.task(relation.parentTaskId))?.state.status==='terminal')throw new TaskInputError(409,'SHARED_DENIED','原工作已停止。')
     const parent=await tx.doc(services.TaskCard,relation.parentTaskId)
-    const group=await (await import('./groups.mjs')).assertGroupTask(tx,parent)
+    const {group,source}=await resolveContinuousSource(tx,parent,services)
     if(!group || group.groupId!==relation.groupId || !group.memberBotIds.includes(relation.executorBotId) || ![relation.parentTaskId,relation.childTaskId].includes(card.taskId)) throw new TaskInputError(409,'SHARED_DENIED','结果来源不可访问。')
     const {assertBotActive}=await import('./bot-directory.mjs')
     await assertBotActive(tx,parent.bot.id);await assertBotActive(tx,relation.executorBotId)
@@ -31,7 +33,7 @@ export async function projectGroupResult(tx, card, relation, result, services) {
     const childCard = await tx.doc(services.TaskCard, relation.childTaskId), access = await tx.doc(ToolAccess)
     const childSets = toolSets(childCard, services.bots, access), readerSets = toolSets(card, services.bots, access)
     const { workspaceShareAllowed, workspaceHistoryAllowed } = await import('./workspace-grants.mjs')
-    if (!workspaceShareAllowed(childCard, card, access) || !await workspaceHistoryAllowed(tx, childCard, childSets) || !await workspaceHistoryAllowed(tx, card, readerSets) || !await feishuTaskAllowed(tx, childCard, childSets) || !await feishuTaskAllowed(tx, card, readerSets) || childSets.resources.filter(isFeishuResource).some(r => !readerSets.resources.includes(r))) throw new TaskInputError(409, 'SHARED_DENIED', '真实日历来源不可访问。')
+    if (!workspaceShareAllowed(source,childCard,access) || !await workspaceHistoryAllowed(tx,source,toolSets(source,services.bots,access)) || !workspaceShareAllowed(childCard, card, access) || !await workspaceHistoryAllowed(tx, childCard, childSets) || !await workspaceHistoryAllowed(tx, card, readerSets) || !await feishuTaskAllowed(tx, childCard, childSets) || !await feishuTaskAllowed(tx, card, readerSets) || childSets.resources.filter(isFeishuResource).some(r => !readerSets.resources.includes(r))) throw new TaskInputError(409, 'SHARED_DENIED', '真实日历来源不可访问。')
     const refs=result.sources??[]
     if(refs.length) {
       const child=await tx.doc(services.TaskCard,relation.childTaskId), service=(await import('./shared-information.mjs')).sharedInformationService(services)
@@ -41,7 +43,7 @@ export async function projectGroupResult(tx, card, relation, result, services) {
     return result
   } catch(error) {
     if(!(error instanceof TaskInputError))throw error
-    return {...result,content:'当前来源、版本或共享权限不足；受限结果已隐藏。',visibility:'permission-denied',sources:(result.sources??[]).map(({recordId,version})=>({recordId,version})),basis:undefined}
+    return {...result,content:'当前来源、版本或共享权限不足；受限结果已隐藏。',visibility:'permission-denied',...(relation.continuousBinding?{evidenceRefs:undefined}:{}),sources:(result.sources??[]).map(({recordId,version})=>({recordId,version})),basis:undefined}
   }
 }
 export async function projectGroupRelations(tx,card,relations,services) {
@@ -55,7 +57,7 @@ export async function projectGroupRelations(tx,card,relations,services) {
 }
 
 export async function deniedGroupInputs(tx,card,entries,services) {
-  if(card.kind!=='group'&&!card.forkSource)return new Set()
+  if(card.kind!=='group'&&!card.forkSource&&!isContinuousTask(card))return new Set()
   const relations=(await tx.doc((await import('./collaboration.mjs')).Collaboration)).items
   const inputs=new Set(entries.filter(e=>e.kind==='pidot.shared-context').map(e=>e.data.inReplyTo)),denied=new Set()
   for(const r of relations.filter(r=>r.groupId&&r.parentTaskId===card.taskId)) {

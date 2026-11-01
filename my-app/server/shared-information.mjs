@@ -1,4 +1,4 @@
-import { assertGroupTask } from './groups.mjs'
+import { resolveContinuousSource } from './continuous-origin.mjs'
 import { defineDoc } from '@earendil-works/pi-durable'
 import { createHash } from 'node:crypto'
 import { Collaboration } from './collaboration.mjs'
@@ -28,7 +28,7 @@ export function sharedInformationService({TaskCard,ChatInput,bots}) {
   const root=await tx.doc(TaskCard,relations[0].parentTaskId)
   await assertNotCancelled(tx,root.taskId,await tx.task(root.taskId));await assertBotActive(tx,root.bot.id)
   if(!toolSets(root,bots,await tx.doc(ToolAccess)).authorized.includes('task_assign'))fail('SHARED_DENIED','主管协作权限已撤销。')
-  const group=await assertGroupTask(tx,root)
+  const {group}=await resolveContinuousSource(tx,root,{TaskCard,ChatInput,bots})
   if(group) {
    if(relations.some(r=>r.groupId!==group.groupId||r.parentTaskId!==root.taskId||!group.memberBotIds.includes(r.executorBotId)) || card.taskId!==root.taskId&&!relations.some(r=>r.childTaskId===card.taskId&&r.executorBotId===card.bot.id))fail('SHARED_DENIED','群共享身份或同根关系不匹配。')
   } else if(relations.some(r=>r.groupId)||card.kind==='group'||card.forkSource)fail('SHARED_DENIED','群与私聊来源不匹配。')

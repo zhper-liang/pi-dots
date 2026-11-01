@@ -27,6 +27,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 | `PIDOT_API_PORT` | 可选，默认 `3001`，范围 `1–65535`。 |
 | `PIDOT_DB_PATH` | 可选 SQLite 文件路径；默认 `my-app/data/pidot.sqlite`，不随启动 cwd 改变。相对自定义路径按 cwd 解析。 |
 | `PIDOT_MEMORY_LEARNING` | 可选 `1` / `0`，默认 `1`。启用逐会话空闲与压缩触发的持久整理和同 Bot Skill 学习；`0` 停消费但保留队列、显式工具与已有文件。记忆页可单独暂停/恢复。 |
+| `PIDOT_CONTINUOUS_TASKS` | 可选 `1` / `0`，默认 `1`。`0` 拒绝新持续目标，并让已有目标停在安全边界；进度和取消能力保留。重新开启不清除用户手动暂停，不重置根额度或截止时间。 |
 | `PIDOT_MEMORY_FILES` | 可选 `1` / `0`，默认 `1`。`1` 时人格、记忆和共享偏好保存在数据库同目录的 `bot-workspaces/` 下，可直接编辑；`0` 回到只用内部记录，先导入一次未同步的手改。见[运行手册](../docs/engineering/operations.md#文件式记忆的开关与回滚r2)。 |
 | `PIDOT_WORKSPACE_MCP_URL` | 可选，workspace-mcp 的地址，默认 `http://127.0.0.1:8000/mcp`，只接受本机地址。只在服务端配置，不存进连接，模型和界面都改不了。见[运行手册](../docs/engineering/operations.md#google-连接与-workspace-mcpr3)。 |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | 可选，Google OAuth 桌面应用客户端；设置后设置页的客户端配置只读。也可在设置页填写，保存在数据库同目录的 0600 凭据文件。 |

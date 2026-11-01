@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { mkdir, open, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 
 const text = (maxLength) => ({ type: 'string', maxLength })
 const path = { ...text(4096), minLength: 1, description: '文件路径；相对路径从当前机器人的工作目录解析，也可使用绝对路径。' }
@@ -116,10 +116,11 @@ export function createNativeRuntime({ root }) {
       if (call.name === 'bash') return await runBash(args, args.cwd ? resolve(cwd, args.cwd) : cwd, signal)
       const file = resolve(cwd, args.path)
       if (call.name === 'read') {
-        const chars = Array.from(await readText(file)), offset = args.offset ?? 0
+        const fullText = await readText(file), chars = Array.from(fullText), offset = args.offset ?? 0
         if (offset > chars.length) return failure('READ_OFFSET_INVALID', 'offset 超出文件内容。')
         const part = clip(chars.slice(offset, offset + (args.limit ?? 2048)).join(''))
-        return { ok: true, data: { content: part.text, offset, nextOffset: offset + part.length < chars.length ? offset + part.length : null, totalCharacters: chars.length } }
+        return { ok: true, data: { content: part.text, offset, nextOffset: offset + part.length < chars.length ? offset + part.length : null,
+          totalCharacters: chars.length, sha256: createHash('sha256').update(fullText).digest('hex') } }
       }
       const previous = edits.get(file) ?? Promise.resolve()
       const work = previous.catch(() => {}).then(async () => {

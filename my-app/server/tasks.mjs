@@ -1,3 +1,10 @@
+import { CONTINUOUS_TOOLS, executeContinuousWork } from './continuous-plan.mjs'
+import { resolveContinuousOrigin, continuousOriginRoots } from './continuous-origin.mjs'
+import { continuousBudgetUsage, continuousModelTokenReservation, reserveContinuousAttempt, settleContinuousBudget, recoverContinuousReservations, raiseContinuousLimits, ContinuousBudgetError } from './continuous-budget.mjs'
+import { continuousDispatchState, applyContinuousControl, applyPendingContinuousGoal, readContinuousControlWatchKey, waitContinuousControlChange, recordContinuousControlChange, continuousBudgetBlockReason } from './continuous-control.mjs'
+import { buildContinuousContext, validateContinuousContext } from './continuous-context.mjs'
+import { TaskProgress, ContinuousOrigin, ContinuousBudget, CONTINUOUS_DOCUMENTS, isContinuousTask, createContinuousTaskService, projectContinuousTask } from './continuous-task.mjs'
+import { continuousBinding, assertContinuousDispatch, decideContinuousStep, stageContinuousReply, verifyContinuousStep, CONTINUOUS_REVIEW_PROMPT, continuousModelFailure, waitContinuousRetry } from './continuous-task-runtime.mjs'
 import { memoryTaskSourceAllowed, memoryEvidence, evidenceFingerprint, successfulMemoryTool } from './memory-evidence.mjs'
 import { learningState, evidenceKey, enqueueMemoryEvidence } from './memory-learning-queue.mjs'
 import { executeSessionHistory, SESSION_HISTORY_TOOLS } from './history-search.mjs'
@@ -38,7 +45,7 @@ import { SHARED_TOOLS } from './shared-tools.mjs'
 import { admitNextInput } from './task-creation.mjs'
 import { parkQuestionInput, restoreQuestionInput } from './question-runtime.mjs'
 import { collaborationOverview } from './collaboration-overview.mjs'
-import { Collaboration, collaborationService, waitForChildren, publishChildResult, acknowledgeBlockerNotice, watchRootStop } from './collaboration.mjs'
+import { Collaboration, collaborationService, resolveContinuousChildEvidence, waitForChildren, publishChildResult, acknowledgeBlockerNotice, watchRootStop } from './collaboration.mjs'
 import { COLLABORATION_TOOLS } from './collaboration-tools.mjs'
 import { createChatTask } from './task-creation.mjs'
 import { executeManagement, gateManagement } from './chief-management.mjs'
@@ -92,6 +99,7 @@ import { ToolAccess, CallUsage, CALENDAR_TOOL, toolSets, toolDefinitions, toolCa
 export { TaskInputError } from './task-config.mjs'
 
 // Who may decide an approval: the signed-in user, or an allow rule (tool group on).
+const copyCheckpoint = value => JSON.parse(JSON.stringify(value))
 const APPROVAL_SOURCES = ['authenticated-user', 'policy-rule']
 const CapabilityHostApprovals = defineDoc({ kind: 'pidot.capability-host-approvals', version: 1, scope: 'session', initial: () => ({ items: {} }) })
 const ExternalMcpRemovals = defineDoc({ kind: 'pidot.external-mcp-removals', version: 1, scope: 'session', initial: () => ({ requests: {} }) })
@@ -115,6 +123,77 @@ export const ChatQueue = defineDoc({
   kind: 'pidot.chat-queue', version: 1, scope: 'task', initial: () => ({ entryIds: [] }),
 })
 
+const continuousRootId = card => isContinuousTask(card) ? card.executionPolicy.rootTaskId : card.collaboration?.continuousBinding?.rootTaskId
+const toolBudgetId = (card, turnId, callId) => `tool:${card.taskId}:${turnId}:${payloadHash(callId)}`
+
+async function continuousOwner(tx, card) {
+  const rootTaskId = continuousRootId(card)
+  if (!rootTaskId) return null
+  if (!isContinuousTask(card)) {
+    const relation = (await tx.doc(Collaboration)).items.find(item => item.childTaskId === card.taskId)
+    if (!relation?.continuousBinding || JSON.stringify(relation.continuousBinding) !== JSON.stringify(card.collaboration?.continuousBinding) || relation.parentTaskId !== rootTaskId || relation.childInputId !== card.collaboration.childInputId) throw new TaskInputError(409, 'CONTINUOUS_BUDGET_BINDING', '执行者真实委派关系与根预算不一致。')
+  }
+  const root = rootTaskId === card.taskId ? card : await tx.doc(TaskCard, rootTaskId)
+  return { root, rootTaskId, rootInputId: root.executionPolicy?.rootInputId,
+    goalRevision: isContinuousTask(card) ? card.taskState.goalRevision : card.collaboration.continuousBinding.goalRevision }
+}
+
+async function continuousGuard(tx, card, entryId, enabled = true) {
+  const owner = await continuousOwner(tx, card)
+  if (!owner) return null
+  await resolveContinuousOrigin(tx, owner.root, { TaskCard, ChatInput })
+  const state = await continuousDispatchState(tx, owner.root, owner.rootInputId, { enabled })
+  if (!state.allowed) {
+    if (state.state === 'limited') throw new ContinuousBudgetError(state.reason)
+    const error = new TaskInputError(409, 'CONTINUOUS_DISPATCH_STOPPED', '持续目标已停止下一次派发；原回执仍会保存。')
+    error.control = state
+    throw error
+  }
+  if (owner.goalRevision !== owner.root.taskState.goalRevision) throw new TaskInputError(409, 'CONTINUOUS_REVISION_CONFLICT', '执行者属于旧目标修订，不能继续派发。')
+  if (isContinuousTask(card) && entryId !== owner.rootInputId) throw new TaskInputError(409, 'CONTINUOUS_INPUT_CLOSED', '持续目标原始输入绑定不一致。')
+  return owner
+}
+
+async function reserveWorkAttempt(tx, card, entryId, { attemptId, kind, purpose, parameters = card.parameters }, enabled = true) {
+  const owner = await continuousGuard(tx, card, entryId, enabled)
+  if (!owner) return null
+  const reservation = await reserveContinuousAttempt(tx, { rootTaskId: owner.rootTaskId, taskId: card.taskId,
+    inputId: entryId, goalRevision: owner.goalRevision, attemptId, kind, purpose,
+    ...(kind === 'model' ? { tokenReservation: continuousModelTokenReservation(parameters) } : {}) }, { TaskCard, enabled })
+  if (!reservation.dispatch) throw new ContinuousBudgetError('attempt-outcome-unknown')
+  return { rootTaskId: owner.rootTaskId, taskId: card.taskId, attemptId }
+}
+
+async function settleWorkAttempt(tx, card, attemptId, usage, budgetOverride) {
+  const rootTaskId = continuousRootId(card)
+  if (!rootTaskId || !attemptId) return
+  const budget = budgetOverride ?? await tx.doc(ContinuousBudget, rootTaskId)
+  if (!budget.attempts?.[attemptId]) return
+  return settleContinuousBudget(budget, { rootTaskId, taskId: card.taskId, attemptId, usage })
+}
+
+async function holdContinuous(tx, card, checkpoint, reason, state = 'paused') {
+  const owner = await continuousOwner(tx, card)
+  if (!owner) throw new Error('Continuous wait needs a root owner')
+  const resumeCheckpoint = checkpoint.phase === 'continuousWait' ? checkpoint.resumeCheckpoint : copyCheckpoint(checkpoint)
+  if (state === 'limited') {
+    const progress = await tx.doc(TaskProgress, owner.rootTaskId)
+    let tokenReservation = 0
+    if (reason === 'totalTokens' && resumeCheckpoint?.phase === 'reply') {
+      try { tokenReservation = continuousModelTokenReservation(card.parameters) } catch { /* unavailable bound remains a separate limit */ }
+    }
+    const localUsage = await tx.doc(CallUsage, card.taskId), localLimits = callLimits(card.parameters)
+    const rootUsage = continuousBudgetUsage(await tx.doc(ContinuousBudget, owner.rootTaskId))
+    const rootLimits = (await tx.doc(ContinuousBudget, owner.rootTaskId)).limits
+    const localOnly = ['modelCalls', 'toolCalls'].includes(reason) && localUsage[reason] >= localLimits[reason] && rootUsage[reason] < rootLimits[reason]
+    progress.budgetBlocked = { reason: localOnly ? `task-${reason}` : reason, taskId: card.taskId, tokenReservation }
+  }
+  return { status: 'running', checkpoint: { phase: 'continuousWait', entryId: checkpoint.entryId ?? owner.rootInputId,
+    rootTaskId: owner.rootTaskId, lastInputId: checkpoint.entryId ?? owner.rootInputId, waitingReason: reason, lastOutcome: state === 'limited' ? 'limited' : state === 'blocked' ? 'blocked' : 'paused',
+    resumeCheckpoint: resumeCheckpoint ?? { phase: 'continuousDecide', entryId: owner.rootInputId },
+    controlWatchKey: await readContinuousControlWatchKey(tx, owner.rootTaskId) } }
+}
+
 async function waitForInput(runtime, ctx) {
   await runtime.commit(async (tx) => { await tx.doc(ChatInput, runtime.taskId) }, ctx)
   const watch = await runtime.watchDoc(ChatInput, runtime.taskId, ctx)
@@ -135,10 +214,23 @@ async function waitForInput(runtime, ctx) {
   }
 }
 
-async function finishReply(tx, runtime, card, entryId, { mode, failed = false, content, execution, compactionPlan, errorCode, limited }) {
+async function finishReply(tx, runtime, card, entryId, { mode, failed = false, content, execution, compactionPlan, errorCode, limited, continuousFinal = false }) {
+  if (limited && !isContinuousTask(card) && continuousRootId(card)) {
+    await tx.appendEntry(card.conversationId, { kind: 'pidot.model-error', data: { role: 'error', content, mode, errorCode: errorCode ?? 'CALL_LIMIT_REACHED', inReplyTo: entryId, createdAt: new Date().toISOString() } })
+    return holdContinuous(tx, card, { phase: 'reply', entryId }, limited, 'limited')
+  }
+  if (isContinuousTask(card)) {
+    if (!failed && !limited && !continuousFinal) return stageContinuousReply(tx, card, entryId, { mode, content, execution })
+    if (limited) {
+      await tx.appendEntry(card.conversationId, { kind: 'pidot.model-error', data: { role: 'error', mode, content,
+        inReplyTo: entryId, errorCode: errorCode ?? 'CALL_LIMIT_REACHED', ...(execution ? { execution } : {}), createdAt: new Date().toISOString() } })
+      return holdContinuous(tx, card, { phase: 'reply', entryId }, limited, 'limited')
+    }
+    if (failed && !limited) (await tx.doc(TaskProgress, card.taskId)).finalOutcome = { status: 'failed', errorCode, content, goalRevision: card.taskState.goalRevision, completedAt: new Date().toISOString() }
+  }
   // Harness table reads precede appendEntry. Prepare result evidence before the final reply/mirror writes.
   const memoryResultRefs = []
-  if (!failed && !limited && card.mainParent) {
+  if (!failed && !limited && card.mainParent && !continuousFinal) {
     let cursor
     do { const page = await tx.scanEntries({ conversationId: card.conversationId, order: 'ascending' }, 100, cursor); for (const item of page.items) if (item.byTaskId === card.taskId && successfulMemoryTool(item)) memoryResultRefs.push({ taskId: card.taskId, entryId: item.id }); cursor = page.next } while (cursor)
   }
@@ -148,12 +240,13 @@ async function finishReply(tx, runtime, card, entryId, { mode, failed = false, c
   const inputCancelled = errorCode === 'INPUT_CANCELLED'
   if (inputCancelled) steering.pending = steering.pending.filter(item => item.targetInputId !== entryId)
   const inactive = (await tx.doc(BotDirectory)).items.find(b => b.id === card.bot.id)?.status === 'inactive'
-  const unresolvedChildren=inputCancelled ? [] : (await tx.doc(Collaboration)).items.filter(r=>r.parentTaskId===card.taskId&&r.parentInputId===entryId&&(!r.consumedEntryId || r.reviewRequired && !['accepted','cancelled','failed'].includes(r.businessStatus)))
+  const unresolvedChildren=inputCancelled ? [] : (await tx.doc(Collaboration)).items.filter(r=>r.parentTaskId===card.taskId&&r.parentInputId===entryId&&(!r.continuousBinding || r.continuousBinding.goalRevision===card.taskState.goalRevision)&&(!r.consumedEntryId || r.reviewRequired && !['accepted','cancelled','failed'].includes(r.businessStatus)))
   if (card.kind === 'group') {
     const rows=(await tx.doc(Collaboration)).items.filter(r=>r.parentTaskId===card.taskId&&r.parentInputId===entryId&&r.result)
     if(rows.length) content = rows.map(r=>`【原群消息 #${entryId} · childTaskId=${r.childTaskId} · task_id=${r.childTaskId} · 修订 #${r.result.revision} · ${r.businessStatus==='accepted'?'主管已验收':r.result.status==='submitted'?'submitted：待主管验收，非accepted':r.result.status}】`).join('\n')+'\n'+content
   }
   const continuing = !inactive && !limited && steering.pending.some((item) => item.targetInputId === entryId)
+  if (!continuing && !unresolvedChildren.length && !limited) await publishChildResult(tx, card.taskId, entryId, { status: failed ? 'failed' : 'submitted', content })
   await tx.appendEntry(card.conversationId, {
     kind: mode === 'model' ? (failed ? 'pidot.model-error' : 'pidot.model-reply') : (failed ? 'pidot.test-error' : 'pidot.test-reply'),
     data: { role: failed ? 'error' : 'assistant', content: unresolvedChildren.some(r=>r.reviewRequired && !['accepted','cancelled','failed'].includes(r.businessStatus)) ? `【主管验收未完成，不代表整体成功】\n${content}` : content, mode, inReplyTo: entryId, createdAt: new Date().toISOString(),
@@ -234,9 +327,25 @@ function assertOwnActiveBot(botId, catalog) {
 }
 
 function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(), toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, saveCancelledReceipt, saveCancelledToolReceipt, saveCancelledActionReceipt, dispatchCalendarWrite, recoverAction, queryCapability, dispatchForBot, managementModels, syncManagedCatalog, collaboration, harnessGuard, feishu, workspaceMcp, managementHooks = {}) {
+  const continuousServices = { bots, TaskCard, ChatInput,
+    resolveChildEvidence: (tx, card, ref, expected) => resolveContinuousChildEvidence(tx, card, ref, expected, { TaskCard, ChatInput, bots }) }
+  async function waitApproval(task, runtime, ctx) {
+    let rootTaskId
+    await runtime.commit(async tx => { rootTaskId = (await continuousOwner(tx, await tx.doc(TaskCard, runtime.taskId)))?.rootTaskId }, ctx)
+    const wake = await waitForApproval(runtime, task.state.checkpoint.approvalId, ctx, { rootTaskId })
+    if (!wake?.controlChanged) return false
+    await runtime.commit(async tx => {
+      if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
+      const card = await tx.doc(TaskCard, runtime.taskId)
+      if (isContinuousTask(card) && (await tx.doc(TaskProgress, rootTaskId)).pendingGoalRevision) return { status: 'running', checkpoint: { phase: 'continuousDecide', entryId: task.state.checkpoint.entryId } }
+      await continuousGuard(tx, card, task.state.checkpoint.entryId, managementHooks.continuous?.enabled !== false)
+      return { status: 'running', checkpoint: { ...task.state.checkpoint, controlWatchKey: await readContinuousControlWatchKey(tx, rootTaskId) } }
+    }, ctx)
+    return true
+  }
   async function executeExternalApproval(task, runtime, ctx) {
     const { approvalId, entryId } = task.state.checkpoint
-    await waitForApproval(runtime, approvalId, ctx)
+    if (await waitApproval(task, runtime, ctx)) return
     await managementHooks.external.refresh()
     let request
     const failure = (code, message, unknown = false) => ({ ok: false, error: { code, message, ...(unknown ? { unknown: true, retryable: false } : {}) } })
@@ -271,13 +380,16 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
       if (!check.ok) { await saveApprovalReceipt(tx, card, item, check); return next }
       await assertNotCancelled(tx, card.taskId, await tx.task(card.taskId))
       await collaboration.guard(tx, card.taskId)
+      await continuousGuard(tx, card, entryId, managementHooks.continuous?.enabled !== false)
       const verdict = await decide(tx, { botId: card.bot.id, tool: call.name, args: call.arguments }, { externalTool: external })
       if (verdict.effect === 'deny') { await saveApprovalReceipt(tx, card, item, failure('POLICY_DENIED', '当前规则禁止该外部操作。')); return next }
       const operation = { id: randomUUID(), taskId: card.taskId, approvalId, inReplyTo: entryId, binding: item.binding,
         toolName: call.name, arguments: structuredClone(call.arguments), createdAt: new Date().toISOString(), retryable: false }
+      const budgetAttempt = await reserveWorkAttempt(tx, card, entryId, { attemptId: `external:${card.taskId}:${operation.id}`, kind: 'tool', purpose: 'approved-external' }, managementHooks.continuous?.enabled !== false)
+      if (budgetAttempt) operation.budgetAttempt = budgetAttempt
       const intent = await tx.appendEntry(card.conversationId, { kind: 'pidot.action-dispatch-intent', data: operation })
       item.operation = { ...operation, intentEntryId: intent.id }; item.status = 'dispatching'
-      request = { card: JSON.parse(JSON.stringify(card)), call, args: structuredClone(call.arguments), entryId, turnId: item.turnId, external: JSON.parse(JSON.stringify(item.externalMcp)), operationId: operation.id }
+      request = { card: JSON.parse(JSON.stringify(card)), call, args: structuredClone(call.arguments), entryId, turnId: item.turnId, external: JSON.parse(JSON.stringify(item.externalMcp)), operationId: operation.id, budgetAttempt }
       return { status: 'running', checkpoint: { phase: 'awaitApproval', entryId, approvalId, waitingReason: 'external-mcp-dispatch', inFlight: { kind: 'external-mcp', operationId: operation.id } } }
     }, ctx)
     if (!request) return
@@ -307,6 +419,66 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
     name: 'pidot.chat', version: 1,
     initial: () => ({ phase: 'awaitInput' }),
     phases: {
+      continuousDecide: async (task, runtime, ctx) => runtime.commit(async tx => {
+        if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
+        return decideContinuousStep(tx, await tx.doc(TaskCard, runtime.taskId), task.state.checkpoint.entryId)
+      }, ctx),
+      continuousVerify: async (task, runtime, ctx) => runtime.commit(async tx => {
+        if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
+        const card = await tx.doc(TaskCard, runtime.taskId), entryId = task.state.checkpoint.entryId
+        await managementHooks.continuous?.validate?.(tx, card)
+        try { await assertContinuousDispatch(tx, card, entryId) } catch (error) {
+          if (!(error instanceof CallLimitError)) throw error
+          return finishReply(tx, runtime, card, entryId, { mode: card.parameters.mode, failed: true, errorCode: error.code, limited: error.kind, content: error.message })
+        }
+        const result = await verifyContinuousStep(tx, card, entryId, bots, continuousServices)
+        return result.checkpoint ?? finishReply(tx, runtime, card, entryId, { mode: card.parameters.mode, content: result.content, continuousFinal: true })
+      }, ctx),
+      continuousWait: async (task, runtime, ctx) => {
+        const checkpoint = task.state.checkpoint
+        let goalApplied = false
+        let skipWait = checkpoint.waitingReason === 'feature-disabled' && managementHooks.continuous?.enabled
+        await runtime.commit(async tx => {
+          const card = await tx.doc(TaskCard, runtime.taskId), owner = await continuousOwner(tx, card)
+          if (!owner) throw new Error('Continuous waiting root disappeared')
+          const progress = await tx.doc(TaskProgress, owner.rootTaskId)
+          if (managementHooks.continuous?.enabled && progress.controlIntent?.kind === 'feature-disabled') {
+            progress.controlIntent = null
+            skipWait = true
+          }
+          if (isContinuousTask(card) && progress.pendingGoalRevision) {
+            const changed = await applyPendingContinuousGoal(tx, card)
+            if (changed.applied) { skipWait = true; goalApplied = true }
+          }
+        }, ctx)
+        if (!skipWait) await waitContinuousControlChange(runtime, ctx, {
+          rootTaskId: checkpoint.rootTaskId ?? runtime.taskId,
+          observed: checkpoint.controlWatchKey ?? await runtime.commit(tx => readContinuousControlWatchKey(tx, checkpoint.rootTaskId ?? runtime.taskId), ctx),
+        })
+        await runtime.commit(async tx => {
+          if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
+          const card = await tx.doc(TaskCard, runtime.taskId), owner = await continuousOwner(tx, card)
+          const changed = isContinuousTask(card) ? await applyPendingContinuousGoal(tx, card) : { applied: false }
+          const state = await continuousDispatchState(tx, owner.root, owner.rootInputId, { enabled: managementHooks.continuous?.enabled !== false })
+          if (!state.allowed) return holdContinuous(tx, card, goalApplied || changed.applied ? { phase: 'continuousDecide', entryId: owner.rootInputId } : checkpoint, state.reason, state.state)
+          const resume = copyCheckpoint(checkpoint.resumeCheckpoint)
+          if (resume) delete resume.limited
+          return { status: 'running', checkpoint: goalApplied || changed.applied || skipWait && isContinuousTask(card) && !resume
+            ? { phase: 'continuousDecide', entryId: owner.rootInputId }
+            : resume ?? { phase: isContinuousTask(card) ? 'continuousDecide' : 'reply', entryId: checkpoint.entryId } }
+        }, ctx)
+      },
+      continuousRetry: async (task, runtime, ctx) => {
+        const checkpoint = task.state.checkpoint
+        const { due } = await waitContinuousRetry(runtime, ctx, checkpoint)
+        await runtime.commit(async tx => {
+          if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
+          const card = await tx.doc(TaskCard, runtime.taskId)
+          await continuousGuard(tx, card, checkpoint.entryId, managementHooks.continuous?.enabled !== false)
+          if (!due) return { status: 'running', checkpoint: { ...checkpoint, controlWatchKey: await readContinuousControlWatchKey(tx, checkpoint.rootTaskId) } }
+          return { status: 'running', checkpoint: { phase: 'reply', entryId: checkpoint.entryId } }
+        }, ctx)
+      },
       workflowUnknown: async (_task, runtime, ctx) => { await waitForInput(runtime, ctx) },
       capabilitySetup: (task, runtime, ctx) => managementHooks.capabilities.wait(task, runtime, ctx),
       awaitChildren: async (task, runtime, ctx) => {
@@ -336,7 +508,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
             if (validApprovalBinding(card, item) && await feishuTaskAllowed(tx, card, toolSets(card, bots, await tx.doc(ToolAccess)))) await saveApprovalReceipt(tx, card, item, item.operation.verifiedResult, 'feishu-readback')
           }
         }, ctx)
-        await waitForApproval(runtime, approvalId, ctx)
+        if (await waitApproval(task, runtime, ctx)) return
         let prepared, managedApproval = false
         await runtime.commit(async (tx) => {
           if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
@@ -371,6 +543,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
               verificationEntryId: resolution.id, note: resolution.note, independentlyVerified: false } }, 'authenticated-user-verification')
             return { status: 'running', checkpoint: { phase: 'reply', entryId, resolvedApprovalId: approvalId } }
           }
+          if (!item.receipt) await continuousGuard(tx, card, entryId, managementHooks.continuous?.enabled !== false)
           if (item.toolName === ROUTINE_PROPOSE_TOOL) {
             // PLAN §8.5 H card: the approved proposal becomes a plan in this same commit, created as
             // the authenticated user through the normal schedule path (limits, rule checks, snapshot).
@@ -394,7 +567,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
             })
             return { status: 'running', checkpoint: { phase: 'reply', entryId, resolvedApprovalId: approvalId } }
           }
-          let approvalLimit
+          let approvalLimit, approvalBudget
           const result = await finishCalendarApproval(tx, card, item, async () => {
             const turn = await tx.entry(item.turnId), record = await tx.task(runtime.taskId)
             const decision = await tx.entry(item.decision.id)
@@ -418,14 +591,17 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
               approvalLimit = usage.toolCalls >= limits.toolCalls ? 'toolCalls' : 'totalTokens'
               return { ok: false, error: { code: 'CALL_LIMIT_REACHED', message: `批准不增加调用额度；当前${approvalLimit}上限不足，未改期。` } }
             }
+            approvalBudget = await reserveWorkAttempt(tx, card, entryId, { attemptId: `approval:${card.taskId}:${item.id}:initial`, kind: 'tool', purpose: 'approved-write' }, managementHooks.continuous?.enabled !== false)
             usage.toolCalls += 1
             return { ok: true }
           }, queryCapability)
           if (result.prepared) {
             prepared = result.operation
+            if (approvalBudget) { prepared.budgetAttempt = approvalBudget; item.operation.budgetAttempt = approvalBudget }
             return { status: 'running', checkpoint: { phase: 'awaitApproval', entryId, approvalId, waitingReason: 'action-outcome-unknown',
               inFlight: { kind: 'write-tool', operationId: prepared.id, toolName: item.toolName }, lastOutcome: 'outcome-unknown' } }
           }
+          if (approvalBudget) await settleWorkAttempt(tx, card, approvalBudget.attemptId)
           return { status: 'running', checkpoint: { phase: 'reply', entryId, resolvedApprovalId: approvalId,
             ...(result.error?.code === 'CALL_LIMIT_REACHED' ? { limited: approvalLimit } : {}) } }
         }, ctx)
@@ -437,8 +613,10 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
         try {
           runtime.signal.throwIfAborted()
           result = await dispatchCalendarWrite(prepared, runtime.signal)
-        } catch {
+        } catch (error) {
           // A thrown transport/commit error cannot establish whether an effect occurred.
+          // A host rejection before transport is an exact refusal, not an uncertain write.
+          if (error.notDispatched && error instanceof TaskInputError) result = { ok: false, error: { code: error.code, message: error.message, notDispatched: true } }
         }
         if (runtime.signal.aborted) {
           if (result && typeof result.ok === 'boolean') await saveCancelledActionReceipt(runtime.taskId, approvalId, prepared.id, result)
@@ -472,6 +650,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           const state = await tx.doc(TaskBlockers, runtime.taskId)
           const card = await tx.doc(TaskCard, runtime.taskId), record = await tx.task(runtime.taskId)
           await assertBotActive(tx, card.bot.id)
+          if (isContinuousTask(card)) return { status: 'running', checkpoint: { phase: 'continuousDecide', entryId } }
           await guardBlocker(tx,{TaskCard,ChatInput,bots,collaboration},runtime.taskId)
           const item = state.items.find((item) => item.id === blockerId)
           if (item?.status === 'pending' && !item.rootWorkId && (await tx.doc(ChatQueue, runtime.taskId)).entryIds.length) {
@@ -500,7 +679,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           const question = (await tx.doc(TaskBlockers, runtime.taskId)).items.find(item => item.inReplyTo === entryId && item.answer?.action === 'cancel')
           if (question) return finishReply(tx, runtime, card, entryId, { mode: card.parameters.mode, failed: true, errorCode: 'INPUT_CANCELLED', content: '已取消这次请求。' })
           if (!restored && card.kind === 'main') await beginMainInput(tx, card, entryId, { TaskCard })
-          return { status: 'running', checkpoint: { phase: 'reply', entryId } }
+          return { status: 'running', checkpoint: { phase: isContinuousTask(card) ? 'continuousDecide' : 'reply', entryId } }
         }, ctx)
       },
 
@@ -576,6 +755,10 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
               }
             }
             modelContext = await buildTaskContext(tx, card, entryId, { bots, skillDirectory })
+            if (isContinuousTask(card)) {
+              modelContext.continuous = await buildContinuousContext(tx, card, entryId, continuousServices)
+              modelContext.systemPrompt += modelContext.continuous.prompt + CONTINUOUS_REVIEW_PROMPT
+            }
             if (commanded) modelContext.systemPrompt += commanded.ok
               ? `\n用户这条消息指定用 Skill「${entry.data.skillId}」处理，完整规则已加载（见上方活动 Skill），不必再调用 skill_activate。`
               : `\n用户这条消息指定的 Skill「${entry.data.skillId}」没能加载（${commanded.error?.message ?? '未知原因'}）。先告诉用户没有按这个 Skill 处理，再尽量按普通方式回答。`
@@ -597,9 +780,17 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           const mode = card.parameters.mode === 'model' ? 'model' : 'test'
           let content, execution, errorCode, limited
           let failed = false
-          let compactionPlan
+          let compactionPlan, modelAttempt, modelFailure
           try {
-            let displayed = [], resources = [], externalTools = []
+            let displayed = [], resources = [], externalTools = [], modelBinding
+            await runtime.commit(async tx => {
+              await assertContinuousDispatch(tx, card, entryId)
+              if (mode !== 'model' && isContinuousTask(card)) {
+                const usage = await tx.doc(CallUsage, card.taskId)
+                checkModelLimit(usage, card.parameters)
+                usage.modelCalls += 1
+              }
+            }, ctx)
             if (mode === 'model') {
               await runtime.commit(async (tx) => {
                 if (await isCancelled(tx, runtime.taskId)) { stopped = true; await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
@@ -615,6 +806,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
               // Every Bot holds every group: offer only tools usable here. A delegated child cannot
               // delegate again (COLLABORATION_DEPTH_DENIED), so it is not offered task_assign.
               const definitions = toolDefinitions(modelVisible(displayed, resources).filter(n => !(card.collaboration && n === 'task_assign')), { externalTools })
+              displayed = displayed.filter(name => definitions.some(tool => tool.name === name))
               if (definitions.length) modelContext.tools = definitions
               modelContext.systemPrompt = withCurrentCapabilities(modelContext.systemPrompt, definitions.map(tool => tool.name), resources)
               await runtime.commit(async (tx) => {
@@ -628,29 +820,38 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                 const usage = await tx.doc(CallUsage, runtime.taskId)
                 if (task.state.checkpoint.limited) throw new CallLimitError(task.state.checkpoint.limited)
                 checkModelLimit(usage, card.parameters)
-                displayed = toolSets(card, bots, await tx.doc(ToolAccess)).displayed
+                const freshDisplayed = toolSets(card, bots, await tx.doc(ToolAccess)).displayed
+                displayed = displayed.filter(name => freshDisplayed.includes(name))
+                if (isContinuousTask(card) && !await validateContinuousContext(tx, await tx.doc(TaskCard, card.taskId), modelContext.continuous, continuousServices)) throw new TaskInputError(403, 'CONTINUOUS_SOURCE_DENIED', '当前阶段来源已变化，停止使用旧投影。')
+                if (isContinuousTask(card)) modelBinding = continuousBinding(card, await tx.doc(TaskProgress, card.taskId))
+                else modelBinding = card.collaboration?.continuousBinding
+                modelAttempt = await reserveWorkAttempt(tx, card, entryId, { attemptId: `model:${card.taskId}:${usage.modelCalls + 1}`,
+                  kind: 'model', purpose: compactionPlan ? 'context-compaction' : modelBinding && (await tx.doc(TaskProgress, modelBinding.rootTaskId)).steps.find(step => step.stepId === modelBinding.stepId)?.kind === 'verify' ? 'verify' : 'reply',
+                  parameters: compactionPlan ? { ...card.parameters, maxOutputTokens: compactionPlan.policy.summaryTokens } : card.parameters }, managementHooks.continuous?.enabled !== false)
                 usage.modelCalls += 1
                 // Reserved before dispatch; failed/unknown calls still consume a model attempt.
                 usage.unknownTokenCalls += 1
                 return { status: 'running', checkpoint: { ...task.state.checkpoint,
-                  inFlight: { kind: 'model', attempt: usage.modelCalls, purpose: compactionPlan ? 'context-compaction' : 'reply' } } }
+                  inFlight: { kind: 'model', attempt: usage.modelCalls, ...(modelAttempt ? { budgetAttempt: modelAttempt } : {}), ...(modelBinding ? { continuousBinding: modelBinding } : {}), purpose: compactionPlan ? 'context-compaction' : 'reply' } } }
               }, ctx)
             }
             if (stopped) return
             runtime.signal.throwIfAborted()
             const result = mode === 'model'
               ? await modelReply(compactionPlan ? '压缩已消费历史，保留工作进展和未解决事项。' : entry.data.content, {
-                taskId: card.taskId, parametersBotId: card.bot.id, parameters: compactionPlan ? { ...card.parameters, maxOutputTokens: compactionPlan.policy.summaryTokens } : card.parameters,
+                taskId: card.taskId, budgetAttempt: modelAttempt, parametersBotId: card.bot.id, parameters: compactionPlan ? { ...card.parameters, maxOutputTokens: compactionPlan.policy.summaryTokens } : card.parameters,
                 context: compactionPlan ? {...compactionPlan.context,sharedVersions:modelContext.sharedVersions,groupResults:modelContext.groupResults} : modelContext, signal: runtime.signal,
                 purpose: compactionPlan ? 'context-compaction' : 'reply' })
               : await reply(entry.data.content, { signal: runtime.signal, botId: card.bot.id })
-            receipt = { mode, result, displayed, purpose: compactionPlan ? 'context-compaction' : 'reply' }
+            receipt = { mode, result, displayed, ...(modelAttempt ? { budgetAttempt: modelAttempt } : {}), ...(modelBinding ? { continuousBinding: modelBinding } : {}), purpose: compactionPlan ? 'context-compaction' : 'reply' }
             if(harnessGuard) await harnessGuard(runtime.taskId)
 
             if (runtime.signal.aborted) throw runtime.signal.reason
             if (result?.mode !== mode || typeof result.reply?.content !== 'string') throw new Error('Invalid reply')
             if (mode === 'model') {
               await runtime.commit(async (tx) => {
+                await settleWorkAttempt(tx, card, modelAttempt?.attemptId, result.execution?.usage)
+                if (continuousRootId(card)) (await tx.doc(TaskProgress, card.taskId)).retry = null
                 if (await isCancelled(tx, runtime.taskId)) { stopped = true; await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
                 const usage = await tx.doc(CallUsage, runtime.taskId)
                 const tokens = result.execution?.usage?.totalTokens
@@ -674,7 +875,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                   if (!result.assistant || result.toolCalls.length > 16) throw new Error('Invalid tool turn')
                   const turn = await tx.appendEntry(card.conversationId, {
                     kind: 'pidot.model-tool-turn', data: { role: 'assistant', content: result.reply.content,
-                      assistant: result.assistant, execution: result.execution, displayed, inReplyTo: entryId, createdAt: new Date().toISOString() },
+                      assistant: result.assistant, execution: result.execution, displayed, ...(modelBinding ? { continuousBinding: modelBinding } : {}), inReplyTo: entryId, createdAt: new Date().toISOString() },
                   })
                   await acknowledgeBlockerNotice(tx,runtime.taskId,entryId)
                   return { status: 'running', checkpoint: { phase: 'tools', entryId, turnId: turn.id, callIndex: 0 } }
@@ -700,17 +901,19 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           } catch (error) {
             if(receipt?.result&&harnessGuard) await harnessGuard(runtime.taskId)
             if (['COLLABORATION_STOPPED','COLLABORATION_NOT_AUTHORIZED','REVIEW_NOT_AUTHORIZED'].includes(error.code)) throw error
-            receipt ??= { mode, error, purpose: compactionPlan ? 'context-compaction' : 'reply' }
+            modelFailure = error
+            receipt ??= { mode, error, ...(modelAttempt ? { budgetAttempt: modelAttempt } : {}), purpose: compactionPlan ? 'context-compaction' : 'reply' }
             if (runtime.signal.aborted) throw runtime.signal.reason
             failed = true
             // A receipt commit can fail after transport succeeded. Keep its real
             // usage for the error checkpoint rather than losing it on rollback.
-            execution = error instanceof ModelReplyError && error.execution ? error.execution : receipt?.result?.execution
+            execution = (error instanceof ModelReplyError || error.notDispatched) && error.execution ? error.execution : receipt?.result?.execution
             limited = error instanceof CallLimitError ? error.kind : undefined
             errorCode = limited ? error.code : mode === 'model' ? (error instanceof ModelReplyError || error.code === 'CONTEXT_CAPACITY_EXCEEDED' ? error.code : 'MODEL_FAILED') : 'TEST_FAILED'
             content = limited ? error.message : mode === 'model' ? MODEL_ERRORS[errorCode] : '测试回复执行失败，请发送新消息重试。'
           }
           await runtime.commit(async (tx) => {
+            if (modelAttempt && !receipt?.usageSaved) await settleWorkAttempt(tx, card, modelAttempt.attemptId, execution?.usage)
             if (await isCancelled(tx, runtime.taskId)) { stopped = true; await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
             if (failed && execution && !receipt?.usageSaved) {
               const usage = await tx.doc(CallUsage, runtime.taskId)
@@ -722,6 +925,16 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                   if (Number.isSafeInteger(value) && value >= 0) usage[key] = (usage[key] ?? 0) + value
                 }
               }
+            }
+            if (['CONTINUOUS_DISPATCH_STOPPED', 'CONTINUOUS_ORIGIN_DENIED', 'CONTINUOUS_REVISION_CONFLICT'].includes(modelFailure?.code)) return holdContinuous(tx, card, { phase: 'reply', entryId }, modelFailure.control?.reason ?? modelFailure.code, modelFailure.control?.state ?? 'blocked')
+            if (modelFailure && modelAttempt && !limited) {
+              const retry = await continuousModelFailure(tx, card, entryId, modelFailure, modelAttempt)
+              if (retry?.status) {
+                await tx.appendEntry(card.conversationId, { kind: 'pidot.model-error', data: { role: 'error', mode,
+                  content, errorCode, execution: execution ?? {}, inReplyTo: entryId, retrying: true, attemptId: modelAttempt.attemptId, createdAt: new Date().toISOString() } })
+                return retry
+              }
+              if (retry?.limited) { limited = retry.limited; errorCode = 'CALL_LIMIT_REACHED'; content = `持续目标受限：${limited}。已保存原调用与进度。` }
             }
             return finishReply(tx, runtime, card, entryId, { mode, failed, content, execution, compactionPlan, errorCode, limited })
           }, ctx)
@@ -745,6 +958,11 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           if (slot.entryId !== entryId || turn?.byTaskId !== runtime.taskId || turn.conversationId !== card.conversationId ||
             turn.kind !== 'pidot.model-tool-turn' || turn.data.inReplyTo !== entryId) throw new Error('Invalid tool turn ownership')
           const calls = turn.data.assistant.content.filter((block) => block.type === 'toolCall')
+          if (isContinuousTask(card) && JSON.stringify(turn.data.continuousBinding) !== JSON.stringify(continuousBinding(card, await tx.doc(TaskProgress, card.taskId)))) {
+            for (const skipped of calls.slice(callIndex)) await appendToolReceipt(tx, { card, continuousBinding: turn.data.continuousBinding, call: skipped, entryId, turnId }, { ok: false,
+              error: { code: 'TOOL_SKIPPED_WORK_BOUNDARY', message: '目标、计划或步骤已改变；旧批次剩余调用未执行，请读取当前阶段重新决定。' } })
+            return { status: 'running', checkpoint: { phase: 'reply', entryId } }
+          }
           const steering = await tx.doc(ChatSteering, runtime.taskId)
           if (steering.pending.some((item) => item.targetInputId === entryId)) {
             // Close the old tool protocol before adding the user directive. Calls not
@@ -765,9 +983,9 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           const call = calls[callIndex]
           if (!call) throw new Error('Missing tool call')
           if (task.state.checkpoint.inFlight?.kind === 'native-tool') {
-            await appendToolReceipt(tx, { card, call, entryId, turnId }, { ok: false,
+            await appendToolReceipt(tx, { card, continuousBinding: turn.data.continuousBinding, call, entryId, turnId }, { ok: false,
               error: { code: 'NATIVE_OUTCOME_UNKNOWN', message: '原生操作已登记派发，但没有保存结果；请核对实际状态，不自动重复执行。', retryable: false } })
-            for (const skipped of calls.slice(callIndex + 1)) await appendToolReceipt(tx, { card, call: skipped, entryId, turnId }, { ok: false,
+            for (const skipped of calls.slice(callIndex + 1)) await appendToolReceipt(tx, { card, continuousBinding: turn.data.continuousBinding, call: skipped, entryId, turnId }, { ok: false,
               error: { code: 'TOOL_SKIPPED_UNKNOWN', message: '前一步结果未确认，跳过旧计划剩余调用；请核对状态后重新规划。' } })
             return { status: 'running', checkpoint: { phase: 'reply', entryId } }
           }
@@ -810,10 +1028,19 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
               call, displayed: [...turn.data.displayed, call.name], sets, priorEventIds })
           // I-03: every call is checked against the policy registry; unregistered tools never run.
           if (result.ok && !registeredPolicyTool(call.name, sets)) result = { ok: false, error: { code: 'POLICY_UNREGISTERED', message: '工具未登记风险等级，拒绝执行。' } }
+          await collaboration.guard(tx, card.taskId)
           let limit = limited
-          if (usage.toolCalls >= limits.toolCalls || (limits.totalTokens !== undefined &&
+          if (continuousRootId(card)) {
+            try {
+              await continuousGuard(tx, card, entryId, managementHooks.continuous?.enabled !== false)
+              if (!limit && usage.toolCalls < limits.toolCalls && !(limits.totalTokens !== undefined && (usage.unknownTokenCalls > 0 || usage.totalTokens >= limits.totalTokens))) {
+                await reserveWorkAttempt(tx, card, entryId, { attemptId: toolBudgetId(card, turnId, call.id), kind: 'tool', purpose: call.name }, managementHooks.continuous?.enabled !== false)
+              }
+            } catch (error) { if (!(error instanceof CallLimitError)) throw error; limit = error.kind }
+          }
+          if (limit || usage.toolCalls >= limits.toolCalls || (limits.totalTokens !== undefined &&
             (usage.unknownTokenCalls > 0 || usage.totalTokens >= limits.totalTokens))) {
-            limit = usage.toolCalls >= limits.toolCalls ? 'toolCalls' : 'totalTokens'
+            limit ??= usage.toolCalls >= limits.toolCalls ? 'toolCalls' : 'totalTokens'
             result = { ok: false, error: { code: 'CALL_LIMIT_REACHED', message: `已达到 ${limit} 限制，工具未执行。` } }
           } else {
             usage.toolCalls += 1 // Counts every admitted attempt, including denied/invalid calls.
@@ -831,16 +1058,21 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                     executedAgain: false, notice: '复用压缩前本次输入已成功的相同操作回执，未重新执行业务操作。原文按entryId回读。' } }
                 } else if (writeVerdict?.effect === 'ask' && unattended(card.origin ?? (card.scheduledWorkflow ? 'routine' : 'user'))) {
                   result = { ok: true, data: { state: 'skipped', reason: writeVerdict.reason, notice: '已跳过：这一步需要你来做。' } }
+                } else if (CONTINUOUS_TOOLS.includes(call.name)) {
+                  try { result = await executeContinuousWork(tx, card, call, entryId, continuousServices) } catch (error) {
+                    if (!(error instanceof TaskInputError)) throw error
+                    result = { ok: false, error: { code: error.code, message: error.message } }
+                  }
                 } else if (CAPABILITY_MANAGEMENT_TOOLS.includes(call.name)) {
                   if (!managementHooks.capabilities?.enabled) result = { ok: false, error: { code: 'SETUP_UNAVAILABLE', message: '能力配置 Host 尚未启用。' } }
                   else {
-                    request = { card: JSON.parse(JSON.stringify(card)), call: structuredClone(call), entryId, turnId, callIndex, callCount: calls.length, remainingCalls: calls.slice(callIndex + 1).map(call => structuredClone(call)), capabilityManagement: true }
+                    request = { card: JSON.parse(JSON.stringify(card)), continuousBinding: turn.data.continuousBinding, call: structuredClone(call), entryId, turnId, callIndex, callCount: calls.length, remainingCalls: calls.slice(callIndex + 1).map(call => structuredClone(call)), capabilityManagement: true }
                     return { status: 'running', checkpoint: { phase: 'tools', entryId, turnId, callIndex, inFlight: { kind: 'capability-management', toolName: call.name } } }
                   }
                 } else if ((call.name === 'memory_review' || MEMORY_TOOLS.includes(call.name))) {
                   result = await managementHooks.memory.execute(tx, card, call, entryId)
                 } else if (NATIVE_TOOLS.includes(call.name)) {
-                  request = { card: JSON.parse(JSON.stringify(card)), call: structuredClone(call), args, native: true,
+                  request = { card: JSON.parse(JSON.stringify(card)), continuousBinding: turn.data.continuousBinding, call: structuredClone(call), args, native: true,
                     entryId, turnId, callIndex, callCount: calls.length, limit }
                   return { status: 'running', checkpoint: { phase: 'tools', entryId, turnId, callIndex,
                     inFlight: { kind: 'native-tool', callId: call.id, toolName: call.name } } }
@@ -880,7 +1112,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                   result = await managementHooks.routine.propose(tx, card, call, entryId, turnId)
                 } else if (MAIN_TOOLS.includes(call.name)) {
                   try { result = await managementHooks.main.execute(tx, card, call, entryId) } catch (error) {
-                    if (!(error instanceof TaskInputError) || !['MAIN_SESSION_ONLY', 'TOOL_INVALID_ARGUMENTS', 'MAIN_REQUEST_CONFLICT', 'BOT_INACTIVE', 'MAIN_CONCURRENCY_LIMIT', 'MAIN_TASK_NOT_OWNED'].includes(error.code)) throw error
+                    if (!(error instanceof TaskInputError) || !error.code.startsWith('CONTINUOUS_') && !['MAIN_SESSION_ONLY', 'TOOL_INVALID_ARGUMENTS', 'MAIN_REQUEST_CONFLICT', 'BOT_INACTIVE', 'MAIN_CONCURRENCY_LIMIT', 'MAIN_TASK_NOT_OWNED'].includes(error.code)) throw error
                     result = { ok: false, error: { code: error.code, message: error.message } }
                   }
                 } else if (MANAGEMENT_TOOLS.includes(call.name)) {
@@ -905,7 +1137,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                   }
                   result = await readToolResult(tx, card, args, sets)
                 } else {
-                  request = { card: JSON.parse(JSON.stringify(card)), call: structuredClone(call), args, isSchedule,
+                  request = { card: JSON.parse(JSON.stringify(card)), continuousBinding: turn.data.continuousBinding, call: structuredClone(call), args, isSchedule,
                     entryId, turnId, callIndex, callCount: calls.length, limit }
                   return { status: 'running', checkpoint: { ...task.state.checkpoint,
                     inFlight: { kind: 'read-tool', attempt: usage.toolCalls, callId: call.id, toolName: call.name } } }
@@ -922,19 +1154,25 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
               }
             }
           }
+          await settleWorkAttempt(tx, card, toolBudgetId(card, turnId, call.id))
           const createdAt = new Date().toISOString()
           result = await boundToolResult(tx, card, result, { toolName: call.name, callId: call.id, turnId, inReplyTo: entryId,
-            arguments: structuredClone(call.arguments), createdAt })
+            arguments: structuredClone(call.arguments), ...(turn.data.continuousBinding ? { continuousBinding: turn.data.continuousBinding } : {}), createdAt })
           const toolResult = { role: 'toolResult', toolCallId: call.id, toolName: call.name,
             content: [{ type: 'text', text: JSON.stringify(result) }], isError: !result.ok, timestamp: Date.parse(createdAt) }
           await tx.appendEntry(card.conversationId, { kind: 'pidot.tool-result', data: {
             role: 'tool', content: JSON.stringify(result), callId: call.id, toolName: call.name, arguments: call.arguments,
-            turnId, result, toolResult, inReplyTo: entryId, createdAt,
+            turnId, result, toolResult, ...(turn.data.continuousBinding ? { continuousBinding: turn.data.continuousBinding } : {}), inReplyTo: entryId, createdAt,
           } })
+          if (result.ok && CONTINUOUS_TOOLS.includes(call.name)) {
+            for (const skipped of calls.slice(callIndex + 1)) await appendToolReceipt(tx, { card, continuousBinding: turn.data.continuousBinding, call: skipped, entryId, turnId }, { ok: false,
+              error: { code: 'TOOL_SKIPPED_WORK_BOUNDARY', message: '工作计划、提交或完成请求已保存；旧批次剩余调用未执行，由新阶段重新决定。' } })
+            return { status: 'running', checkpoint: { phase: call.name === 'work_plan' ? 'reply' : 'continuousVerify', entryId } }
+          }
           if (([CALENDAR_WRITE_TOOL, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) || ([ 'bot_manage', ROUTINE_PROPOSE_TOOL, ...CAPABILITY_MANAGEMENT_TOOLS ].includes(call.name) || sets.externalTools?.some(tool => tool.name === call.name)) && result.data?.status === 'waiting-for-user-approval') && result.ok) {
             if (card.mainParent) await mirrorToMain(tx, card, { mirrorKind: 'approval', approvalId: result.data.approvalId, toolName: call.name, summary: summarizeApproval(card.bot.name, call.name, call.arguments) })
             await markDirty(tx, { sourceId: `task:${card.taskId}`, type: 'Approval', id: result.data.approvalId })
-            for (const skipped of calls.slice(callIndex + 1)) await appendToolReceipt(tx, { card, call: skipped, entryId, turnId }, { ok: false,
+            for (const skipped of calls.slice(callIndex + 1)) await appendToolReceipt(tx, { card, continuousBinding: turn.data.continuousBinding, call: skipped, entryId, turnId }, { ok: false,
               error: { code: 'TOOL_SKIPPED_APPROVAL', message: '等待具体操作审批；旧计划剩余调用跳过，决定后重新规划。' } })
             return { status: 'running', checkpoint: { phase: 'awaitApproval', entryId, approvalId: result.data.approvalId,
               waitingReason: 'user-approval', lastOutcome: 'approval-pending' } }
@@ -944,9 +1182,10 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
             await markDirty(tx, { sourceId: `task:${card.taskId}`, type: 'Blocker', id: result.data.blockerId })
             // Close the old protocol, but never execute actions planned before the answer.
             for (const skipped of calls.slice(callIndex + 1)) {
-              await appendToolReceipt(tx, { card, call: skipped, entryId, turnId }, { ok: false,
+              await appendToolReceipt(tx, { card, continuousBinding: turn.data.continuousBinding, call: skipped, entryId, turnId }, { ok: false,
                 error: { code: 'TOOL_SKIPPED_BLOCKER', message: '缺少必要信息，尚未执行的旧计划已跳过；收到对应回答后重新规划。' } })
             }
+            if (isContinuousTask(card)) return { status: 'running', checkpoint: { phase: 'continuousDecide', entryId } }
             return { status: 'running', checkpoint: { phase: 'awaitBlocker', entryId,
               blockerId: result.data.blockerId, waitingReason: 'user-blocker', lastOutcome: 'blocked' } }
           }
@@ -1038,6 +1277,7 @@ export const ChatTask = chatDefinition(createTestReply)
 
 async function archiveCancelledTask(tx, id) {
   const card = await tx.doc(TaskCard, id)
+  if (isContinuousTask(card)) (await tx.doc(TaskProgress, id)).finalOutcome ??= { status: 'cancelled', goalRevision: card.taskState.goalRevision, completedAt: new Date().toISOString() }
   if (card.mainParent) await markMainChildOver(tx, card, 'cancelled')
   await publishChildResult(tx, id, card.collaboration?.childInputId, { status: 'cancelled', content: '子任务已取消；已发生效果未回滚。' })
   const relation=(await tx.doc(Collaboration)).items.find(r=>r.childTaskId===id)
@@ -1048,7 +1288,7 @@ async function archiveCancelledTask(tx, id) {
   blockers.activeId=null
   }
   const documents = {}
-  for (const token of [TaskCard, ChatInput, ChatQueue, ChatSteering, TaskBlockers, TaskApprovals, CallUsage, TaskSkills, ContextCompaction, ToolResults, TaskCancellation]) {
+  for (const token of [TaskCard, ChatInput, ChatQueue, ChatSteering, TaskBlockers, TaskApprovals, CallUsage, TaskSkills, ContextCompaction, ToolResults, TaskCancellation, ...CONTINUOUS_DOCUMENTS]) {
     documents[token.definition.kind] = JSON.parse(JSON.stringify(await tx.doc(token, id)))
   }
   const archive = await tx.doc(CancelledTaskArchive, card.conversationId)
@@ -1057,12 +1297,14 @@ async function archiveCancelledTask(tx, id) {
 
 async function appendToolReceipt(tx, request, result, afterCancellation = false) {
   const { card, call, entryId, turnId } = request
+  const binding = request.continuousBinding
+  await settleWorkAttempt(tx, card, toolBudgetId(card, turnId, call.id), undefined, request.budgetOverride)
   const createdAt = new Date().toISOString()
   result = await boundToolResult(tx, card, result, { toolName: call.name, callId: call.id, turnId,
-    inReplyTo: entryId, arguments: structuredClone(call.arguments), createdAt })
+    inReplyTo: entryId, arguments: structuredClone(call.arguments), ...(binding ? { continuousBinding: binding } : {}), createdAt })
   await tx.appendEntry(card.conversationId, { kind: 'pidot.tool-result', data: {
     role: 'tool', content: JSON.stringify(result), callId: call.id, toolName: call.name, arguments: call.arguments,
-    turnId, result, inReplyTo: entryId, createdAt, ...(afterCancellation ? { afterCancellation: true, originTaskId: card.taskId } : {}),
+    turnId, result, ...(binding ? { continuousBinding: binding } : {}), inReplyTo: entryId, createdAt, ...(afterCancellation ? { afterCancellation: true, originTaskId: card.taskId } : {}),
     toolResult: { role: 'toolResult', toolCallId: call.id, toolName: call.name,
       content: [{ type: 'text', text: JSON.stringify(result) }], isError: !result.ok, timestamp: Date.parse(createdAt) },
   } })
@@ -1070,7 +1312,7 @@ async function appendToolReceipt(tx, request, result, afterCancellation = false)
 
 /** Test hooks stay in-process; never exposed as HTTP parameters. */
 export async function openTaskStore({ file, bots = listBots(), beforeCommit, reply = createTestReply, modelReply, modelSettings, readModelSettings = modelSettings?.read,
-  toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, memoryOptions = {}, memoryFiles: memoryFileOptions = {}, feishuClient = createFeishuClient(), google = null, toolGroupsMigration = true, r4Migration = false, readCapabilityCatalog = async () => [], externalMcp, capabilityManagementEnabled = false } = {}) {
+  toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, memoryOptions = {}, memoryFiles: memoryFileOptions = {}, feishuClient = createFeishuClient(), google = null, toolGroupsMigration = true, r4Migration = false, readCapabilityCatalog = async () => [], externalMcp, capabilityManagementEnabled = false, continuousEnabled = true } = {}) {
   if (!file) throw new Error('Task storage file is required')
   if (typeof readCapabilityCatalog !== 'function') throw new Error('Capability catalog reader must be a server-owned function')
   const nativeRuntime = createNativeRuntime({ root: resolve(dirname(file), 'bot-workspaces') })
@@ -1128,14 +1370,22 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     let recoverAction
     const controllers = new Map()
     const taskControllers = new Map()
-    async function dispatchForBot(botId, parentSignal, invoke, validate, taskId) {
-      let pending
+    async function dispatchForBot(botId, parentSignal, invoke, validate, taskId, budgetOptions) {
+      let pending, budgetAttempt = budgetOptions?.reservedAttempt, budgetCard
       const controller = new AbortController()
       const signal = AbortSignal.any([parentSignal, controller.signal])
       try {
         await harness.commit(async (tx) => {
           await assertBotActive(tx, botId)
           if (validate) await validate(tx)
+          if (taskId) {
+            budgetCard = await tx.doc(TaskCard, taskId)
+            const entryId = (await tx.doc(ChatInput, taskId)).entryId
+            await continuousGuard(tx, budgetCard, entryId, continuousEnabled)
+            if (budgetOptions?.reservedAttempt) budgetAttempt = budgetOptions.reservedAttempt
+            else if (budgetOptions) budgetAttempt = await reserveWorkAttempt(tx, budgetCard, entryId, { ...budgetOptions, kind: 'tool' }, continuousEnabled)
+            budgetCard = JSON.parse(JSON.stringify(budgetCard))
+          }
           signal.throwIfAborted()
           if (!controllers.has(botId)) controllers.set(botId, new Set())
           controllers.get(botId).add(controller)
@@ -1144,12 +1394,26 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
             controller.rootWorkId=relation?.rootWorkId??`${taskId}:${(await tx.doc(ChatInput,taskId)).entryId}`
             if(!taskControllers.has(taskId))taskControllers.set(taskId,new Set());taskControllers.get(taskId).add(controller)
           }
-          pending = Promise.resolve(invoke(signal)).then(value => ({ value }), error => ({ error }))
         }, context)
+        // The admission and any root reservation must be durable before transport can start.
+        signal.throwIfAborted()
+        pending = Promise.resolve().then(() => invoke(signal)).then(value => ({ value }), error => ({ error }))
         const outcome = await pending
         if (outcome.error) throw outcome.error
         return outcome.value
-      } finally { controllers.get(botId)?.delete(controller);taskControllers.get(taskId)?.delete(controller) }
+      } catch (error) {
+        if (!pending) error.notDispatched = true
+        throw error
+      } finally {
+        controllers.get(botId)?.delete(controller);taskControllers.get(taskId)?.delete(controller)
+        if (budgetAttempt) await harness.commit(async tx => {
+          // Admission may reject before loading the active card. The persisted reservation is
+          // already bound to its root/task; settlement needs no renewed dispatch authorization.
+          const receiptCard = budgetCard ?? { taskId: budgetAttempt.taskId,
+            collaboration: { continuousBinding: { rootTaskId: budgetAttempt.rootTaskId } } }
+          await settleWorkAttempt(tx, receiptCard, budgetAttempt.attemptId, undefined, await receiptBudget(tx, receiptCard))
+        }, context)
+      }
     }
     const workspaceMcpSessions = new Map()
     let workspaceMcp, resolveWorkspaceTask, workspaceWorkflows, workspaceSchedulerRef, mainService, mainDeps
@@ -1179,7 +1443,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       } catch (error) { if (!error.status) throw error; return { ok: false, error: { code: error.code, message: error.message } } }
     }
     let memoryService, memoryWorker, skillLearning, memoryFiles = null
-    const guardedModelReply = (message, options) => { memoryWorker?.interrupt(options.parametersBotId); return dispatchForBot(options.parametersBotId, options.signal, async signal => { const scheduled = options.taskId && (await harness.snapshot(TaskCard, options.taskId, context))?.scheduledWorkflow; if (scheduled) await workspaceScheduleOptions.boundary?.('model_request', { taskId: options.taskId }); await getMemorySecrets();
+    const guardedModelReply = (message, options) => { let sent = false; memoryWorker?.interrupt(options.parametersBotId); return dispatchForBot(options.parametersBotId, options.signal, async signal => { const scheduled = options.taskId && (await harness.snapshot(TaskCard, options.taskId, context))?.scheduledWorkflow; if (scheduled) await workspaceScheduleOptions.boundary?.('model_request', { taskId: options.taskId }); await getMemorySecrets();
       if (options.taskId) {
         const card = await harness.snapshot(TaskCard, options.taskId, context)
         if (options.purpose !== 'context-compaction') await appendLiveCalendar(options.context, card)
@@ -1193,7 +1457,11 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         }, context)
         signal.throwIfAborted()
       }
-      const result = await modelReply(message, { ...options, signal }); if (scheduled) await workspaceScheduleOptions.boundary?.('model_response', { taskId: options.taskId }); return result }, async tx => { if (options.taskId) { await collaboration.guard(tx, options.taskId); const card=await tx.doc(TaskCard,options.taskId); await validateWorkspaceHistory(tx, card, resolveWorkspaceTask); await feishu.sync(tx); if (!await feishuTaskAllowed(tx, card, toolSets(card, bots, await tx.doc(ToolAccess)))) throw new TaskInputError(403,'FEISHU_BINDING_DENIED','日历来源已撤权，不能继续使用历史正文。'); await sharedInformationService({TaskCard,ChatInput,bots}).validateContext(tx,card,(await tx.doc(ChatInput,options.taskId)).entryId,options.context?.sharedVersions); await validateGroupResults(tx,card,options.context?.groupResults,{TaskCard,ChatInput,bots}) } }, options.taskId) }
+      sent = true
+      const result = await modelReply(message, { ...options, signal }); if (scheduled) await workspaceScheduleOptions.boundary?.('model_response', { taskId: options.taskId }); return result }, async tx => { if (options.taskId) { await collaboration.guard(tx, options.taskId); const card=await tx.doc(TaskCard,options.taskId); await validateWorkspaceHistory(tx, card, resolveWorkspaceTask); await feishu.sync(tx); if (!await feishuTaskAllowed(tx, card, toolSets(card, bots, await tx.doc(ToolAccess)))) throw new TaskInputError(403,'FEISHU_BINDING_DENIED','日历来源已撤权，不能继续使用历史正文。'); await sharedInformationService({TaskCard,ChatInput,bots}).validateContext(tx,card,(await tx.doc(ChatInput,options.taskId)).entryId,options.context?.sharedVersions); await validateGroupResults(tx,card,options.context?.groupResults,{TaskCard,ChatInput,bots}) } }, options.taskId).catch(error => {
+      if (!sent && options.budgetAttempt) { error.notDispatched = true; error.execution = { source: 'host-before-transport', usage: { totalTokens: 0 } } }
+      throw error
+    }) }
     // Each original Harness phase parks on the durable directory; cancellation still
     // aborts this invocation through Harness, without making deactivation terminal.
     async function parkInactive(_task, runtime, _ctx) {
@@ -1224,22 +1492,50 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     }
     const feishu = createCalendarService({ client: feishuClient, commit: fn => harness.commit(fn, context), ToolAccess })
     const registry = createRegistry()
-    let createTask, capabilityManagement
+    let createTask, capabilityManagement, continuousService
     const collaboration = collaborationService({ TaskCard, ChatInput, bots, createTask: (...args) => createTask(...args) })
-    const definition = chatDefinition((message, options) => dispatchForBot(options.botId, options.signal, signal => reply(message, { signal })), guardedModelReply, bots, toolImpl, eventImpl, skillDirectory, saveCancelledReceipt, saveCancelledToolReceipt, saveCancelledActionReceipt, dispatchCalendarWrite, (...args) => recoverAction(...args), queryCapability, dispatchForBot, configuredModels, syncManagedCatalog, collaboration, id=>harness.commit(async tx=>{const card=await tx.doc(TaskCard,id);await validateWorkspaceHistory(tx, card, resolveWorkspaceTask);await assertBotActive(tx,card.bot.id);await collaboration.assertWorkOpen(tx,id);const r=(await tx.doc(Collaboration)).items.find(r=>r.childTaskId===id);if(r)await assertBotActive(tx,r.supervisorBotId)},context), feishu, (id, name, args, options) => options?.validateTx ? validateWorkspaceHistory(options.validateTx, { taskId: id, ...(options.card ?? {}) }, resolveWorkspaceTask) : workspaceMcp.invoke(id, name, args, options), { history: { execute: (tx, card, call, entryId) => executeSessionHistory(tx, card, call.name, call.arguments, entryId, { TaskCard, taskKind: ChatTask.definition.name, readSource: readLearningSource }) }, memory: { execute: (tx, card, call, entryId) => executeMemoryTool(tx, card, call, entryId, { service: memoryService, readEntry: readMemoryEntry, files: memoryFiles, review: enqueueBotReview }) }, native: nativeRuntime, botCreated: async (tx, botId, chiefCard) => { await ensureMainSession(tx, botId, { ...mainDeps, rootConversationId: (await tx.task(chiefCard.taskId)).conversationId }) }, main: { execute: (...args) => mainService.execute(...args) }, external: { refresh: () => refreshExternalCatalog(), invoke: invokeExternalMcp }, capabilities: { enabled: capabilityManagementEnabled && Boolean(externalMcp && skillImport), request: requestCapabilityIntent, execute: executeCapabilityCall, approval: executeCapabilityApproval, wait: waitCapabilitySetup }, routine: { propose: (...args) => proposeRoutine(...args), create: (...args) => createProposedRoutine(...args) } })
+    const definition = chatDefinition((message, options) => dispatchForBot(options.botId, options.signal, signal => reply(message, { signal })), guardedModelReply, bots, toolImpl, eventImpl, skillDirectory, saveCancelledReceipt, saveCancelledToolReceipt, saveCancelledActionReceipt, dispatchCalendarWrite, (...args) => recoverAction(...args), queryCapability, dispatchForBot, configuredModels, syncManagedCatalog, collaboration, id=>harness.commit(async tx=>{const card=await tx.doc(TaskCard,id);await validateWorkspaceHistory(tx, card, resolveWorkspaceTask);await assertBotActive(tx,card.bot.id);await collaboration.assertWorkOpen(tx,id);const r=(await tx.doc(Collaboration)).items.find(r=>r.childTaskId===id);if(r)await assertBotActive(tx,r.supervisorBotId)},context), feishu, (id, name, args, options) => options?.validateTx ? validateWorkspaceHistory(options.validateTx, { taskId: id, ...(options.card ?? {}) }, resolveWorkspaceTask) : workspaceMcp.invoke(id, name, args, options), { continuous: { enabled: continuousEnabled, validate: async (tx, card) => { await validateWorkspaceHistory(tx, card, resolveWorkspaceTask); await feishu.sync(tx); if (!await feishuTaskAllowed(tx, card, toolSets(card, bots, await tx.doc(ToolAccess)))) throw new TaskInputError(403, 'FEISHU_BINDING_DENIED', '原目标来源已撤权，不能据历史成果完成。') } }, history: { execute: (tx, card, call, entryId) => executeSessionHistory(tx, card, call.name, call.arguments, entryId, { TaskCard, taskKind: ChatTask.definition.name, readSource: readLearningSource }) }, memory: { execute: (tx, card, call, entryId) => executeMemoryTool(tx, card, call, entryId, { service: memoryService, readEntry: readMemoryEntry, files: memoryFiles, review: enqueueBotReview }) }, native: nativeRuntime, botCreated: async (tx, botId, chiefCard) => { await ensureMainSession(tx, botId, { ...mainDeps, rootConversationId: (await tx.task(chiefCard.taskId)).conversationId }) }, main: { execute: (...args) => mainService.execute(...args) }, external: { refresh: () => refreshExternalCatalog(), invoke: invokeExternalMcp }, capabilities: { enabled: capabilityManagementEnabled && Boolean(externalMcp && skillImport), request: requestCapabilityIntent, execute: executeCapabilityCall, approval: executeCapabilityApproval, wait: waitCapabilitySetup }, routine: { propose: (...args) => proposeRoutine(...args), create: (...args) => createProposedRoutine(...args) } })
     const phases = definition.definition.phases
     for (const [name, phase] of Object.entries(phases)) phases[name] = async (task, runtime, ctx) => {
       for (;;) {
         try {
           await runtime.commit(async tx=>{if(!await isCancelled(tx,runtime.taskId))await collaboration.assertWorkOpen(tx,runtime.taskId)},ctx)
+          let continuousPaused = false
+          await runtime.commit(async tx => {
+            const card = await tx.doc(TaskCard, runtime.taskId)
+            const owner = await continuousOwner(tx, card)
+            if (!owner || name === 'continuousWait' || name === 'awaitInput' || await isCancelled(tx, runtime.taskId)) return
+            const progress = await tx.doc(TaskProgress, owner.rootTaskId)
+            if (progress.finalOutcome) return
+            if (isContinuousTask(card) && progress.pendingGoalRevision) {
+              const revised = await applyPendingContinuousGoal(tx, card)
+              if (revised.applied) {
+                continuousPaused = true
+                return { status: 'running', checkpoint: { phase: 'continuousDecide', entryId: owner.rootInputId, goalRevision: revised.goalRevision } }
+              }
+            }
+            const state = await continuousDispatchState(tx, owner.root, owner.rootInputId, { enabled: continuousEnabled })
+            if (state.allowed) return
+            continuousPaused = true
+            return holdContinuous(tx, card, task.state.checkpoint, state.reason, state.state)
+          }, ctx)
+          if (continuousPaused) return
           await parkInactive(task, runtime, ctx)
           if (name === 'tools') {
             const memoryCard = await harness.snapshot(TaskCard, runtime.taskId, context)
             await memoryFiles?.reconcileBot(memoryCard.bot.id).catch(() => {})
           }
-          await runtime.commit(async tx => { if (!await isCancelled(tx, runtime.taskId)) await collaboration.guard(tx, runtime.taskId) }, ctx)
+          await runtime.commit(async tx => { if (!await isCancelled(tx, runtime.taskId)) await collaboration.assertWorkOpen(tx, runtime.taskId) }, ctx)
           return await phase(task, runtime, ctx)
         } catch (error) {
+          if (['CONTINUOUS_DISPATCH_STOPPED', 'CONTINUOUS_REVISION_CONFLICT', 'CONTINUOUS_ORIGIN_DENIED'].includes(error.code) || error instanceof ContinuousBudgetError) {
+            await runtime.commit(async tx => {
+              const card = await tx.doc(TaskCard, runtime.taskId)
+              return holdContinuous(tx, card, task.state.checkpoint,
+                error.control?.reason ?? error.kind ?? 'goal-revision-changed', error.control?.state ?? (error instanceof ContinuousBudgetError ? 'limited' : 'blocked'))
+            }, ctx)
+            return
+          }
           if (error.code === 'MAIN_SESSION_REPLACING') { await waitForMainReplacement(runtime, error, ctx); continue }
           if(error.code==='COLLABORATION_STOPPED'&&await settleStoppedInput(runtime,ctx)) return
           if (['COLLABORATION_STOPPED','REVIEW_NOT_AUTHORIZED','COLLABORATION_NOT_AUTHORIZED','TASK_CANCELLED','TASK_UNAVAILABLE','BOT_INACTIVE'].includes(error.code)) {
@@ -1294,7 +1590,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     const recoveryGuard = createActionRecoveryGuard({ TaskCard, ChatInput, bots, collaboration })
     const queryAction = createActionQuery({ harness, context, TaskCard, ChatInput, bots, collaboration, queryImpl: async (request, options) => {
       const card = await harness.snapshot(TaskCard, request.taskId, context)
-      return dispatchForBot(card.bot.id, options.signal, signal => calendarQueryImpl ? calendarQueryImpl(request, { ...options, signal }) : options.execute(), tx => collaboration.guard(tx, request.taskId), request.taskId)
+      return dispatchForBot(card.bot.id, options.signal, signal => calendarQueryImpl ? calendarQueryImpl(request, { ...options, signal }) : options.execute(), tx => collaboration.guard(tx, request.taskId), request.taskId, { attemptId: `query:${request.taskId}:${request.id}`, purpose: 'action-query' })
     } })
     const retryAction = createActionIdempotency({ harness, context, TaskCard, ChatInput, bots, collaboration, dispatch: dispatchCalendarWrite })
     recoverAction = async (...args) => { await retryAction(...args); await queryAction(...args) }
@@ -1480,7 +1776,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         if (receipt) await tx.appendEntry(card.conversationId, { kind: 'pidot.capability-setup-status', data: { receipt, inReplyTo: request.entryId, createdAt: new Date().toISOString() } })
         if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
         if (receipt?.canResume) {
-          for (const skipped of request.remainingCalls ?? []) await appendToolReceipt(tx, { card, call: skipped, entryId: request.entryId, turnId: request.turnId }, { ok: false, error: { code: 'TOOL_SKIPPED_SETUP', message: '原能力配置仍待完成；其后旧调用跳过，须根据真实状态重新规划。' } })
+          for (const skipped of request.remainingCalls ?? []) await appendToolReceipt(tx, { card, continuousBinding: request.continuousBinding, call: skipped, entryId: request.entryId, turnId: request.turnId }, { ok: false, error: { code: 'TOOL_SKIPPED_SETUP', message: '原能力配置仍待完成；其后旧调用跳过，须根据真实状态重新规划。' } })
           if (receipt.state === 'needs_confirmation' && receipt.approvalId) return { status: 'running', checkpoint: { phase: 'awaitApproval', entryId: request.entryId, approvalId: Number(receipt.approvalId), capabilitySetupId: receipt.setupId, waitingReason: 'capability-confirmation' } }
           return { status: 'running', checkpoint: { phase: 'capabilitySetup', entryId: request.entryId, setupId: receipt.setupId, ...(receipt.state === 'unknown' && receipt.approvalId ? { ignoreApprovalId: receipt.approvalId } : {}), waitingReason: receipt.state === 'needs_auth' ? 'capability-credentials' : 'capability-dependencies', lastOutcome: receipt.state } }
         }
@@ -1495,7 +1791,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         await runtime.commit(async tx => {
           const card = await tx.doc(TaskCard, runtime.taskId), result = await requestCapabilityIntent(tx, { ...request, card }, catalog)
           await appendToolReceipt(tx, { ...request, card }, result)
-          for (const skipped of request.remainingCalls ?? []) await appendToolReceipt(tx, { card, call: skipped, entryId: request.entryId, turnId: request.turnId }, { ok: false, error: { code: 'TOOL_SKIPPED_APPROVAL', message: '能力配置等待精确确认；其后旧调用未执行。' } })
+          for (const skipped of request.remainingCalls ?? []) await appendToolReceipt(tx, { card, continuousBinding: request.continuousBinding, call: skipped, entryId: request.entryId, turnId: request.turnId }, { ok: false, error: { code: 'TOOL_SKIPPED_APPROVAL', message: '能力配置等待精确确认；其后旧调用未执行。' } })
           return result.ok && result.data?.approvalId ? { status: 'running', checkpoint: { phase: 'awaitApproval', entryId: request.entryId, approvalId: result.data.approvalId, waitingReason: 'capability-intent-confirmation' } }
             : { status: 'running', checkpoint: { phase: 'reply', entryId: request.entryId } }
         }, ctx)
@@ -1581,6 +1877,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
             const card = await tx.doc(TaskCard, request.card.taskId), record = await tx.task(card.taskId)
             await assertNotCancelled(tx, card.taskId, record)
             await collaboration.guard(tx, card.taskId)
+            await continuousGuard(tx, card, request.entryId, continuousEnabled)
             const sets = toolSets(card, bots, await tx.doc(ToolAccess)), external = sets.externalTools?.find(tool => tool.name === request.call.name)
             if (!external || external.catalogRevision !== request.external.catalogRevision) throw new TaskInputError(409, 'CAPABILITY_CATALOG_CONFLICT', '外部工具目录已改变，未执行。')
             const check = checkToolCall({ card, record, conversation: await tx.conversation(card.conversationId), call: request.call, displayed: [request.call.name], sets })
@@ -1598,7 +1895,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
             return true
           }, context)
         },
-      }), undefined, request.card.taskId)
+      }), undefined, request.card.taskId, request.budgetAttempt ? { reservedAttempt: request.budgetAttempt } : { attemptId: `external:${request.card.taskId}:${request.operationId}`, purpose: 'approved-external' })
     }
     let externalRefreshSequence = 0
     async function refreshExternalCatalog() {
@@ -1863,7 +2160,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           await tx.appendEntry(card.conversationId, { kind: verifiedResult ? 'pidot.feishu-readback-verified' : 'pidot.feishu-provider-accepted', data: { taskId: card.taskId, approvalId: item.id, operationId: operation.id, ...(providerReceipt ? { providerReceipt } : {}), verified: Boolean(verifiedResult), createdAt: new Date().toISOString() } })
         }, context)
         const card = await harness.snapshot(TaskCard, operation.taskId, context)
-        return dispatchForBot(card.bot.id, signal, async signal => { const execute = () => (operation.toolName === FEISHU_CREATE_TOOL ? dispatchFeishuCreate : dispatchFeishuMutation)({ client: feishuClient, operation, guard, persist, signal }); return calendarWriteImpl ? calendarWriteImpl(operation, { signal, execute, recovery: false }) : execute() }, tx => collaboration.guard(tx, operation.taskId), operation.taskId)
+        return dispatchForBot(card.bot.id, signal, async signal => { const execute = () => (operation.toolName === FEISHU_CREATE_TOOL ? dispatchFeishuCreate : dispatchFeishuMutation)({ client: feishuClient, operation, guard, persist, signal }); return calendarWriteImpl ? calendarWriteImpl(operation, { signal, execute, recovery: false }) : execute() }, tx => collaboration.guard(tx, operation.taskId), operation.taskId, operation.budgetAttempt ? { reservedAttempt: operation.budgetAttempt } : { attemptId: `approval:${operation.taskId}:${operation.id}`, purpose: 'approved-write' })
       }
       const execute = async () => harness.commit(async (tx) => {
         signal.throwIfAborted()
@@ -1892,7 +2189,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       }, context)
       // Optional in-process fault adapter; never accepted by HTTP or Task input.
       const card = await harness.snapshot(TaskCard, operation.taskId, context)
-      return dispatchForBot(card.bot.id, signal, signal => calendarWriteImpl ? calendarWriteImpl(operation, { signal, execute, recovery: Boolean(recovery) }) : execute(), tx=>collaboration.guard(tx,operation.taskId),operation.taskId)
+      return dispatchForBot(card.bot.id, signal, signal => calendarWriteImpl ? calendarWriteImpl(operation, { signal, execute, recovery: Boolean(recovery) }) : execute(), tx=>collaboration.guard(tx,operation.taskId),operation.taskId, !recovery && operation.budgetAttempt ? { reservedAttempt: operation.budgetAttempt } : { attemptId: `approval:${operation.taskId}:${operation.id}:${recovery?.attemptId ?? 'initial'}`, purpose: recovery ? 'idempotent-write-retry' : 'approved-write' })
     }
 
     async function cancelledReceiptView(tx, id) {
@@ -1907,6 +2204,15 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       const stopped=(state.stops??[]).some(s=>s.rootWorkId===root)
       if(!cancelled&&!inactive&&!stopped) return null
       return { card: await doc(TaskCard), doc, archive }
+    }
+
+    async function receiptBudget(tx, card, ownArchive) {
+      const rootTaskId = continuousRootId(card)
+      if (!rootTaskId) return null
+      if (rootTaskId === card.taskId && ownArchive) return ownArchive.documents[ContinuousBudget.definition.kind]
+      const rootRecord = await tx.task(rootTaskId)
+      if (rootRecord?.state.status === 'terminal') return (await readCancelledArchive(tx, rootTaskId))?.documents[ContinuousBudget.definition.kind]
+      return tx.doc(ContinuousBudget, rootTaskId)
     }
 
     async function saveCancelledActionReceipt(id, approvalId, operationId, result) {
@@ -1925,12 +2231,13 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         const view = await cancelledReceiptView(tx, id)
         if (!view) return
         const { card, doc } = view
+        const budgetOverride = await receiptBudget(tx, card, view.archive)
         const turn = await tx.entry(request.turnId)
         if (card.taskId !== id || turn?.byTaskId !== id || turn.conversationId !== card.conversationId ||
           turn.data.inReplyTo !== request.entryId) throw new Error('Invalid cancelled tool ownership')
         // Redirect only the artifact Document if a safety boundary already settled.
         const receiptTx = { appendEntry: (...args) => tx.appendEntry(...args), doc: (token) => doc(token) }
-        await appendToolReceipt(receiptTx, request, result, true)
+        await appendToolReceipt(receiptTx, { ...request, budgetOverride }, result, true)
       }, context)
     }
 
@@ -1943,6 +2250,8 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         if (input?.conversationId !== card.conversationId || input.kind !== 'pidot.user') throw new Error('Invalid cancelled receipt input')
         const { mode, result, error, displayed = [] } = receipt
         const execution = result?.execution ?? error?.execution
+        const budget = await receiptBudget(tx, card, view.archive)
+        await settleWorkAttempt(tx, card, receipt.budgetAttempt?.attemptId, execution?.usage, budget)
         if (mode === 'model' && !receipt.usageSaved && Number.isSafeInteger(execution?.usage?.totalTokens) && execution.usage.totalTokens >= 0) {
           const usage = await doc(CallUsage)
           usage.totalTokens += execution.usage.totalTokens
@@ -1959,7 +2268,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
             : failed ? 'pidot.test-error' : 'pidot.test-reply',
           data: { role: failed ? 'error' : 'assistant', mode, content: failed ? (mode === 'model' ? MODEL_ERRORS[errorCode] : '测试回复执行失败。') : result.reply.content,
             inReplyTo: entryId, originTaskId: id, afterCancellation: Boolean((await doc(TaskCancellation))?.request), afterControlStop: true, purpose: receipt.purpose ?? 'reply', createdAt: new Date().toISOString(),
-            ...(failed ? { errorCode } : {}), ...(execution ? { execution } : {}),
+            ...(failed ? { errorCode } : {}), ...(execution ? { execution } : {}), ...(receipt.continuousBinding ? { continuousBinding: receipt.continuousBinding } : {}),
             ...(result?.toolCalls?.length ? { assistant: result.assistant, displayed } : {}) },
         })
       }, context)
@@ -1993,6 +2302,17 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       }
       return null
     }
+    async function continuousEventVisible(tx, data, deliveryTaskId) {
+      if (!Number.isSafeInteger(data.rootTaskId)) return false
+      try {
+        const record = await tx.task(data.rootTaskId)
+        if (!record || record.state.status === 'terminal') return false
+        const root = await tx.doc(TaskCard, data.rootTaskId)
+        const origin = await resolveContinuousOrigin(tx, root, { TaskCard, ChatInput, bots })
+        return origin.delivery.taskId === deliveryTaskId && await workspaceHistoryAllowed(tx, root, toolSets(root, bots, await tx.doc(ToolAccess)))
+      } catch { return false }
+    }
+
     async function get(id, includeMessages = true) {
       await refreshExternalCatalog()
       const setupIds = capabilityManagement ? await harness.commit(async tx => Object.values((await tx.doc(CapabilitySetups)).items).filter(item => item.taskId === id).map(item => item.id), context) : []
@@ -2029,13 +2349,19 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
               if (entry.kind === 'pidot.context-compaction') compactionHistory.push({ ...entry.data, id: entry.id })
               if (entry.kind === 'pidot.call-limits') callLimitHistory.push({ ...entry.data, id: entry.id })
               if (['pidot.task-state', 'pidot.steer-applied'].includes(entry.kind)) taskStateHistory.push({ ...entry.data, id: entry.id })
-              if (['pidot.user', 'pidot.test-reply', 'pidot.test-error', 'pidot.model-reply', 'pidot.model-error', 'pidot.model-tool-turn', 'pidot.tool-result', 'pidot.memory-review'].includes(entry.kind)) {
-                messages.push({ ...entry.data, id: entry.id, taskId: id, conversationId: entry.conversationId, byTaskId: entry.byTaskId ?? null })
+              if (['pidot.user', 'pidot.test-reply', 'pidot.test-error', 'pidot.model-reply', 'pidot.model-error', 'pidot.model-tool-turn', 'pidot.tool-result', 'pidot.memory-review', 'pidot.continuous-stage'].includes(entry.kind)) {
+                messages.push({ ...entry.data, ...(entry.kind === 'pidot.continuous-stage' ? { continuousStage: true } : {}), id: entry.id, taskId: id, conversationId: entry.conversationId, byTaskId: entry.byTaskId ?? null })
               } else if (entry.kind === 'pidot.auto-applied') {
                 // System card (I-08): shown to the user, never part of model context.
                 const undone = workspaceEnabled && !!await workspaceRepository.get(tx, 'Operation', LOCAL_OWNER, 'operations', payloadHash([LOCAL_OWNER, `undo:${entry.data.operationId}`]))
                 messages.push({ ...entry.data, role: 'system', systemKind: 'auto-applied', content: entry.data.summary, undone, id: entry.id, taskId: id, conversationId: entry.conversationId, byTaskId: entry.byTaskId ?? null })
+              } else if (entry.kind === 'pidot.continuous-started' || entry.kind === 'pidot.continuous-event') {
+                if (!await continuousEventVisible(tx, entry.data, id)) continue
+                messages.push({ ...entry.data, role: 'system', systemKind: 'continuous-event',
+                  content: entry.data.summary ?? `已开始持续目标：${entry.data.goal ?? ''}`, id: entry.id, taskId: id,
+                  conversationId: entry.conversationId, byTaskId: entry.byTaskId ?? null })
               } else if (entry.kind === 'pidot.mirror') {
+                if (entry.data.mirrorKind === 'continuous-event' && !await continuousEventVisible(tx, entry.data, id)) continue
                 // Mirror card (PLAN §8.1): live state read from the derived Task; actions use existing endpoints.
                 messages.push({ ...entry.data, role: 'system', systemKind: 'mirror', content: entry.data.summary, live: await mirrorLive(tx, entry.data), id: entry.id, taskId: id, conversationId: entry.conversationId, byTaskId: entry.byTaskId ?? null })
               } else if (entry.kind === 'pidot.context-floor') {
@@ -2142,8 +2468,16 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           const { resumeState: _resumeState, ...visible } = blocker
           return { ...visible, ...(blocker.status === 'pending' && (stoppedRoots.has(blocker.rootWorkId) || collaborationState.items.some(row => row.childTaskId === blocker.taskId && row.result?.status === 'cancelled')) ? { status: 'cancelled' } : {}) }
         }
-        const lastMessage = includeMessages ? undefined : await lastSaid(tx, card, feishuVisible)
-        return { ...safeCard, capabilitySetups, archived: (await tx.doc(TaskArchive)).taskIds.includes(id), calendarAccess: feishuVisible, ...(lastMessage ? { lastMessage } : {}), ...(card.kind==='group'?{groupIssues:JSON.parse(JSON.stringify(groupIssues))}:{}), ...(groupView ? { group: groupView } : {}), collaborationOverview: await collaborationOverview(tx,id,{TaskCard,ChatInput,ChatQueue,CallUsage,TaskApprovals,TaskBlockers,bots}), sharedInformation: await sharedInformationService({TaskCard,ChatInput,bots}).userView(tx,card), collaborations: JSON.parse(JSON.stringify(await projectGroupRelations(tx,card,(await tx.doc(Collaboration)).items.filter(i => i.parentTaskId === id || i.childTaskId === id),{TaskCard,ChatInput,bots}))), botLifecycle: structuredClone((await tx.doc(BotDirectory)).items.find(b => b.id === card.bot.id)?.status ?? 'active'), approvals: JSON.parse(JSON.stringify(visibleApprovals)), blockers: JSON.parse(JSON.stringify({...await doc(TaskBlockers),items:(await doc(TaskBlockers)).items.map(projectBlocker),related:(card.kind==='group'?groupIssues.flatMap(c=>c.blockers.items):collaborationState.items.filter(r=>r.parentTaskId===id).flatMap(r=>r.blockers??[])).map(projectBlocker)})), cancellation: JSON.parse(JSON.stringify(cancellation)), messages, taskStateHistory, callLimitHistory, compactionHistory, recoveryHistory, migrationHistory,
+        let continuousSourceVisible = feishuVisible
+        if (isContinuousTask(card)) {
+          const history = await readTaskHistory(tx, card, {}, card.executionPolicy.rootInputId, toolSets(card, bots, await tx.doc(ToolAccess)), { collect: true })
+          continuousSourceVisible &&= history.visible.every(entry => history.sourceAllowed(entry))
+          if (!continuousSourceVisible) for (let index = 0; index < messages.length; index++) {
+            if (messages[index].role !== 'user') messages[index] = { id: messages[index].id, role: messages[index].role, content: '来源权限不足；持续目标的派生内容已隐藏。' }
+          }
+        }
+        const lastMessage = includeMessages || isContinuousTask(card) && !continuousSourceVisible ? undefined : await lastSaid(tx, card, feishuVisible)
+        return { ...safeCard, continuous: isContinuousTask(card) ? projectContinuousTask(card, await doc(TaskProgress), await doc(ContinuousOrigin), await doc(ContinuousBudget), record, continuousBudgetUsage(await doc(ContinuousBudget)), cancellation, { sourceVisible: continuousSourceVisible, budgetBlockReason: continuousBudgetBlockReason(await doc(ContinuousBudget), (await doc(TaskProgress)).budgetBlocked), automationPaused: (await automationStatus(tx)).paused, enabled: continuousEnabled, deliveryTaskId: (await doc(ContinuousOrigin)).originKind === 'main' ? (await tx.doc(MainSessions)).byBot[(await doc(ContinuousOrigin)).coordinatorBotId] : (await doc(ContinuousOrigin)).originTaskId }) : null, capabilitySetups, archived: (await tx.doc(TaskArchive)).taskIds.includes(id), calendarAccess: feishuVisible, ...(lastMessage ? { lastMessage } : {}), ...(card.kind==='group'?{groupIssues:JSON.parse(JSON.stringify(groupIssues))}:{}), ...(groupView ? { group: groupView } : {}), collaborationOverview: await collaborationOverview(tx,id,{TaskCard,ChatInput,ChatQueue,CallUsage,TaskApprovals,TaskBlockers,bots}), sharedInformation: await sharedInformationService({TaskCard,ChatInput,bots}).userView(tx,card), collaborations: JSON.parse(JSON.stringify(await projectGroupRelations(tx,card,(await tx.doc(Collaboration)).items.filter(i => i.parentTaskId === id || i.childTaskId === id),{TaskCard,ChatInput,bots}))), botLifecycle: structuredClone((await tx.doc(BotDirectory)).items.find(b => b.id === card.bot.id)?.status ?? 'active'), approvals: JSON.parse(JSON.stringify(visibleApprovals)), blockers: JSON.parse(JSON.stringify({...await doc(TaskBlockers),items:(await doc(TaskBlockers)).items.map(projectBlocker),related:(card.kind==='group'?groupIssues.flatMap(c=>c.blockers.items):collaborationState.items.filter(r=>r.parentTaskId===id).flatMap(r=>r.blockers??[])).map(projectBlocker)})), cancellation: JSON.parse(JSON.stringify(cancellation)), messages, taskStateHistory, callLimitHistory, compactionHistory, recoveryHistory, migrationHistory,
           waiting: waitingSnapshot(record.state.checkpoint, slot, await doc(TaskBlockers), await doc(TaskApprovals), await doc(CallUsage), callLimits(card.parameters), cancellation),
           contextPolicy: contextPolicy(card.parameters), compaction: JSON.parse(JSON.stringify(await doc(ContextCompaction))), activeInputId: slot.entryId,
           messageControl: messageControlSnapshot(slot, { entryIds: queuedInputIds }, steering, cancellation, record.state.checkpoint),
@@ -2161,13 +2495,20 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     createTask = async (tx, input, creationConversationId, forkSource) => { await refreshModelSettings(tx); return createChatTask(tx, input, { ChatTask, TaskCard, ChatInput, ChatQueue, configuredModels, beforeCommit, creationConversationId, forkSource }) }
     // PLAN §8.1: main sessions are infrastructure, not user-created Tasks (no beforeCommit hook).
     mainDeps = { TaskCard, rootConversationId: root.id, createTask: async (tx, input, creationConversationId) => { await refreshModelSettings(tx); return createChatTask(tx, input, { ChatTask, TaskCard, ChatInput, ChatQueue, configuredModels, creationConversationId }) } }
-    mainService = mainSessionService({ TaskCard, ChatInput, createTask: (...args) => createTask(...args) })
+    continuousService = createContinuousTaskService({ TaskCard, ChatInput, createTask: (...args) => createTask(...args), enabled: continuousEnabled })
+    mainService = mainSessionService({ TaskCard, ChatInput, createTask: (...args) => createTask(...args), continuousService })
     const sessionCancellation = cancellationApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, propagateStops })
     const freshMainSessions = new WeakMap()
     const sessionLifecycle = createSessionLifecycle({
       transaction: fn => harness.commit(fn, context),
       readSession: (tx, id) => freshMainSessions.get(tx)?.get(id) ?? readLifecycleSession(tx, id, { TaskCard, taskKind: ChatTask.definition.name }),
-      stopSession: id => sessionCancellation.cancel(id, {}),
+      stopSession: async id => {
+        const roots = await harness.commit(tx => continuousOriginRoots(tx, id, { TaskCard, taskKind: ChatTask.definition.name }), context)
+        for (const rootTaskId of roots) await harness.commit(tx => requestTaskCancellation(tx, rootTaskId, { TaskCard, ChatInput }), context)
+        const result = await sessionCancellation.cancel(id, {})
+        await propagateStops()
+        return result
+      },
       stopMain: async id => {
         await harness.commit(async tx => {
           const record = await tx.task(id)
@@ -2393,6 +2734,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         const card = await tx.doc(TaskCard, record.id)
         if (card.taskId !== record.id) throw new Error('Invalid recovery task card')
         const cancellation = (await tx.doc(TaskCancellation, record.id)).request
+        if (isContinuousTask(card)) await recoverContinuousReservations(tx, card.taskId)
         if (!cancellation && record.state.checkpoint?.phase === 'awaitApproval') {
           const approvals = await tx.doc(TaskApprovals, record.id), item = approvals.items.find((entry) => entry.id === record.state.checkpoint.approvalId)
           if (item?.operation && !item.receipt) await markOutcomeUnknown(tx, card, item)
@@ -2671,8 +3013,8 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           return JSON.parse(JSON.stringify(card))
         }, context)
         const card = await authorize()
-        await harness.commit(async tx => { const usage = await tx.doc(CallUsage, input.taskId); const limits = callLimits(card.parameters); if (usage.toolCalls >= limits.toolCalls || limits.totalTokens !== undefined && (usage.unknownTokenCalls > 0 || usage.totalTokens >= limits.totalTokens)) throw new TaskInputError(409, 'CALL_LIMIT_REACHED', '本Task工具或Token额度已达上限。'); usage.toolCalls++ }, context)
-        const result = await dispatchForBot(card.bot.id, new AbortController().signal, signal => feishu.read(input.name, input.arguments, { signal, guard: authorize }), async tx => { await assertNotCancelled(tx, input.taskId, await tx.task(input.taskId)); await collaboration.guard(tx, input.taskId) }, input.taskId)
+        await harness.commit(async tx => { await continuousGuard(tx, await tx.doc(TaskCard, input.taskId), (await tx.doc(ChatInput, input.taskId)).entryId, continuousEnabled); const usage = await tx.doc(CallUsage, input.taskId); const limits = callLimits(card.parameters); if (usage.toolCalls >= limits.toolCalls || limits.totalTokens !== undefined && (usage.unknownTokenCalls > 0 || usage.totalTokens >= limits.totalTokens)) throw new TaskInputError(409, 'CALL_LIMIT_REACHED', '本Task工具或Token额度已达上限。'); usage.toolCalls++ }, context)
+        const result = await dispatchForBot(card.bot.id, new AbortController().signal, signal => feishu.read(input.name, input.arguments, { signal, guard: authorize }), async tx => { await assertNotCancelled(tx, input.taskId, await tx.task(input.taskId)); await collaboration.guard(tx, input.taskId) }, input.taskId, { attemptId: `direct:${input.taskId}:${randomUUID()}`, purpose: input.name })
         await harness.commit(async tx => {
           const live = await tx.doc(TaskCard, input.taskId), sets = toolSets(live, bots, await tx.doc(ToolAccess))
           const check = checkToolCall({ card: live, record: await tx.task(input.taskId), conversation: await tx.conversation(live.conversationId), call: { name: input.name, arguments: input.arguments }, displayed: sets.displayed, sets })
@@ -2722,6 +3064,35 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         const task = await get(id)
         if (task?.groupId !== groupId) throw new TaskInputError(404, 'GROUP_NOT_FOUND', '群聊归属不一致。')
         return task
+      },
+      async controlContinuous(id, input) {
+        await harness.commit(async tx => {
+          await assertSessionVisible(tx, id)
+          const record = await tx.task(id)
+          if (!record || record.kind !== ChatTask.definition.name) throw new TaskInputError(404, 'TASK_NOT_FOUND', '会话不存在。')
+          if (record.state.status === 'terminal') {
+            const archive = await readCancelledArchive(tx, id)
+            const card = archive?.documents[TaskCard.definition.kind]
+            if (!isContinuousTask(card)) throw new TaskInputError(404, 'CONTINUOUS_NOT_FOUND', '持续目标不存在。')
+            return applyContinuousControl({ doc: async token => archive.documents[token.definition.kind] }, card, input)
+          }
+          const card = await tx.doc(TaskCard, id)
+          const result = await applyContinuousControl(tx, card, input, { cancel: (tx, taskId) => requestTaskCancellation(tx, taskId, { TaskCard, ChatInput }) })
+          if (!result.replayed) await tx.appendEntry(card.conversationId, { kind: 'pidot.continuous-control', data: {
+            action: input.action, requestId: input.requestId, version: result.version, goalRevision: card.taskState.goalRevision,
+            source: 'authenticated-user', createdAt: new Date().toISOString() } })
+        }, context)
+        if (input.action === 'cancel') {
+          void harness.abortTask(id, context).catch(() => {})
+          await propagateStops()
+        }
+        harness.resume()
+        return get(id)
+      },
+      async startContinuous(input) {
+        const receipt = await harness.commit(tx => continuousService.start(tx, input), context)
+        harness.resume()
+        return receipt
       },
       ...outcomeApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, bots, collaboration, sync: tx => feishu.sync(tx) }),
       ...approvalApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, bots, collaboration, sync: tx => feishu.sync(tx) }),
@@ -2959,7 +3330,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         }, context)
       },
       // Main sessions are reached through mainSessions(), not the Task list (includeMain for the inbox).
-      async list(botId, { includeMain = false } = {}) {
+      async list(botId, { includeMain = false, continuousOriginTaskId } = {}) {
         if (botId !== undefined) await this.assertBotTask(botId)
         const records = await harness.commit(async (tx) => {
           const all = []
@@ -2977,7 +3348,14 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
             throw error
           }
         }))).filter(Boolean)
-        const visible = includeMain ? list : list.filter(task => task.kind !== 'main')
+        let visible = includeMain ? list : list.filter(task => task.kind !== 'main')
+        if (continuousOriginTaskId !== undefined) {
+          const origin = await get(continuousOriginTaskId, false)
+          if (!origin || !['main', 'group'].includes(origin.kind)) throw new TaskInputError(404, 'CONTINUOUS_ORIGIN_DENIED', '持续目标入口不存在。')
+          const mains = await harness.commit(async tx => JSON.parse(JSON.stringify((await tx.doc(MainSessions)).byBot)), context)
+          visible = visible.filter(task => task.continuous && (task.continuous.origin.originTaskId === continuousOriginTaskId ||
+            origin.kind === 'main' && mains[origin.bot.id] === origin.taskId && task.continuous.origin.originKind === 'main' && task.continuous.origin.coordinatorBotId === origin.bot.id))
+        }
         return botId === undefined ? visible : visible.filter((task) => task.bot.id === botId && task.kind !== 'group')
       },
       get,
@@ -2988,8 +3366,19 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           await assertNotCancelled(tx, id, record)
           if (!['pending', 'running'].includes(record.state.status)) throw new TaskInputError(409, 'TASK_UNAVAILABLE', '当前 Task 无法恢复。')
           const slot = await tx.doc(ChatInput, id)
-          if (slot.entryId !== null) throw new TaskInputError(409, 'TASK_BUSY', '请等待当前执行结束后调整上限。')
           const card = await tx.doc(TaskCard, id)
+          if (isContinuousTask(card)) {
+            const budget = await tx.doc(ContinuousBudget, id), previous = JSON.parse(JSON.stringify(budget.limits))
+            const result = await raiseContinuousLimits(tx, id, input, { TaskCard })
+            // The root's original limits track its root allowance unless explicitly made stricter.
+            for (const key of ['modelCalls', 'toolCalls', 'totalTokens']) if (card.parameters.callLimits?.[key] === previous[key]) card.parameters.callLimits[key] = result.limits[key]
+            const progress = await tx.doc(TaskProgress, id)
+            if (progress.budgetBlocked?.taskId === id && progress.budgetBlocked.reason.startsWith('task-')) delete progress.budgetBlocked
+            await tx.appendEntry(card.conversationId, { kind: 'pidot.call-limits', data: { previous, next: result.limits,
+              deadlineAt: result.deadlineAt, usage: result.usage, source: 'user-request', createdAt: new Date().toISOString() } })
+            return
+          }
+          if (slot.entryId !== null && !(continuousRootId(card) && record.state.checkpoint?.lastOutcome === 'limited')) throw new TaskInputError(409, 'TASK_BUSY', '请等待当前执行结束后调整上限。')
           const usage = await tx.doc(CallUsage, id)
           const previous = callLimits(card.parameters)
           const next = raisedCallLimits(input, previous, usage)
@@ -3010,6 +3399,11 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           card.parameters.callLimits = next
           card.parameterSources.callLimits = { type: 'user-limit-increase', entryId: audit.id, configRef: JSON.parse(JSON.stringify(card.configRef)) }
           if (resume) slot.entryId = checkpoint.lastInputId
+          if (continuousRootId(card)) {
+            const progress = await tx.doc(TaskProgress, continuousRootId(card))
+            if (progress.budgetBlocked?.taskId === id && progress.budgetBlocked.reason.startsWith('task-')) delete progress.budgetBlocked
+            recordContinuousControlChange(progress, 'child-limits', Date.now())
+          }
         }, context)
         harness.resume()
         return get(id)
@@ -3036,6 +3430,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           const slot = await tx.doc(ChatInput, id)
           if (slot.entryId !== null) throw new TaskInputError(409, 'TASK_BUSY', '请等待当前消息完成后更新任务状态。')
           const card = await tx.doc(TaskCard, id)
+          if (isContinuousTask(card)) throw new TaskInputError(409, 'CONTINUOUS_GOAL_CONTROL_REQUIRED', '持续目标须使用带版本的目标控制入口修订。')
           if (card.scheduledWorkflow) throw new TaskInputError(409, 'WORKSPACE_WORKFLOW_INPUT_IMMUTABLE', '定时提示与范围已冻结。')
           const entry = await tx.appendEntry(card.conversationId, {
             kind: 'pidot.task-state', data: { changes, source: 'user-request', createdAt: new Date().toISOString() },
@@ -3074,6 +3469,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           const relation=(await tx.doc(Collaboration)).items.find(r=>r.childTaskId===id && r.reviewRequired)
           if(relation) throw new TaskInputError(409,'REVIEW_CHILD_INPUT_DENIED','受管子任务只能由绑定主管返工；新工作须新委派。')
           const card = await tx.doc(TaskCard, id)
+          if (isContinuousTask(card)) throw new TaskInputError(409, 'CONTINUOUS_INPUT_IMMUTABLE', '持续目标使用固定原始输入；新目标请从主会话另行启动。')
           await assertBotActive(tx, card.bot.id)
           await refreshModelSettings(tx)
           const liveModel = await readModelSettings()

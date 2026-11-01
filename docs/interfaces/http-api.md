@@ -238,3 +238,14 @@ MCP 来源单独记录，不混入工作区来源。撤销后，历史/摘要/�
 answers 以题目 ID 为键：文本为 string，单选 `{optionId,other?}`，多选 `{optionIds,other?}`。服务端复用共享校验，生成可读 answer 摘要。skip 只接受全部非必需且有默认值的题目；adjust 用 answer 表达新的要求并标记 superseded；cancel 标记 cancelled 且不调用模型。受管子任务不能调整或取消输入来绕过主管。409 BLOCKER_VERSION_CONFLICT / BLOCKER_ALREADY_RESOLVED 分别表示版本冲突/已有不同处理结果。
 
 待答 item 的 parked=true 表示其输入已让出执行位置；不再依赖 activeId 判断它能否回答。已提交答案的原输入在安全回复边界优先恢复。普通消息可先处理，保持一个 Task / 一个执行段。等待普通用户问题时，steer(message) 或队列消息转换可显式替代原问题，不当作该题答案；待审批时仍不允许插入代替批准。
+
+
+## 持续目标
+
+普通消息不自动开启持续执行。`POST /api/tasks/continuous` 需要 `{requestId, origin:{kind:'main'|'group',taskId,sourceMessageId?}, goal, completionCriteria, constraints?, title?, limits:{modelCalls,toolCalls,totalTokens,durationMs}}`。至少一项完成标准；额度均为正整数，初始 durationMs 最长 28800000。入口须为当前本人主会话或有效群聊，群管理员为协调者。返回 201（重放为 200）与 `{data:{rootTaskId,href,version,replayed}}`；原 requestId 内容冲突为 409。
+
+`GET /api/tasks?continuousOriginTaskId=<入口TaskId>` 返回 `{tasks:[…]}`，清空主会话后可从新的当前主会话找到原目标。Task 详情的 `continuous` 包含根/输入身份、目标与计划版本、状态、阶段、证据引用、等待原因、累计用量、额度及 `availableActions`。阶段产出带 `continuousStage:true`；内部规划/决定事件不伪装为模型回复。
+
+`POST /api/tasks/:taskId/continuous/control` 接受 `{requestId,expectedVersion,action:'pause'|'resume'|'cancel'|'revise-goal',goalPatch?}`，只有 revise-goal 带 goalPatch。成功返回 `{task:…}`；重复请求重放，冲突须重新读取。取消可跨过仅由暂停/恢复造成的旧版本，不能跨目标或额度修改。暂停等待已派出的调用落盘；取消不可恢复。修订在安全边界更新目标版本，保留旧证据、用量和审计，旧成果不能直接满足新目标。
+
+根目标 `PATCH /api/tasks/:taskId/limits` 复用既有提额入口，只接受需要提高的 `modelCalls/toolCalls/totalTokens` 或延后的 ISO `deadlineAt`；不重置用量，也不能清除未知调用。控制只对根目标开放，子任务共同使用根总额度。结果未知的业务操作继续沿原 Operation 查询/确认，暂停或改目标不代表撤回已经发生的效果。

@@ -1,0 +1,58 @@
+.continuous-task-card {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-bg);
+  overflow-wrap: anywhere;
+}
+.continuous-task-heading, .continuous-task-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem .75rem;
+}
+.continuous-task-heading { justify-content: space-between; }
+.continuous-task-heading h3, .continuous-task-card h4 { margin: 0; }
+.continuous-task-card h4 { margin-top: .8rem; }
+.continuous-task-card ul { padding-left: 1.25rem; margin: .35rem 0; }
+.continuous-task-card li, .continuous-task-card dd { white-space: pre-wrap; }
+.continuous-task-status { color: var(--c-text-2); font-size: .85rem; }
+.continuous-task-goal, .continuous-task-reason { white-space: pre-wrap; margin: .65rem 0; }
+.continuous-task-reason { color: var(--c-text-2); }
+.continuous-task-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .35rem .75rem; margin: .65rem 0; }
+.continuous-task-facts dt { color: var(--c-text-2); }
+.continuous-task-facts dd { margin: 0; min-width: 0; }
+.continuous-task-usage { display: contents; }
+.continuous-task-actions { margin-top: .8rem; }
+@media (max-width: 375px) {
+  .continuous-task-card { padding: .75rem; }
+  .continuous-task-facts { grid-template-columns: minmax(0, 1fr); gap: .2rem; }
+  .continuous-task-facts dd { margin-bottom: .35rem; }
+}
+.continuous-start { min-width: 0; }
+.continuous-form { display: grid; gap: .75rem; padding: 1rem; min-width: 0; border: 1px solid var(--c-border); border-radius: var(--radius-sm); }
+.continuous-form label { display: grid; gap: .3rem; min-width: 0; }
+.continuous-form textarea, .continuous-form input { width: 100%; min-width: 0; }
+.continuous-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+@media (max-width: 600px) { .continuous-form-grid { grid-template-columns: minmax(0, 1fr); } }
+.continuous-list { min-width: 0; }
+.continuous-list h3 { margin: .75rem 0 .4rem; }
+.continuous-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; }
+.continuous-list-link { width: 100%; display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; text-align: left; overflow-wrap: anywhere; }
+.continuous-task-actions button:not(.primary), .continuous-start > button {
+  min-height: 38px;
+  padding: .5rem .85rem;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+}
+.continuous-task-actions button:not(.primary):hover:not(:disabled), .continuous-start > button:hover { background: var(--c-hover); }
+.continuous-task-actions button:focus-visible, .continuous-start > button:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+
+/* On a phone, let the navigation bar stay in normal flow in a goal detail.
+   The conversation can scroll to its latest record without covering the goal card. */
+@media (max-width: 719px) {
+  .shell-main:has(.shell-chat.is-continuous) > .pd-topbar { position: static; }
+}
