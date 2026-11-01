@@ -55,7 +55,9 @@ export function collaborationService({TaskCard,ChatInput,createTask,bots}) {
     if (directed && (!(input.data.targetBotIds ?? []).includes(a.botId) || a.goal !== input.data.content)) fail('GROUP_TARGET_FIXED','不能改选认证输入的目标或目标指令。')
     const childTaskId=await createTask(tx,{botId:a.botId,title:a.goal.slice(0,100),taskState:{goal:a.goal,completionCriteria:a.completionCriteria}}, (await tx.task(card.taskId)).conversationId, group ? { conversationId: card.conversationId, at: entryId } : undefined)
     const child=await tx.doc(TaskCard,childTaskId)
-    if (!workspaceShareAllowed(card, child, await tx.doc(ToolAccess)) || !await workspaceHistoryAllowed(tx, child, toolSets(child,bots,await tx.doc(ToolAccess)))) fail('COLLABORATION_NOT_AUTHORIZED','工作区派生简报需要目标独立完整来源许可。')
+    // Ordinary delegation copies a goal and completion criteria, never the parent's source
+    // transcript. The executor uses its own live tools for any source access it needs.
+    if (group && (!workspaceShareAllowed(card, child, await tx.doc(ToolAccess)) || !await workspaceHistoryAllowed(tx, child, toolSets(child,bots,await tx.doc(ToolAccess))))) fail('COLLABORATION_NOT_AUTHORIZED','群上下文需要目标独立完整来源许可。')
     // The brief is the only parent context copied to the independent conversation.
     const relation={version:1,id:key,signature,rootWorkId:`${card.taskId}:${entryId}`,parentTaskId:card.taskId,parentInputId:entryId,supervisorBotId:card.bot.id,executorBotId:a.botId,childTaskId,initiatingUser:card.initiatingUser,goal:a.goal,completionCriteria:copy(a.completionCriteria),parentGoal:card.taskState?.goal??card.title,parentCriteria:copy(card.taskState?.completionCriteria??[]),createdAt:new Date().toISOString(),reviewRequired:card.parameters.tools.includes(REVIEW_TOOL),businessStatus:'pending',revisions:[],decisions:[],reworkCount:0,result:null,consumedEntryId:null}
     if (group) {
@@ -127,8 +129,9 @@ export function collaborationService({TaskCard,ChatInput,createTask,bots}) {
     await authorize(tx,parent)
     const childCard = await tx.doc(TaskCard, taskId)
     const access = await tx.doc(ToolAccess)
-    if (!await workspaceHistoryAllowed(tx, source, toolSets(source, bots, access)) || !await workspaceHistoryAllowed(tx, parent, toolSets(parent, bots, access)) ||
-      !await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, bots, access)) || !workspaceShareAllowed(source, childCard, access) || !workspaceShareAllowed(parent, childCard, access)) fail('COLLABORATION_NOT_AUTHORIZED','工作区派生来源已失效。')
+    if (!await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, bots, access)) ||
+      r.groupId && (!await workspaceHistoryAllowed(tx, source, toolSets(source, bots, access)) || !await workspaceHistoryAllowed(tx, parent, toolSets(parent, bots, access)) ||
+        !workspaceShareAllowed(source, childCard, access) || !workspaceShareAllowed(parent, childCard, access))) fail('COLLABORATION_NOT_AUTHORIZED','工作区派生来源已失效。')
     if (r.groupId) { const g=await assertGroupTask(tx,parent); if (!g || g.groupId!==r.groupId || !g.memberBotIds.includes(r.executorBotId)) fail('GROUP_TARGET_DENIED','群来源与执行者绑定失效。') }
     if(r.groupId&&issueDecision) {
       const {GroupResultSources,projectGroupResult}=await import('./group-result-provenance.mjs')

@@ -68,8 +68,8 @@ export async function loadSkill(id, directory = SKILL_DIRECTORY) {
     }
     const rules = imported?.rules ?? await readFile(resolve(builtin, id, 'SKILL.md'), 'utf8')
     if (!rules.trim() || Buffer.byteLength(rules) > 32768) throw new Error('Invalid rules')
-    const contentHash = snapshotHash({ ...metadata, rules, ...(metadata.references ? { resources } : {}) })
-    return { ...metadata, rules, ...(metadata.references ? { resources } : {}), ref: { id, version: manifest.version, sha256: contentHash }, source: imported ? `imported:${id}@${imported.hash}/SKILL.md` : `local:${id}/SKILL.md` }
+    const contentHash = snapshotHash({ ...metadata, ...(imported?.source?.kind === 'learned' ? { learningSource: imported.source } : {}), rules, ...(metadata.references ? { resources } : {}) })
+    return { ...metadata, ...(imported?.source?.kind === 'learned' ? { learningSource: imported.source } : {}), rules, ...(metadata.references ? { resources } : {}), ref: { id, version: manifest.version, sha256: contentHash }, source: imported ? `imported:${id}@${imported.hash}/SKILL.md` : `local:${id}/SKILL.md` }
   } catch (error) {
     if (error?.code === 'SKILL_NOT_FOUND') throw error
     throw failure('SKILL_LOAD_FAILED', '本地 Skill 清单或完整规则无法读取或格式无效；未激活。')
@@ -78,8 +78,8 @@ export async function loadSkill(id, directory = SKILL_DIRECTORY) {
 
 // Every registered Skill is listed for every Bot: applicability is advice for the model, not a hidden
 // permission gate. A Skill's own required tools/resources are still checked before it loads.
-function applicable(_skill, _card, _bots) {
-  return true
+function applicable(skill, card, _bots) {
+  return !skill.learningSource || skill.learningSource.ownerBotId === card?.bot?.id
 }
 function dependencies(skill, card, bots, access) {
   if (card.parameters.mode !== 'model') return failure('SKILL_MODEL_REQUIRED', '当前 Task 为确定性测试模式，不能按 Skill 进行模型分析。')
@@ -97,28 +97,38 @@ function dependencies(skill, card, bots, access) {
 /** Real R1-08 registration projection; declared tools never become granted toolNames. */
 export async function skillCapabilityCatalog(directory = SKILL_DIRECTORY, context = {}) {
   const imported = userSkills(directory) ? (await userSkills(directory).skillCatalog()).skills : []
-  return Promise.all((await registeredSkills(directory)).map(async (id) => {
+  return (await Promise.all((await registeredSkills(directory)).map(async (id) => {
     const record = imported.find((item) => item.id === id)
     try {
       const skill = await loadSkill(id, directory)
+      if (skill.learningSource) {
+        if (!userSkills(directory)?.assertLearningAccess) return null
+        await userSkills(directory).assertLearningAccess({ source: skill.learningSource, botId: context.card?.bot?.id ?? skill.learningSource.ownerBotId, tx: context.tx })
+        if (context.card && !applicable(skill, context.card)) return null
+      }
       const error = context.card && dependencies(skill, context.card, context.bots ?? [], context.access)
       const status = record?.status === 'error' ? 'error' : error || skill.scripts.length ? 'missing_dependency' :
         context.card ? 'ready' : record?.status ?? 'ready'
-      return { id: `skill:${id}`, kind: 'skill', name: skill.name, description: skill.description, status,
+      return { ...(skill.learningSource ? { ownerBotId: skill.learningSource.ownerBotId } : {}), id: `skill:${id}`, kind: 'skill', name: skill.name, description: skill.description, status,
         revision: record ? `${record.revision}:${record.hash}` : skill.ref.sha256, version: skill.version, toolNames: [],
         requirements: [...skill.requiredTools.map((name) => ({ kind: 'tool', id: name })),
           ...skill.requiredResources.map((name) => ({ kind: 'resource', id: name })), ...skill.scripts.map((name) => ({ kind: 'script', id: name }))],
         lastCheck: record?.lastCheck ?? { status, checkedAt: new Date().toISOString() } }
     } catch {
+      if (record?.source?.kind === 'learned') return null
       return { id: `skill:${id}`, kind: 'skill', name: id, description: 'Skill 文件无法读取或校验失败。', status: 'error', revision: record ? String(record.revision) : 'invalid', toolNames: [], requirements: [], lastCheck: { status: 'error' } }
     }
-  }))
+  }))).filter(Boolean)
 }
 async function liveSkillAccess(tx, card, skill, bots, directory, access) {
+  if (skill.learningSource) {
+    if (!userSkills(directory)?.assertLearningAccess) throw failure('SKILL_LEARNING_SOURCE_UNAVAILABLE', '缺少学习来源验证器。')
+    await userSkills(directory).assertLearningAccess({ source: skill.learningSource, botId: card.bot.id, tx })
+  }
   const liveBots = bots ?? (await tx.doc(BotDirectory)).items
   const currentAccess = access ?? await tx.doc(ToolAccess)
   const error = dependencies(skill, card, liveBots, currentAccess)
-  const catalog = await skillCapabilityCatalog(directory, { card, bots: liveBots, access: currentAccess })
+  const catalog = await skillCapabilityCatalog(directory, { card, bots: liveBots, access: currentAccess, tx })
   // A built-in Task's pinned snapshot remains valid after a source update/removal. Imported
   // packages instead retain live registration (remove must revoke even pinned content).
   const registered = catalog.find((item) => item.id === `skill:${skill.id}`)
@@ -142,6 +152,7 @@ export async function assertSkillReady(tx, id) {
 
 function snapshotHash(skill) {
   const metadata = Object.fromEntries(metadataKeys.map((key) => [key, skill[key]]))
+  if (skill.learningSource !== undefined) metadata.learningSource = skill.learningSource
   if (skill.references !== undefined) metadata.references = skill.references
   return hash(JSON.stringify(metadata) + '\n' + skill.rules + (skill.references !== undefined ? '\n' + JSON.stringify(skill.resources) : ''))
 }
@@ -220,7 +231,10 @@ export async function skillCatalogForTask(tx, card, bots, directory = SKILL_DIRE
       verify(skill)
       if (!applicable(skill, card, bots)) continue
       let error = dependencies(skill, card, bots, await tx.doc(ToolAccess))
-      try { await liveSkillAccess(tx, card, skill, bots, directory) } catch (caught) { error ??= { code: caught.code, message: caught.message, missing: caught.missing ?? [] } }
+      try { await liveSkillAccess(tx, card, skill, bots, directory) } catch (caught) {
+        if (skill.learningSource && caught.code === 'SKILL_LEARNING_SOURCE_UNAVAILABLE') continue
+        error ??= { code: caught.code, message: caught.message, missing: caught.missing ?? [] }
+      }
       items.push({ id, name: skill.name, description: skill.description, version: skill.ref.version,
         available: !error, ...(error ? { error } : {}) })
     } catch { /* Unreadable unpinned sources are not selectable. */ }
@@ -295,14 +309,20 @@ export function skillApi({ harness, context, TaskCard, ChatInput, bots, get, dir
   return {
     skillCapabilityCatalog: () => skillCapabilityCatalog(directory),
     async skillCatalog() {
-      return Promise.all((await registeredSkills(directory)).map(async (id) => {
+      return (await Promise.all((await registeredSkills(directory)).map(async (id) => {
         try {
+          if ((await loadSkill(id, directory)).learningSource) return null
           const { rules: _rules, resources: _resources, ref: _ref, source: _source, ...metadata } = await loadSkill(id, directory)
           return { ...metadata, available: metadata.scripts.length === 0, ...(metadata.scripts.length ? { error: failure('SKILL_DEPENDENCY_MISSING', '缺少脚本执行支持。', metadata.scripts.map((name) => `script:${name}`)) } : {}) }
         } catch (error) { return { id, available: false, error } }
-      }))
+      }))).filter(Boolean)
     },
     activateSkill: (id, input) => mutate(id, input, false),
     deactivateSkill: (id, input) => mutate(id, input, true),
   }
+}
+
+/** Context reconstruction must check persisted snapshots, not merely their active IDs. */
+export async function skillSnapshotReadable(tx, card, skill, bots, directory = SKILL_DIRECTORY) {
+  try { verify(skill); await liveSkillAccess(tx, card, skill, bots, directory); return true } catch { return false }
 }

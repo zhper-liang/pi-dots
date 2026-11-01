@@ -43,6 +43,20 @@ async function fixture(t, options = {}) {
 const request = requestId => ({ requestId, confirmed: true })
 const deleted = error => error.status === 410 && error.code === 'SESSION_DELETED'
 
+test('session list can include Bot main conversations and retains their latest message', async t => {
+  const f = await fixture(t)
+  const main = (await f.store.mainSessions()).calendar
+  await f.store.send(main, '主会话里的历史')
+  assert.equal((await f.call('/api/tasks')).body.tasks.some(task => task.taskId === main), false)
+  const listed = await f.call('/api/tasks?includeMain=1')
+  assert.equal(listed.status, 200)
+  const row = listed.body.tasks.find(task => task.taskId === main)
+  assert.equal(row.kind, 'main')
+  assert.ok(row.lastMessage?.content)
+  const detail = await f.call(`/api/tasks/${main}`)
+  assert.ok(detail.body.task.messages.some(message => message.content === '主会话里的历史'))
+})
+
 test('production HTTP delete is authenticated, persistent, replayable and hidden from list/detail/send', async t => {
   const f = await fixture(t)
   const created = await f.call('/api/tasks', { method: 'POST', body: { botId: 'calendar', title: 'delete target' } })

@@ -128,7 +128,7 @@ test('T12 loopback saved connection rotates old Task address/key live while mode
   const refs = (await store.getBotConfiguration('chief')).bot.configRef
   const save = await firstApi.request('/api/settings/model', 'POST', { requestId: 't12-rotate-model-settings', baseUrl: next.baseUrl, model: 'new-default', apiKey: newKey })
   assert.equal(save.status, 200)
-  assert.deepEqual(Object.keys(save.body.data).sort(), ['baseUrl', 'hasKey', 'model', 'source'])
+  assert.deepEqual(Object.keys(save.body.data).sort(), ['baseUrl', 'contextWindow', 'hasKey', 'model', 'source'])
   const unchanged = await store.get(task.taskId)
   assert.deepEqual(unchanged.messages, before.messages)
   assert.deepEqual(unchanged.callUsage, before.callUsage)
@@ -256,7 +256,7 @@ test('T12 environment settings are read-only across API restart; responses, erro
   const first = await api(t, store, secrets)
   const read = await first.request('/api/settings/model')
   assert.equal(read.status, 200)
-  assert.deepEqual(read.body.data, { baseUrl: endpoint.baseUrl, model: 'model-a', hasKey: true, source: 'env' })
+  assert.deepEqual(read.body.data, { baseUrl: endpoint.baseUrl, model: 'model-a', hasKey: true, contextWindow: 256000, source: 'env' })
   const before = await store.harness.snapshot(BotDirectory, undefined, context)
   const refused = await first.request('/api/settings/model', 'POST', { requestId: 't12-env-write-refused', baseUrl: 'http://127.0.0.1:9/v1', model: 'not-applied', apiKey: attemptedKey })
   assert.equal(refused.status, 409)

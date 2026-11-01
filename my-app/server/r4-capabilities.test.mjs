@@ -1,3 +1,6 @@
+import { MAIN_MEMORY_TOOLS } from './memory-tools.mjs'
+import { SESSION_HISTORY_TOOLS } from './history-search.mjs'
+import { INTRINSIC_TOOLS, toolDefinitions } from './tools.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
@@ -7,7 +10,9 @@ import { join } from 'node:path'
 import { createApiServer } from './app.mjs'
 import { openTaskStore } from './tasks.mjs'
 import { groupTools } from './tool-groups.mjs'
-import { toolCatalog } from './tools.mjs'
+
+// Main-only discovery and manual review never become ordinary Task abilities.
+const mainIntrinsicTools = () => toolDefinitions([...INTRINSIC_TOOLS, ...SESSION_HISTORY_TOOLS, ...MAIN_MEMORY_TOOLS]).map(tool => tool.name)
 
 const skill = { id: 'skill:r4-fixture', kind: 'skill', name: '测试 Skill', description: '声明式资料', status: 'ready', revision: '1', requirements: [], toolNames: [] }
 async function fixture(t) {
@@ -17,25 +22,27 @@ async function fixture(t) {
   return store
 }
 
-test('R4 creation defaults to schedule/todos and history, with connected resources and no mock calendar', async t => {
+test('creation defaults to a blank Bot with no capabilities or resources', async t => {
   const store = await fixture(t)
   const input = { name: '默认机器人', requestId: 'r4-create-default' }
   const created = await store.createBot(input)
-  const installed = new Set(toolCatalog().map(tool => tool.name))
-  const expected = [...groupTools('todos'), ...groupTools('history')].filter(name => installed.has(name))
+  const expected = []
   assert.deepEqual(created.bot.defaults.tools, expected)
-  assert.ok(created.bot.defaults.toolResources.includes('workspace:local'))
-  assert.ok(!created.bot.defaults.toolResources.includes('mock:personal'))
+  assert.equal(created.bot.description, '')
+  assert.deepEqual(created.bot.defaults.toolResources, [])
+  const main = await store.get(created.mainTaskId)
+  assert.deepEqual(main.toolSets.authorized, mainIntrinsicTools())
+  assert.deepEqual(main.toolSets.resources, [])
   const configuration = await store.getBotConfiguration(created.bot.id)
-  assert.deepEqual(configuration.assigned, { tools: expected, resources: ['workspace:local'] })
+  assert.deepEqual(configuration.assigned, { tools: expected, resources: [] })
   assert.deepEqual(configuration.versions[0].defaults, created.bot.defaults)
   assert.equal(configuration.versions.length, 1)
 })
 
-test('R4 creation accepts a selected history-only capability', async t => {
+test('legacy history-only creation is accepted without assigning intrinsic tools', async t => {
   const store = await fixture(t)
   const { bot } = await store.createBot({ name: '只回读', requestId: 'r4-create-history', capabilities: ['tool:history'] })
-  assert.deepEqual(bot.defaults.tools, groupTools('history'))
+  assert.deepEqual(bot.defaults.tools, [])
   assert.deepEqual(bot.defaults.toolResources, [])
 })
 

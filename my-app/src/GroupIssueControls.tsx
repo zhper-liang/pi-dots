@@ -7,7 +7,7 @@ export default function GroupIssueControls({items,token,onRefresh,onError}:{item
   return <section aria-label="群内待处理" className="group-issues"><h3>群内待处理</h3>{visible.map(item => <article key={item.taskId}>
     <p><a href={`#bot=${encodeURIComponent(item.bot.id)}&task=${item.taskId}`}>打开原任务 · {item.bot.id}</a></p>
     {item.restricted && <p role="status">暂时看不了这条记录，请核对连接权限。</p>}
-    <TaskBlockerControls task={{ ...item, groupChild: true }} token={token} onUpdated={onRefresh} onError={onError} />
-    <TaskApprovalControls task={{ ...item, groupChild: true }} token={token} onUpdated={onRefresh} onError={onError} />
+    {!item.restricted && <><TaskBlockerControls task={{ ...item, groupChild: true }} token={token} onUpdated={onRefresh} onError={onError} />
+    <TaskApprovalControls task={{ ...item, groupChild: true }} token={token} onUpdated={onRefresh} onError={onError} /></>}
   </article>)}</section>
 }

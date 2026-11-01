@@ -52,22 +52,24 @@ test('iss16 report atomically persists question, assignee, linked Task and durab
 })
 
 test('iss16 targeted answer resumes original input, preserves config/history/usage, then FIFO consumes normally', async (t) => {
-  const seen = []; let originalId
+  const seen = []; let originalId, originalCalls = 0
   const { store } = await fixture(t, { modelReply: async (message, options) => {
     seen.push({ message, context: options.context });
-    if (seen.length === 1) return turn()
-    if (seen.length === 2) return turn([call(CALENDAR_TOOL, { date: '2026-10-16', resource: 'mock:personal' }, 'calendar-call')])
+    if (message === '不要把普通消息当回答') return reply('已处理独立消息')
+    originalCalls++
+    if (originalCalls === 1) return turn()
+    if (originalCalls === 2) return turn([call(CALENDAR_TOOL, { date: '2026-10-16', resource: 'mock:personal' }, 'calendar-call')])
     return reply()
   } })
   const task = await store.create({ botId: 'calendar', taskState: { constraints: ['只读，不修改任何日程'] } })
   const sent = await store.send(task.taskId, '整理10月16日日程，先问时区'); originalId = sent.messageId
   const waiting = await blocked(store, task.taskId)
   const queued = await store.send(task.taskId, '不要把普通消息当回答')
-  assert.equal(queued.status, 'queued'); await delay(45); assert.equal(seen.length, 1)
+  assert.equal(queued.status, 'queued'); await settled(store, task.taskId); assert.equal(seen.length, 2)
   await store.resolveBlocker(task.taskId, waiting.blockers.activeId, { answer: 'Asia/Shanghai' })
   const done = await settled(store, task.taskId)
-  assert.equal(seen[1].message, seen[0].message)
-  const texts = seen[1].context.messages.filter((m) => m.role === 'user').map((m) => m.content)
+  assert.equal(seen[2].message, seen[0].message)
+  const texts = seen[2].context.messages.filter((m) => m.role === 'user').map((m) => m.content)
   assert.ok(texts.some((text) => text.includes('Asia/Shanghai') && text.includes(`问题 #${waiting.blockers.activeId}`)))
   assert.ok(!texts.includes('不要把普通消息当回答'))
   assert.equal(done.blockers.items[0].answer.content, 'Asia/Shanghai'); assert.equal(done.blockers.activeId, null)
@@ -115,9 +117,11 @@ test('iss16 normal reopen retains pending question, FIFO and fixed model without
   const { store, close, open } = await fixture(t, { modelReply: async () => ++calls === 1 ? turn() : reply() })
   const task = await store.create({ botId: 'calendar' }); await store.send(task.taskId, '需要时区')
   const waiting = await blocked(store, task.taskId); const queued = await store.send(task.taskId, '排队输入')
+  const parked = await settled(store, task.taskId)
+  assert.equal(parked.messages.find(m => m.id === queued.messageId).deliveryStatus, 'completed')
   await close(store); const reopened = await open()
-  const reloaded = await blocked(reopened, task.taskId); assert.deepEqual(reloaded.blockers, waiting.blockers)
-  assert.deepEqual(reloaded.queuedInputIds, [queued.messageId]); await delay(60); assert.equal(calls, 1)
+  const reloaded = await settled(reopened, task.taskId); assert.deepEqual(reloaded.blockers, parked.blockers)
+  assert.deepEqual(reloaded.queuedInputIds, []); await delay(60); assert.equal(calls, 2)
   await reopened.resolveBlocker(task.taskId, waiting.blockers.activeId, { answer: 'Asia/Shanghai' }); const done = await settled(reopened, task.taskId)
   assert.deepEqual(done.parameters, task.parameters); assert.equal(calls, 3)
 })
@@ -169,16 +173,14 @@ test('iss16 authenticated resolve API validates task ownership, payload, methods
   const done = await settled(store, task.taskId); assert.equal(done.blockers.items[0].answer.source, 'authenticated-user'); assert.equal(calls, 2)
 })
 
-test('iss16 blocked Task rejects steering/state/limits/skills but ordinary messages remain queued', async (t) => {
+test('iss16 waiting input keeps state/limits/skills guarded while explicit adjustment replaces the question', async (t) => {
   const { store } = await fixture(t, { modelReply: async () => turn() })
   const task = await store.create({ botId: 'calendar' }); await store.send(task.taskId, '需要时区'); await blocked(store, task.taskId)
-  const queued = await store.send(task.taskId, 'Asia/Shanghai')
-  assert.equal(queued.status, 'queued')
-  await assert.rejects(store.steer(task.taskId, { message: 'Asia/Shanghai' }), { code: 'TASK_BLOCKED' })
-  await assert.rejects(store.steer(task.taskId, { messageId: queued.messageId }), { code: 'TASK_BLOCKED' })
   await assert.rejects(store.updateState(task.taskId, { goal: '新目标' }), { code: 'TASK_BUSY' })
   await assert.rejects(store.raiseLimits(task.taskId, { modelCalls: 30 }), { code: 'TASK_BUSY' })
   await assert.rejects(store.activateSkill(task.taskId, { skillId: 'calendar-conflict-analysis' }), { code: 'TASK_BUSY' })
+  await store.steer(task.taskId, { message: '改为只说明需要的信息' })
+  assert.equal((await store.get(task.taskId)).blockers.items[0].status, 'superseded')
 })
 
 test('iss16 answer keeps accumulated call limits and waits for explicit increase rather than resetting usage', async (t) => {
@@ -250,7 +252,7 @@ test('iss16 maximum-size Unicode question keeps blocker identity in bounded rece
 
 test('iss16 after an answered question compaction retains its linked history without reasking or redoing tools', async (t) => {
   let calls = 0, summaries = 0, scheduleCalls = 0, answerId
-  const bots = listBots(config, { maxOutputTokens: 1024, contextWindows: { [config.model]: 17000 }, callLimits: { modelCalls: 20, toolCalls: 15 } })
+  const bots = listBots(config, { maxOutputTokens: 1024, contextWindows: { [config.model]: 26000 }, callLimits: { modelCalls: 20, toolCalls: 15 } })
   const { store } = await fixture(t, { bots, modelReply: async (_message, options) => {
     if (options.purpose === 'context-compaction') { summaries++; return reply('用户已从对应事项回答展示时区Asia/Shanghai；日期2026-10-16。日程列表已经查询成功，不要重做。保留只读限制，继续最终分析。') }
     calls++

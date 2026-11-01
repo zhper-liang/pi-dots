@@ -22,9 +22,10 @@ const WEEK = ['一', '二', '三', '四', '五', '六', '日']
 const PALETTE = ['var(--c-text-2)', 'var(--c-muted)', 'var(--c-text-4)']
 const PROVIDER_NAMES: Record<string, string> = { feishu: '飞书日历', 'google-calendar': 'Google 日历', 'google-tasks': 'Google 任务' }
 // R3-03: external sources show the provider and the calendar's own name (Google lists many calendars).
-const sourceName = (id: string, info?: PermissionSource) => {
-  if (id === 'local') return '本地日程'
+const sourceName = (id: string, info?: PermissionSource, compact = false) => {
+  if (id === 'local') return compact ? '本地' : '本地日历'
   const kind = PROVIDER_NAMES[info?.provider ?? (id.startsWith('feishu') ? 'feishu' : id.split(':')[0])] ?? '外部日历'
+  if (compact) return kind === '飞书日历' ? '飞书' : kind.startsWith('Google') ? 'Google' : '外部'
   return info?.title ? `${kind} · ${info.title}` : kind
 }
 const isDate = (v?: string) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
@@ -171,6 +172,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
   const byDay = useMemo(() => { const m: Record<string, Ev[]> = {}; for (const ev of events) if (!ev.allDay) for (const d of calendarEventDays(ev.s, ev.e, timezone)) (m[d] ??= []).push(ev); for (const d in m) m[d].sort((a, b) => a.s - b.s); return m }, [events, timezone])
   const allDayByDay = useMemo(() => { const m: Record<string, Ev[]> = {}; for (const ev of events) if (ev.allDay) for (let d = ev.start!, n = 0; d < ev.end! && n < 62; d = addDays(d, 1), n++) (m[d] ??= []).push(ev); return m }, [events])
   const sourceLabel = (id: string) => sourceName(id, sourceInfo[id])
+  const sourceBadge = (id: string) => <span className="cal-source-badge" title={sourceLabel(id)}>{sourceName(id, sourceInfo[id], true)}</span>
   const dueByDay = useMemo(() => { const m: Record<string, Item[]> = {}; for (const t of todos) { const d = !t.deletedAt && calendarDueDay(t.due, timezone); if (d) (m[d] ??= []).push(t) } return m }, [todos, timezone])
 
   async function command(input: object, done: string) {
@@ -272,13 +274,13 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       onClick={e => { e.stopPropagation(); if (busy || pending.current) return; rememberOpener(); setError(''); if (narrow && ev.local) void openEdit(ev); else setPop({ kind: 'detail', ev }) }}
       onDragEnd={() => { drag.current = null }}
       aria-label={`${ev.title || '无标题'}，${hm(ev.s)} 到 ${hm(ev.e)}，${sourceLabel(ev.sourceId)}`}>
-      <span className="cal-event-time">{hm(ev.s)}</span><span className="cal-event-title">{ev.title || '无标题'}</span>
+      <span className="cal-event-meta"><span className="cal-event-time">{hm(ev.s)}</span>{sourceBadge(ev.sourceId)}</span><span className="cal-event-title">{ev.title || '无标题'}</span>
     </button>)
   const allDayChip = (ev: Ev) => (
     <button key={ev.key} type="button" className="cal-due" style={{ border: 0, borderLeft: `3px solid ${colors[ev.sourceId] ?? '#888'}`, background: `color-mix(in srgb, ${colors[ev.sourceId] ?? '#888'} 13%, var(--c-bg))`, color: 'var(--c-text)', cursor: 'pointer', font: 'inherit', fontSize: 11 }}
-      title={`全天：${ev.title || '无标题'}`} aria-label={`${ev.title || '无标题'}，全天，${sourceLabel(ev.sourceId)}`}
-      onClick={e => { e.stopPropagation(); if (busy || pending.current) return; rememberOpener(); setError(''); setPop({ kind: 'detail', ev }) }}>{ev.title || '无标题'}</button>)
-  const dueChips = (d: string) => [...(allDayByDay[d] ?? []).map(allDayChip), ...(dueByDay[d] ?? []).map(t => <span key={t.id} className={`cal-due${t.status === 'completed' ? ' is-done' : ''}`} title={`截止：${t.title}`}>截止 · {t.title}</span>)]
+      title={`全天：${ev.title || '无标题'} · ${sourceLabel(ev.sourceId)}`} aria-label={`${ev.title || '无标题'}，全天，${sourceLabel(ev.sourceId)}`}
+      onClick={e => { e.stopPropagation(); if (busy || pending.current) return; rememberOpener(); setError(''); setPop({ kind: 'detail', ev }) }}><span className="cal-chip-title">{ev.title || '无标题'}</span>{sourceBadge(ev.sourceId)}</button>)
+  const dueChips = (d: string) => [...(allDayByDay[d] ?? []).map(allDayChip), ...(dueByDay[d] ?? []).map(t => <span key={`${t.sourceId}|${t.id}`} className={`cal-due${t.status === 'completed' ? ' is-done' : ''}`} title={`截止：${t.title} · ${sourceLabel(t.sourceId)}`}><span className="cal-chip-title">截止 · {t.title}</span>{sourceBadge(t.sourceId)}</span>)]
 
   function timeGrid() {
     return <div className="cal-grid-wrap">
@@ -365,7 +367,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       body = <form onSubmit={e => { e.preventDefault(); save() }}>
         <h3 className="cal-dialog-heading">{p.kind === 'create' ? '新建日程' : p.moved ? '确认调整时间' : '编辑日程'}</h3>
         {p.kind === 'edit' && p.moved && <p className="cal-pop-hint">从 {label(dayKey(p.ev.s))} {hm(p.ev.s)} 移到 {label(p.start.date)} {p.start.time}，确认后保存。</p>}
-        <fieldset className="cal-edit-fields" disabled={busy || unconfirmed}><legend className="cal-pop-hint">{p.kind === 'edit' ? `本地日程 · 当前版本 ${p.ev.version}` : '本地日程'}</legend>
+        <fieldset className="cal-edit-fields" disabled={busy || unconfirmed}><legend className="cal-pop-hint">来源：{p.kind === 'edit' ? sourceLabel(p.ev.sourceId) : sourceLabel('local')}</legend>
         <label className="cal-field">标题<input disabled={busy || unconfirmed} autoFocus required maxLength={500} value={p.title} onChange={e => setPop({ ...p, title: e.target.value })} placeholder="例如：看电影" /></label>
         <div className="cal-time-pickers">
           <LocalTimePicker label="开始" date={p.start.date} time={p.start.time} timezone={p.start.timezone} disabled={busy || unconfirmed} onChange={(start: LocalDateTime) => setPop({ ...p, start })} />
@@ -402,7 +404,7 @@ export default function CalendarBoard({ token, initialMode = 'week', active = tr
       </div>
     </header>
     <div className="cal-legend" aria-label="日历图例">
-      {authorized && <span><i style={{ background: colors.local }} />本地日程</span>}
+      {authorized && <span><i style={{ background: colors.local }} />{sourceLabel('local')}</span>}
       {extSources.map(s => <span key={s}><i style={{ background: colors[s] }} />{sourceLabel(s)}{sourceInfo[s]?.readOnly && <em className="cal-legend-ro" style={{ fontStyle: 'normal', marginLeft: 4, padding: '0 4px', border: '1px solid var(--c-line)', borderRadius: 'var(--radius-sm)' }}>只读</em>}</span>)}
       {todos.some(t => t.due) && <span><i className="is-due" />待办截止</span>}
     </div>

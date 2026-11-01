@@ -3,11 +3,13 @@ import { externalWorkspaceResources } from './workspace-providers.mjs'
 import { MANAGEMENT_TOOLS } from './management-tools.mjs'
 import { createHash } from 'node:crypto'
 import { assertBotActive, BotDirectory, createDirectoryBot } from './bot-directory.mjs'
-import { ToolAccess, toolCatalog } from './tools.mjs'
-import { TaskInputError, taskParameters } from './task-config.mjs'
+import { ToolAccess, toolCatalog, INTRINSIC_TOOLS, RECALL_TOOLS } from './tools.mjs'
+import { TaskInputError, taskParameters, pinModelContext } from './task-config.mjs'
 import { DEFAULT_CAPABILITIES, enableAtCreation } from './capability-assignments.mjs'
 import { MOCK_RESOURCE } from './resource-sharing.mjs'
 import { describeGroups, toolLabel } from './tool-group-settings.mjs'
+import { MAIN_TOOLS } from './main-tools.mjs'
+import { AUTOMATION_PAUSE_TOOL } from './policy.mjs'
 
 const copy = (x) => JSON.parse(JSON.stringify(x))
 const canonical = (x) => Array.isArray(x) ? x.map(canonical) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, canonical(x[k])])) : x
@@ -31,8 +33,24 @@ export function initializeConfiguration(directory, access) {
   access.revoked ??= {}
   for (const bot of directory.items) {
     access.assignments[bot.id] ??= { tools: [...(bot.defaults.tools ?? [])], resources: [...(bot.defaults.toolResources ?? [])] }
+    // Built-in abilities need no optional assignment; keep immutable versions/receipts intact.
+    access.assignments[bot.id].tools = access.assignments[bot.id].tools.filter(name => !INTRINSIC_TOOLS.includes(name))
     directory.configurations[bot.id] ??= [{ ...copy(bot), source: bot.source === 'legacy-task' ? 'legacy-task' : bot.createdAt ? 'authenticated-user-creation' : 'legacy-persisted-config', savedAt: bot.createdAt ?? new Date().toISOString() }]
   }
+}
+// Preserve old effective rights as ordinary assignments once. Preset identities must
+// not restore a capability after the user removes it through normal configuration.
+export function migrateMainAssignments(directory, access) {
+  if ((access.mainAssignments?.version ?? 0) >= 2) return
+  const legacy = new Set([...(access.mainAssignments?.bots ?? []),
+    ...directory.items.filter(bot => bot.capabilityDefaultsVersion !== 2).map(bot => bot.id)])
+  const tools = [...MAIN_TOOLS, AUTOMATION_PAUSE_TOOL]
+  for (const bot of directory.items) {
+    if (!legacy.has(bot.id) || bot.id === 'chief') continue
+    const assigned = access.assignments[bot.id]
+    assigned.tools = [...new Set([...assigned.tools, ...tools.filter(name => !access.revoked[bot.id]?.includes(name))])]
+  }
+  access.mainAssignments = { version: 2, bots: legacy.has('chief') ? ['chief'] : [] }
 }
 // Compatibility export for callers that enumerate the static installed tools, not a grant.
 export const allGroupTools = () => names()
@@ -74,10 +92,11 @@ export async function changeConfiguration(tx, botId, input, { models }) {
       if (typeof input.expectedVersion !== 'string' || input.expectedVersion !== bot.configRef.version) fail(409, 'CONFIG_VERSION_CONFLICT', '配置已更新；请重新加载并比较后再保存。')
       // S1: available tools = installed tools; available resources = supportedResources + feishu binding.
       const availableTools = names(a), availableResources = [...new Set([...(await availableResourceList(tx)).resources, ...a.assignments[botId].resources])]
-      if (typeof input.description !== 'string' || input.description.length > 2000 || !subset(input.tools, availableTools) || !subset(input.resources, availableResources)) fail(400, 'CAPABILITY_NOT_GRANTED', '职责无效或工具/资源不可用。')
+      if (typeof input.description !== 'string' || input.description.length > 2000 || !subset(input.tools, [...availableTools, ...RECALL_TOOLS]) || !subset(input.resources, availableResources)) fail(400, 'CAPABILITY_NOT_GRANTED', '职责无效或工具/资源不可用。')
       const defaults = taskParameters(input.parameters, copy(bot.defaults))
       if (defaults.mode === 'model' && !models.some((m) => m.id === defaults.model.id)) fail(400, 'MODEL_NOT_CONFIGURED', '仅可选择服务端已配置的模型。')
-      defaults.tools = [...input.tools]; defaults.toolResources = [...input.resources]
+      pinModelContext(defaults, models)
+      defaults.tools = input.tools.filter(name => !INTRINSIC_TOOLS.includes(name)); defaults.toolResources = [...input.resources]
       const history = d.configurations[botId]
       const next = { ...copy(bot), description: input.description.trim(), defaults,
         configRef: { botId, version: `config-${history.length + 1}-${hash({ input, previous: bot.configRef }).slice(0, 12)}` } }
@@ -86,7 +105,7 @@ export async function changeConfiguration(tx, botId, input, { models }) {
       const added = input.resources.filter(resource => !previousResources.includes(resource))
       a.excludedResources ??= {}
       a.excludedResources[botId] = [...new Set([...(a.excludedResources[botId] ?? []), ...removed])].filter(resource => !added.includes(resource))
-      a.assignments[botId] = { tools: [...input.tools], resources: [...input.resources] }
+      a.assignments[botId] = { tools: [...defaults.tools], resources: [...input.resources] }
       d.items[d.items.findIndex((b) => b.id === botId)] = next
       history.push({ ...copy(next), source: 'authenticated-user', requestId: input.requestId, savedAt: new Date().toISOString() })
       audit({ type: 'configuration-saved', requestId: input.requestId, previous: copy(bot.configRef), next: copy(next.configRef) })
@@ -118,7 +137,7 @@ export function configurationApi({ harness, context, catalog, models, refreshMod
       return copy({ bot, versions: d.configurations[botId], installed: names(a), toolLabels: Object.fromEntries(names(a).map((n) => [n, toolLabel(n)])),
         toolGroups: describeGroups({ botId, assigned: assigned.tools, revoked, mainSession: botId !== 'group' }),
         assigned, revoked,
-        models: models.map((m) => ({ id: m.id, provider: m.provider })), ...await availableResourceList(tx),
+        models: models.map((m) => ({ id: m.id, provider: m.provider, ...(m.name ? { name: m.name } : {}) })), ...await availableResourceList(tx),
         audit: d.managementAudit.filter((e) => !e.botId || e.botId === botId) })
     }, context)
   }
@@ -140,6 +159,7 @@ export async function createConfiguredBot(tx, parsed, configuredModels, catalog 
   const directory = copy(liveDirectory)
   const access = await tx.doc(ToolAccess)
   const created = createDirectoryBot(directory, parsed)
+  if (created.created) pinModelContext(created.bot.defaults, configuredModels)
   if (created.created && created.bot.defaults.mode === 'model' && !configuredModels.some((m) => m.id === created.bot.defaults.model.id)) throw new TaskInputError(400, 'MODEL_NOT_CONFIGURED', '仅可选择已配置模型。')
   if (created.created) {
     // Seed version 1 before applying the selected capabilities to the live directory.

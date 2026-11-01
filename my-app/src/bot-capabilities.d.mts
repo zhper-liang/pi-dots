@@ -5,6 +5,8 @@ export type CapabilityItem = {
   name: string
   description: string
   status: string
+  available?: boolean
+  unavailableReason?: string
 }
 export type BotTemplate = { name: string; description: string; capabilities: string[] }
 export const CAPABILITY_TABS: { id: CapabilityKind; label: string }[]

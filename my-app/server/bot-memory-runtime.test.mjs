@@ -39,6 +39,18 @@ async function settled(store, id) {
 }
 const edit = (store, content, version = 1, requestId = `personality-${version}`) => store.editBotMemory('chief', { kind: 'personality', action: 'set', content, expectedVersion: version, requestId })
 
+test('memory extraction starts a durable source scan and close removes its subscription', async () => {
+  let schedule, scans = 0, unsubscribed = false
+  const worker = createBotMemoryRuntime({ enabled: true, transaction: async fn => fn({ doc: async () => state }), gather: async () => { scans++; return [] },
+    subscribe: callback => { schedule = callback; return () => { unsubscribed = true } } })
+  const state = MemoryExtraction.definition.initial()
+  await worker.start()
+  assert.equal(scans, 1)
+  schedule(); await worker.close()
+  assert.equal(unsubscribed, true)
+  const after = scans; schedule(); assert.equal(scans, after)
+})
+
 test('T11b source gate excludes groups, inherited, delegated, automated and unauthenticated entries', () => {
   assert.equal(memorySourceAllowed(card, entry), true)
   for (const change of [{ kind: 'group' }, { initiatingUser: 'external' }, { forkSource: {} }, { groupId: 'g' }, { collaboration: {} }, { mainParent: {} }, { scheduledWorkflow: {} }, { origin: 'event' }]) assert.equal(memorySourceAllowed({ ...card, ...change }, entry), false)
@@ -135,28 +147,29 @@ function fakeRuntime({ state = MemoryExtraction.definition.initial(), modelReply
   let calls = 0
   const documents = { memory: { version: 0, items: [] }, preferences: { version: 0, items: [] } }
   const tx = { doc: async () => state }, transaction = async fn => fn(tx)
-  const service = { get: async () => structuredClone(documents), markPending: async () => {}, applyCandidate: async (_tx, input) => ({ ok: true, version: 1, document: documents[input.kind] }) }
+  const service = { get: async () => structuredClone(documents), markPending: async () => {}, applyCandidate: async (_tx, input) => ({ ok: true, changed: true, version: 1, document: documents[input.kind] }) }
   const worker = createBotMemoryRuntime({ enabled, idleMs: 100000, transaction, service, gather: async () => [{ card, entries: [entry] }], validate,
     modelReply: async (...args) => { calls++; return modelReply(...args) }, getSecrets: async () => [], now: () => Date.parse('2026-10-29T00:00:00Z') })
   return { worker, state, calls: () => calls }
 }
 
-test('T11b failed/running worker attempts do not replay the same batch after restart', async () => {
+test('failed review remains retryable after restart instead of advancing a success cursor', async () => {
   const first = fakeRuntime({ modelReply: async () => { throw new Error('private-model-error') } })
   await first.worker.tick(); assert.equal(first.calls(), 1)
+  const job = Object.values(first.state.jobs)[0]
+  assert.equal(job.state, 'retry-wait'); assert.equal(first.state.processed['1/3'], undefined)
   const restarted = fakeRuntime({ state: first.state })
-  await restarted.worker.tick(); assert.equal(restarted.calls(), 0)
-  first.state.jobs['1'].state = 'running'; first.state.jobs['1'].cursor = 0
-  const crashed = fakeRuntime({ state: first.state }); await crashed.worker.tick()
-  assert.equal(crashed.calls(), 0); assert.equal(first.state.jobs['1'].state, 'pending')
-  await first.worker.close(); await restarted.worker.close(); await crashed.worker.close()
+  await restarted.worker.tick(); assert.equal(restarted.calls(), 1)
+  assert.equal(Object.values(first.state.jobs)[0].state, 'applied')
+  assert.ok(first.state.processed['1/3'])
+  await first.worker.close(); await restarted.worker.close()
 })
 
-test('T11b cancellation or deactivation between extraction and commit never applies a candidate', async () => {
+test('cancellation or deactivation between extraction and commit never consumes evidence', async () => {
   let permitted = true
   const run = fakeRuntime({ validate: async () => permitted, modelReply: async () => { permitted = false; return candidate(entry.data.content, refs) } })
   await run.worker.tick()
-  assert.equal(run.state.jobs['1'].state, 'pending'); assert.equal(run.state.jobs['1'].cursor, 3)
+  assert.equal(Object.values(run.state.jobs)[0].state, 'retry-wait'); assert.equal(run.state.processed['1/3'], undefined)
   await run.worker.close()
 })
 
@@ -230,7 +243,7 @@ test('R2-06 hand edit of MEMORY.md reaches the next systemPrompt as hand-written
   await r2Mkdir(join(r2.dir(file), 'bots/chief'), { recursive: true, mode: 0o700 })
   await r2Write(join(r2.dir(file), 'bots/chief/MEMORY.md'), '- R2 手写：我的猫叫豆豆\n')
   const task = await store.create({ botId: 'chief' })
-  await store.send(task.taskId, '你好'); await settled(store, task.taskId)
+  await store.send(task.taskId, '我的猫叫什么'); await settled(store, task.taskId)
   assert.ok(r2.prompt(calls).includes('Bot记忆：R2 手写：我的猫叫豆豆 [手写]'))
   const view = await store.getBotMemory('chief')
   assert.equal(view.history.memory[0].actor, 'file')
@@ -291,7 +304,7 @@ test('R2-06 an over-limit MEMORY.md gives the Agent one notice line and no conte
   assert.deepEqual({ state: view.memory.file.state, code: view.memory.file.code, path: view.memory.file.path }, { state: 'rejected', code: 'MEMORY_FILE_TOO_LONG', path: 'bot-workspaces/bots/chief/MEMORY.md' })
   assert.equal(await r2Read(path, 'utf8'), tooLong)
   await r2Write(path, '- 精简后的一条\n')
-  await store.send(task.taskId, '再来'); await settled(store, task.taskId)
+  await store.send(task.taskId, '精简后的一条'); await settled(store, task.taskId)
   assert.ok(r2.prompt(calls).includes('Bot记忆：精简后的一条 [手写]'))
   assert.equal(r2.prompt(calls).includes('文件提示'), false)
   assert.equal((await store.getBotMemory('chief')).memory.file.state, 'synced')

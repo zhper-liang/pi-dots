@@ -185,10 +185,20 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         sendJson(res, 200, { data })
         return
       }
+      if (tasks && req.url === '/api/settings/models') {
+        if (req.method === 'GET') { req.resume(); sendJson(res, 200, { data: await tasks.listModelRegistrations() }); return }
+        if (req.method === 'POST') { sendJson(res, 200, { data: await tasks.saveModelRegistration(await readJson(req)) }); return }
+        req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET 与 POST。' } }, { Allow: 'GET, POST' }); return
+      }
       if (tasks && req.url === '/api/settings/model') {
         if (req.method === 'GET') { req.resume(); sendJson(res, 200, { data: await tasks.getModelSettings() }); return }
         if (req.method === 'POST') { sendJson(res, 200, { data: await tasks.saveModelSettings(await readJson(req)) }); return }
         req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 GET 与 POST。' } }, { Allow: 'GET, POST' }); return
+      }
+      const memoryReviewMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/memory\/review$/.exec(req.url)
+      if (tasks && memoryReviewMatch) {
+        if (req.method !== 'POST') { req.resume(); sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '仅支持 POST。' } }, { Allow: 'POST' }); return }
+        sendJson(res, 200, { data: await tasks.reviewBotMemory(memoryReviewMatch[1], await readJson(req)) }); return
       }
       const memoryMatch = /^\/api\/bots\/([a-z][a-z0-9-]*)\/memory$/.exec(req.url)
       if (tasks && (memoryMatch || req.url === '/api/settings/preferences')) {
@@ -380,7 +390,7 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
       const taskMatch = /^\/api\/tasks\/([1-9]\d*)(\/(?:messages|state|limits|steer|cancel|stop-work|archive|follow-up))?$/.exec(req.url)
       const route = tasks && revokeMatch ? 'revoke-tool' : tasks && accessMatch ? 'tool-access' : tasks && req.url === '/api/tools' ? 'tools' : req.url === '/api/chat' ? 'chat'
         : tasks && req.url === '/api/bots' ? 'bots'
-        : tasks && req.url === '/api/tasks' ? 'tasks'
+        : tasks && (req.url === '/api/tasks' || req.url === '/api/tasks?includeMain=1') ? 'tasks'
         : tasks && taskMatch && Number.isSafeInteger(Number(taskMatch[1])) ? (taskMatch[2] === '/follow-up' ? 'follow-up' : taskMatch[2] === '/stop-work' ? 'stop-work' : taskMatch[2] === '/archive' ? 'archive' : taskMatch[2] === '/cancel' ? 'cancel' : taskMatch[2] === '/steer' ? 'steer' : taskMatch[2] === '/limits' ? 'limits' : taskMatch[2] === '/state' ? 'state' : taskMatch[2] ? 'messages' : 'task') : null
       if (!route) {
         req.resume()
@@ -438,7 +448,7 @@ export function createApiServer({ token, reply = createTestReply, tasks, staticD
         sendJson(res, 201, { task }, { Location: `/api/tasks/${task.taskId}` })
       } else if (route === 'tasks') {
         req.resume()
-        sendJson(res, 200, { tasks: await tasks.list(scopedBot) })
+        sendJson(res, 200, { tasks: await tasks.list(scopedBot, { includeMain: req.url === '/api/tasks?includeMain=1' }) })
       } else {
         req.resume()
         const task = await tasks.get(Number(taskMatch[1]))

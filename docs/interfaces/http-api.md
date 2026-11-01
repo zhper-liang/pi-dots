@@ -51,11 +51,11 @@ HTTP 成功状态不等于业务 Operation 已 succeeded；必须读取 data 内
 - client-issue：`{botId, sourceId, actions, readScope:busy|full, ttlSeconds, confirmed:true}`；actions 为非空、不重复的 read/create/update/delete 数组，含写动作须 full，ttlSeconds 为 60–3600 整数。Bot 须 active 且当前分配对应工具和来源资源，用户须有相应来源许可。返回 `{token, clientId, expiresAt, notice}`，token 仅发行时显示，运行中再取 Bot 当前分配与 client scope、用户许可的交集，不把管理员 token 当 MCP token。
 - client-list：`{}` → `{items:[{clientId, botId, scope, expiresAt, revoked, expired}]}`，不返回 token；client-revoke：`{clientId, confirmed:true}` → `{clientId, revoked:true}`。设置页提供发放、列表、刷新和撤销入口。
 - agent-allow-rule 已移除（[ADR-015](../decisions/README.md#adr-015-工具组默认开开即直接做)），请求返回 405 `METHOD_NOT_ALLOWED`。
-- agent-confirm-local 可带 `always:true`（只与同意一起）：同一提交把该 Bot 的“待办与事项”组设为开。Task 审批 `.../approvals/:id/decide` 同样支持“以后直接做”，包括 bot_manage，作用是把该工具所在组设为开；暂停中、结果未知后的重做审批仍不能设“总是”，服务端拒绝不允许的请求。工具已分配且启用时，默认 allow 的组内写入（含删除）直接执行；确认规则为 ask 时组内写入先问，暂停时写入 allow 降为 ask；无批量或每小时自动写入上限。
+- agent-confirm-local 可带 `always:true`（只与同意一起）：同一提交把该 Bot 的“待办与事项”组设为开。Task 审批 `.../approvals/:id/decide` 同样支持“以后直接做”，包括 bot_manage，作用是把该工具所在组设为开；暂停中、结果未知后的重做审批仍不能设“总是”，服务端拒绝不允许的请求。工具已分配且启用时，默认 allow 的组内新建/修改直接执行，删除必须逐次确认；确认规则为 ask 时组内写入先问，暂停时写入 allow 降为 ask；无批量或每小时自动写入上限。
 - agent-undo：`{requestId, confirmed:true}`；仅撤销 Agent 自动执行的本地 Event/Todo 改动（新建→软删、修改→恢复原字段、删除→恢复）；对象版本已变返回 409 `WORKSPACE_UNDO_CONFLICT`；非自动或对外写入返回 `WORKSPACE_UNDO_UNAVAILABLE`；以 `undo:<operationId>` 幂等，重复返回同一回执。
 - decide() 为 allow 时，本地 Event/Todo prepare_change 在同一事务内应用，Operation 直接 succeeded，receipt.autoApplied 记录 write-default 或匹配规则的裁决理由；外部 prepare_change 也按同一规则裁决，allow 时继续原 prepare/execute 路径，不提供撤销。stdio client 不再额外强制先问，但仍受独立范围约束。workspace.prepare_schedule 仅返回不可执行的计划草案，用户在计划界面确认；主会话 routine_propose 按规则创建例行任务，默认直接创建。
 - schedule-manage 和 reminder-manage 的动作/参数由对应服务严格校验；调用方不得通过请求构造任意 shell/HTTP 自动动作。
-- 例行任务：schedule-manage 的 rule 支持 `{type:'event', event:'todo_due'|'event_changed'|'task_finished'}`（只用于 agent_readonly_workflow，nextDueAt 为 null；运行前多个事件合并，event_changed 运行期间产生的变化和撤销自动改动不触发自己；全局暂停记为 skipped/automation_paused，恢复不补跑）。actionSpec.writes:true 才开放当前已分配的 workspace.prepare_change/operation_status；创建、修改和删除直接执行，本地自动改动留撤销卡；origin=routine/event/detector 遇到 ask（如全局暂停）跳过，并记录“已跳过：这一步需要你来做。”，不出卡等待过期。不带 writes 的旧计划保持只读；派发实时检查 Bot、读工具、来源资源及来源许可，失效取消并记原因，仅配置版本变化不取消。schedule-test：`{requestId, id}` → `{receipt:{scheduleId, occurrenceId, taskId}}`，立即运行一次，强制只读、不投递、标记为测试，暂停时也可发起；上一次测试未结束返回 409 WORKSPACE_SCHEDULE_TEST_RUNNING。
+- 例行任务：schedule-manage 的 rule 支持 `{type:'event', event:'todo_due'|'event_changed'|'task_finished'}`（只用于 agent_readonly_workflow，nextDueAt 为 null；运行前多个事件合并，event_changed 运行期间产生的变化和撤销自动改动不触发自己；全局暂停记为 skipped/automation_paused，恢复不补跑）。actionSpec.writes:true 才开放当前已分配的 workspace.prepare_change/operation_status；创建、修改直接执行，本地自动改动留撤销卡，删除逐次确认（无人值守跳过）；origin=routine/event/detector 遇到 ask（如全局暂停）跳过，并记录“已跳过：这一步需要你来做。”，不出卡等待过期。不带 writes 的旧计划保持只读；派发实时检查 Bot、读工具、来源资源及来源许可，失效取消并记原因，仅配置版本变化不取消。schedule-test：`{requestId, id}` → `{receipt:{scheduleId, occurrenceId, taskId}}`，立即运行一次，强制只读、不投递、标记为测试，暂停时也可发起；上一次测试未结束返回 409 WORKSPACE_SCHEDULE_TEST_RUNNING。
 
 详细校验入口：[本地事项](../../my-app/server/workspace-local.mjs)、[外部来源](../../my-app/server/workspace-feishu.mjs)、[授权](../../my-app/server/workspace-grants.mjs)、[MCP业务](../../my-app/server/workspace-mcp-business.mjs)、[计划](../../my-app/server/workspace-schedule.mjs)、[提醒](../../my-app/server/workspace-reminders.mjs)。
 
@@ -95,12 +95,16 @@ Todo data 允许title、status、due、timezone；创建必须有标题，status
 
 | 路由 | 方法 | 数据合同 |
 |---|---|---|
-| `/api/bots/:botId/memory` | GET | `{data:{personality, memory, preferences, history, historyNextBeforeVersion}}`；共享偏好在 Bot 页只读 |
+| `/api/bots/:botId/memory` | GET | `{data:{personality, memory, preferences, learning, history, historyNextBeforeVersion}}`；共享偏好在 Bot 页只读 |
 | `/api/bots/:botId/memory` | POST | `{kind:'personality'|'memory', requestId, expectedVersion, action, id?, content?, sourceEntries?}`；人格 action=set，记忆纠正/删除为 update/delete |
 | `/api/settings/preferences` | GET | `{data:document}`，含最近历史及历史分页提示，所有 Bot 共用 |
 | `/api/settings/preferences` | POST | `{requestId, expectedVersion, action, id?, content?, sourceEntries?}`；不接受 botId/kind，路由固定共享文档 |
 
 文档含版本、更新时间、来源 `{taskId,entryId}`、状态 ready/pending；人格含 content，记忆/偏好含 items。结果 `{data:{ok,code,version,changed,replayed,document}}`；版本/请求内容冲突返回 409，不自动覆盖。未知保存结果重试必须保留原 requestId；纠正/删除产生新版本，来源和历史可查，凭证不回显。用户编辑界面只添加/修改人格、纠正/删除既有记忆与偏好；新的偏好由有来源私聊的空闲批处理产生。
+
+`POST /api/bots/:botId/memory/review` 接受 `{action:'review'|'pause'|'resume'}`，仅认证用户可调；停用 Bot 不可改变整理状态。返回 `{data:learning}`；review 表示已经登记，不代表保存完成。暂停为每 Bot 持久状态，不删除候选或已有记忆，显式编辑仍可用。
+
+`learning` 含 `{enabled,paused,pending,lastReviewAt,day,calls,tokens,limits:{calls,tokens},jobs}`；时间为毫秒时间戳或 null，day 为 UTC 日期。最近最多 8 个作业包含 jobId/trigger/state/code/dueAt/updatedAt/attempts/usage、最多 4 条变更和来源引用。变更与引用投影重新检查当前来源，不回显撤权正文、模型配置或凭证；no-change 不产生提示。额度独立于业务 Task。
 
 文件模式（默认开启，见 ADR-019）下，GET 返回的 personality、memory、preferences 文档和编辑成功的 `data.document` 都多一个 `file`：`{path, state, code, syncedAt}`。`path` 相对数据目录，例如 `bot-workspaces/bots/chief/MEMORY.md`；`state` 为 `synced`/`rejected`/`pending`；`code` 为 `null` 或 `MEMORY_FILE_TOO_LONG`/`MEMORY_FILE_INVALID`/`MEMORY_FILE_UNAVAILABLE`/`MEMORY_FILE_WRITE_FAILED`；`syncedAt` 在文件生成前为 `null`。`PIDOT_MEMORY_FILES=0` 时 `file` 为 `null`。修订可能是 `actor: 'file'`（文件手改）；`sourceEntries: []` 的条目是手写条目，界面可以纠正，新增条目仍要求来源。
 
@@ -108,11 +112,15 @@ Todo data 允许title、status、due、timezone；创建必须有标题，status
 
 `GET /api/capabilities` 返回本机已装、已连接的全局目录 `{data:{items}}`，每项 `{id, kind:'tool'|'skill'|'mcp', name, description, status, revision, version?}`；status 为 ready / configured / needs_auth / missing_dependency / error / disabled。不带机器人启用状态。内置日历和待办合为 `tool:todos`，不再返回 `tool:calendar`。
 
-`GET /api/bots/:botId/capabilities` 返回 `{data:{botId, revision, items}}`。items 为服务端合并的静态工具组与已登记 Skill 投影，含 `id/kind/name/description/status/revision/enabledForBot/partiallyEnabled/assignedToolNames/available`，不接收客户端目录。生产入口已合并受控 R1-09 外部 MCP 目录；配置未验证或绑定版本失效的工具不可运行。
+`GET /api/bots/:botId/capabilities` 返回 `{data:{botId, revision, items}}`。items 为服务端合并的静态工具组与已登记 Skill 投影，含 `id/kind/name/description/status/revision/enabledForBot/partiallyEnabled/assignedToolNames/available`；不可用时另含可读的 `unavailableReason`（未开启、机器人停用、待检查、缺凭据、缺依赖、连接失败或日程工具没有来源），不接收客户端目录。`enabledForBot` 不等于当前可执行；连接和来源仍在派发时复核。生产入口已合并受控 R1-09 外部 MCP 目录；配置未验证或绑定版本失效的工具不可运行。
 
 `POST /api/bots/:botId/capabilities` 接受且仅接受 `{requestId, expectedRevision, capabilityId, enabled, expectedCatalogRevision}`，返回 `{data:{botId, capabilityId, kind, revision, enabledForBot, status, toolNames}}`。`expectedRevision` 来自 Bot capability GET 的 revision，`expectedCatalogRevision` 来自对应 item 的 revision。配置过期返回 `CONFIG_VERSION_CONFLICT`，启用时目录版本不符返回 `CAPABILITY_CATALOG_CONFLICT`；相同 requestId/内容重放原回执，改内容返回 `CONFIG_REQUEST_CONFLICT`。未登记能力返回 `CAPABILITY_NOT_FOUND`；已移除能力的保存绑定仍可撤销，不能重新启用。
 
 启停决定当前分配，不再提供写入确认模式；启用后的写入直接执行，全局暂停时确认。开启任一 Skill 自动附带 `skills` 组加载工具，关闭最后一个时移除，不授予其声明的业务工具或日历许可。开启 `tool:todos` 后分配全部已连接日历和任务列表（排除该机器人的收窄项），关闭时保留资源记录。实时 schema、调用与新 prompt 继续复核当前分配；新出现的 Skill 不自动启用。
+
+能力保存成功后，网页发布仅用于缓存失效的本地通知，关联页面重新 GET 当前状态；通知不携带凭据，不是授权依据。已有 Task 的下一轮模型请求包含当前工具和来源摘要，并以实际发送的 schema 为准；不需新建会话。刷新状态不会重放消息或工具调用。已发出的请求不受事后新增权限改写；撤权在下一次派发检查生效。
+
+`GET /api/tasks?includeMain=1` 在原有会话列表中附带机器人主会话；原 `/api/tasks` 返回范围不变。列表只返回最后一条可见消息的摘要和时间，完整历史仍通过对应 Task 的详情接口读取。
 
 ## 外部 MCP 连接
 
@@ -177,13 +185,14 @@ MCP 来源单独记录，不混入工作区来源。撤销后，历史/摘要/�
 主会话仍不能调用普通 delete（返回 `SESSION_ACTION_CONFLICT`），也不能以 archive 代替。本轮已新增认证 `POST /api/tasks/:taskId/clear-main`，输入同为 `{requestId, confirmed:true}`；成功回执 action 为 `clear-main`，replacementTaskId 为同 Bot 的新主会话 ID，并可通过同一 session-requests 入口核对。App 的三个生命周期 callback 已接入。换新原子替换当前 Bot 的主会话引用，新 Task 使用独立上下文；旧详情返回 410，Bot、独立子 Task 及审计不删除。stop/swap 两个提交之间完成的后台结果持久等待新引用后交接一份，直接协作子任务等待换新后继续；普通取消、root stop、停用及实时撤权仍有效。结果镜像保留原来源并跨连续清空/重启去重；task_status 不返回已删除 child，digest 注入前校验真实来源、删除态和当前权限，不复制旧聊天历史。普通会话删除/置顶清理及换新在重载、同一临时库重启后均已验证。
 
 ## Agent 运行时主要端点
-主会话使用 Bot 当前已分配且启用的工具，写入直接执行，全局暂停时确认；`task_create` 用于长任务。legacy 主会话的固有工具保存在独立 `mainAssignments`，不混入普通 Bot 分配；显式撤销优先，新 v2 Bot 不获隐式工具。工具、资源及规则无需 Task 配置迁移；模型、提示词等运行配置仍可在安全边界迁移。
+工具可用性和确认规则见[能力与权限](../architecture/capabilities.md)；工具、资源和规则不需要 Task 配置迁移，模型和提示词可以在安全边界迁移。
 
 | 路径 | 方法 | 用途 |
 |---|---|---|
-| `/api/bots` | GET / POST | GET 另返回 `mainSessions:{botId:taskId}`。POST 接受 `{name, description?, profile?, parameters?, requestId, capabilities?}`：名字必填，description 最多 2000 字，profile 默认 general，不按名字推断人格。`capabilities` 为最多 64 项、不重复的 `tool:/skill:/mcp:` id 数组；省略时默认 `["tool:todos","tool:history"]`，空数组表示不启用能力。先验证全部能力再在同一事务创建，任一不可用则整个创建失败；返回 `{bot,created,mainTaskId,inferred:{role:"",description:"",template:"blank"}}`（不包 data）。同一 requestId 重放返回原机器人，旧式不带 capabilities 的回执仍可重放。`capabilityDefaultsVersion` 保持 2；默认本地日历可用，不授予 `mock:personal` |
+| `/api/bots` | GET / POST | GET 另返回 `mainSessions:{botId:taskId}`。POST 接受 `{name, description?, profile?, parameters?, requestId, capabilities?}`：名字必填，description 最多 2000 字，profile 默认 general，不按名字推断人格。`capabilities` 为最多 64 项、不重复的 `tool:/skill:/mcp:` id 数组；省略或空数组都表示不启用能力（空白 Bot），模板仅在前端预填并显式提交所选能力。先验证全部能力再在同一事务创建，任一不可用则整个创建失败；返回 `{bot,created,mainTaskId,inferred:{role:"",description:"",template:"blank"}}`（不包 data）。同一 requestId 重放返回原机器人，旧式不带 capabilities 的回执仍可重放。`capabilityDefaultsVersion` 保持 2；默认不分配日历或任务列表；启用 `tool:todos` 后分配已连接来源，不授予 `mock:personal` |
 | `/api/capabilities` | GET | 全局本机能力目录 `{data:{items}}`，不含 enabledForBot，种类为 tool / skill / mcp；日历和待办统一 `tool:todos` |
-| `/api/settings/model` | GET / POST | 认证用户模型连接设置；GET 返回 `{baseUrl, model, hasKey, source:'env'\|'file'\|'none'}`（在 `data` 内），永不返回 key；POST `{requestId, baseUrl, model, apiKey?}`，空白/省略 key 保留已有值，初次必填。环境配置生效时 409 `MODEL_SETTINGS_ENV_LOCKED`；非法设置 400 `INVALID_MODEL_SETTINGS`；同进程 requestId 内容冲突 409 `MODEL_SETTINGS_REQUEST_CONFLICT`。连接实时读取、Task 模型名固定，旧地址/provider 字段不参与匹配 |
+| `/api/settings/model` | GET / POST | 认证用户模型连接设置；GET 返回 `{baseUrl, model, contextWindow, hasKey, source:'env'\|'file'\|'none'}`（在 `data` 内），永不返回 key；POST `{requestId, baseUrl, model, apiKey?, contextWindow?}`，空白/省略 key 保留已有值，初次必填。环境配置生效时 409 `MODEL_SETTINGS_ENV_LOCKED`；非法设置 400 `INVALID_MODEL_SETTINGS`；同进程 requestId 内容冲突 409 `MODEL_SETTINGS_REQUEST_CONFLICT`。连接实时读取、Task 模型名固定，旧地址/provider 字段不参与匹配 |
+| `/api/settings/models` | GET / POST | 多模型注册表。GET `{data:[{id,selectionId,providerId,baseUrl,model,contextWindow,hasKey,source}]}`，包含已配置默认连接（`id:default`，环境只读）和本机登记项，不返回 Key。POST `{requestId,id?,providerId,baseUrl,model,apiKey?,contextWindow?}`；无 id 新增，有 id 编辑；新项 Key 必填，空白/省略仅保留该项 Key。供应商 ID 限 1–80 位字母数字及 `_.-`，首位字母数字；每个供应商内模型名唯一，最多 100 条。同进程重试回放原回执，内容冲突 409 `MODEL_SETTINGS_REQUEST_CONFLICT`，同名重复 409 `MODEL_REGISTRATION_EXISTS`，不存在项 404 `MODEL_REGISTRATION_NOT_FOUND`，显式测试模式 409 `MODEL_SETTINGS_TEST_MODE`。环境默认连接不阻止登记其他模型。创建 Bot、Bot 默认模型和主会话输入的 `model.id` 均用 selectionId，不能提交地址或 Key |
 | `/api/bots/:botId/configuration` | GET / POST | GET 不包 data，返回当前版本与分配；`toolGroups` 项为 `{id,label,description,enabled,partiallyEnabled,tools,available}`，没有 mode / switchable。`resources` 列出本地及已连接外部日历和任务列表，不含 `mock:personal`；`assigned.resources` 为该机器人当前可用列表。POST 契约不变：移除资源记入 `ToolAccess.excludedResources[botId]`，重新加入取消排除，断开重连不会加回排除项；工具/资源从已有 Task 下一次调用实时生效 |
 | `/api/bots/:botId/deactivate` | POST | 停用 Bot，保留历史 |
 | `/api/tasks` | GET / POST | 列出/创建持久 Task |
@@ -200,9 +209,32 @@ MCP 来源单独记录，不混入工作区来源。撤销后，历史/摘要/�
 | `/api/tasks/:taskId/archive` | POST | `{archived:boolean}` → `{task}`（含 `archived`）。持久归档标记，仅隐藏，不取消、不删除、不改审批与许可；同样可经 `/api/bots/:botId/tasks/:taskId/archive`、`/api/groups/:groupId/archive`、`/api/groups/:groupId/children/:taskId/archive`（子任务须属该群） |
 | `/api/inbox` | GET | 应用内通知投影：`{data:{items:[{kind, taskId, botId, botName, approvalId\|blockerId\|requestId\|entryId, summary, createdAt, detail}]}}`；kind 为 `approval`、`blocker`、`workspace-proposal`、`skipped`、`finding`、`auto-applied`。`skipped` 来自原无人值守 Task 的可见工具收据（`entryId`、原因），复核来源历史权限，仅提供原 Task 链接，不生成可审批/重试动作；前端按需要处理/事项提醒分区。kind 含 `auto-applied`（最近 20 条自动执行记录，`detail.undone`，不计入待确认）；本地提案 `detail.allowAlways=false` 时不提供“总是同意”；Task 审批的 `detail.retryOf` 表示结果未知后的重做审批，同样不提供“总是同意”（服务端也拒绝，阶段 4 起透出给收件箱卡片） |
 | `/api/rules` | GET | 规则诊断（ADR-014、ADR-015）：返回有效规则 `{id, botId, match, effect, origin, createdAt}`（过滤旧 preset 与 risk 规则）。规则只由工具组开关、“以后直接做”和一次性迁移写入；`POST /api/rules` 与 `/api/rules/remove` 已移除，返回 405 |
-| `/api/findings` | GET / POST | 检测器发现（ADR-013）：GET 返回 `{items, muted, labels, wakeAt, lastRunAt}`；POST `{id, action:handle\|dismiss\|mute}` 或 `{action:'unmute', detector}`；handle 在 Chief 主会话派生预填目标的任务并返回 `{taskId, href}`（重复调用返回同一任务）。收件箱另列 `kind:'finding'`，不计入待确认。阶段 7“帮我想办法”（PLAN §8.7）：GET 另返回 `assist`（默认 false）与 `chiefRead:{available, enabled}`；POST `{action:'assist-setting', enabled, chiefRead?}` 开关（`chiefRead:true` 只能随开启提交：给 Chief 当前配置补入 `workspace.list/get` 与 `workspace:local`，实时生效，无档位或能力池；工作区不可用返回 409 `FINDING_ASSIST_READ_UNAVAILABLE`；关闭不撤 Chief 的查看）；POST `{id, action:'assist'}` 在 Chief 主会话派生只读分析任务（origin user，最多 5 次模型 / 10 次工具，只带只读工具），返回 `{taskId, href}`，发现保持未处理，重复调用返回同一任务；未开启 409 `FINDING_ASSIST_OFF`，已处理/忽略 409 `FINDING_CLOSED`。Chief 主会话与收件箱的发现条目带 `assist`、`assistTaskId`；分析完成卡带 `result`（结论前 500 字） |
+| `/api/findings` | GET / POST | 检测器发现（ADR-013）：GET 返回 `{items, muted, labels, wakeAt, lastRunAt}`；POST `{id, action:handle\|dismiss\|mute}` 或 `{action:'unmute', detector}`；handle 在 Chief 主会话派生预填目标的任务并返回 `{taskId, href}`（重复调用返回同一任务）。收件箱另列 `kind:'finding'`，不计入待确认。阶段 7“帮我想办法”（PLAN §8.7）：GET 另返回 `assist`（默认 false）与 `chiefRead:{available, enabled}`；POST `{action:'assist-setting', enabled}` 仅开关分析按钮；携带旧 `chiefRead` 写字段返回 409 `FINDING_ASSIST_PERMISSION_MOVED`，权限统一在机器人能力中管理，GET 兼容只读 chiefRead 投影；POST `{id, action:'assist'}` 在 Chief 主会话派生只读分析任务（origin user，最多 5 次模型 / 10 次工具，只带只读工具），返回 `{taskId, href}`，发现保持未处理，重复调用返回同一任务；未开启 409 `FINDING_ASSIST_OFF`，已处理/忽略 409 `FINDING_CLOSED`。Chief 主会话与收件箱的发现条目带 `assist`、`assistTaskId`；分析完成卡带 `result`（结论前 500 字） |
 | `/api/automation` | GET / POST | 全局暂停（ADR-014）：GET 返回 `{paused, since, by, epoch}`；POST `{paused, confirmed:true}` 暂停或恢复。恢复只经此认证入口；Bot 只能用 `automation_pause` 暂停 |
 
 收件箱 kind 与处理入口：`approval` → `POST /api/tasks/:taskId/approvals/:approvalId/decide`；`blocker`（仅 assignee=user）→ `POST /api/tasks/:taskId/blockers/:blockerId/resolve`；`workspace-proposal` → `POST /api/workspace/agent-confirm-local` `{sourceId, requestId, payloadHash: detail.payloadHash, confirmed:true, cancel?}`。只读投影，复用 Task 视图的可见性过滤；summary 为展示文本，不是确认依据。
 
 此表仅列主要端点，不取代群聊/审批等具体路由校验；完整匹配见 [app.mjs](../../my-app/server/app.mjs)。旧 `/api/feishu/*` 与旧聊天审批保留兼容，不意味着新 UI 确认可以绕过原操作身份、精确参数、版本或 unknown 保护。安装、配置和可执行示例见 [工程README](../../my-app/README.md)。
+
+## 固有能力与删除确认（ADR-024、025）
+
+`bash/read/write/edit` 为所有 Bot 主会话和普通 Task 的固有能力，不出现在可分配工具目录或 capability 开关中；`assigned.tools=[]` 仍有这四项运行能力，显式只读专用运行除外。无需客户端凭证或单独 HTTP 授权。设置不再展示 stdio 凭证发放入口，既有外部 stdio 兼容接口保留，普通 API 的 Bearer 认证不变。
+
+工作区 `action=delete` 和飞书删除工具默认每次在会话里确认；已有 allow 规则不能绕过，无“以后直接做”。新建/修改默认直接执行，显式 deny 和全局暂停继续有效。外部 MCP 按 originalName 的 delete/remove/trash/purge/destroy 单词或 action/operation/method 参数识别删除，并走原精确调用审批链；其他已启用调用直接执行。
+
+`task_history_read/tool_result_read` 默认自带，从工具集和可配置目录移除；不会给 `assigned.tools` 添加条目。旧 history 普通分配在初始化时清理，旧撤销项不再影响默认读者；原业务工具/来源撤销仍阻止回读。配置保存兼容旧客户端携带的回读工具名，但忽略其可选分配；旧配置版本与幂等回执保持原样。旧创建的 `capabilities:["tool:history"]` 兼容无操作，新的 capability 开关请求返回 400 `CAPABILITY_INTRINSIC`；历史请求的精确重放仍返回原回执。
+
+## 模型容量
+
+上述两个模型设置接口的 `contextWindow` 接受8192–4000000的整数或K/M字符串，省略/空串默认256000，null或非法值拒绝；GET总是返回归一化整数。主会话的前端输入仍只发送 `model:{id}`，容量由宿主在入队时读取并固定，不能通过请求覆盖身份/地址/凭证。Bot配置的models列表增加contextWindow；独立Task创建固定选定容量。
+
+
+## 问题表单与输入挂起（ADR-027）
+
+`POST /api/tasks/:taskId/blockers/:blockerId/resolve`，以及同等归属校验的 Bot / 群子任务路径，接受 `{requestId?, action?, version?, inReplyTo?, rootWorkId?, answer?, answers?}`。action 默认为 resolve，可为 skip / cancel / adjust。新表单提交带 question version 和原 input id；旧单文本 answer 兼容。受管子任务必须携带原 rootWorkId、inReplyTo 和版本，且只有当前处理人可回答。
+
+`report_blocker` 保留 question / requiredInformation / assignee，新增可选 questions（1–3题）。每题 `{id,question,type:'text'|'single'|'multiple',required?,defaultAnswer?,options?}`；选项 `{id,label,description?}`，2–6项，ID 不重复。required 默认 true；非必需题须声明 defaultAnswer。自己填写的保留值为 other，不由模型登记。
+
+answers 以题目 ID 为键：文本为 string，单选 `{optionId,other?}`，多选 `{optionIds,other?}`。服务端复用共享校验，生成可读 answer 摘要。skip 只接受全部非必需且有默认值的题目；adjust 用 answer 表达新的要求并标记 superseded；cancel 标记 cancelled 且不调用模型。受管子任务不能调整或取消输入来绕过主管。409 BLOCKER_VERSION_CONFLICT / BLOCKER_ALREADY_RESOLVED 分别表示版本冲突/已有不同处理结果。
+
+待答 item 的 parked=true 表示其输入已让出执行位置；不再依赖 activeId 判断它能否回答。已提交答案的原输入在安全回复边界优先恢复。普通消息可先处理，保持一个 Task / 一个执行段。等待普通用户问题时，steer(message) 或队列消息转换可显式替代原问题，不当作该题答案；待审批时仍不允许插入代替批准。

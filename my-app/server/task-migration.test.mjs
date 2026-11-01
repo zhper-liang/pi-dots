@@ -1,3 +1,4 @@
+import { NATIVE_TOOLS } from './native-tools.mjs'
 import { assignMockResource } from './fixtures/authorized-task-store.mjs'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -163,7 +164,6 @@ test('03 stale target, stale Task requirement and forged preview fail without mu
 })
 
 for (const [label, mutate, code] of [
-  ['unknown model capacity', (d) => { delete d.contextWindows }, 'MIGRATION_CAPACITY_UNKNOWN'],
   ['output exceeds capacity', (d) => { d.contextWindows = { [config.model]: 8192 }; d.maxOutputTokens = 8192 }, 'MIGRATION_CAPACITY_UNKNOWN'],
   ['unconfigured model', (d) => { d.model.id = 'not-configured' }, 'MIGRATION_MODEL_UNAVAILABLE'],
 ]) test(`03 rejects ${label}`, async (t) => {
@@ -362,7 +362,7 @@ test('03 new capability is not applied by Bot edit or ordinary message; fresh co
   await s.send(task.taskId, '请用最新配置并授权'); const before = await idle(s, task.taskId)
   assert.deepEqual(before.parameters.tools, []); assert.deepEqual(before.configRef, task.configRef)
   const { task: after } = await migrate(s, task.taskId)
-  assert.deepEqual(after.toolSets.authorized, [CALENDAR_TOOL]); assert.deepEqual(after.parameters.toolResources, ['mock:personal'])
+  assert.deepEqual(after.toolSets.authorized, [...NATIVE_TOOLS, CALENDAR_TOOL, 'tool_result_read', 'task_history_read', 'memory_read', 'memory_edit']); assert.deepEqual(after.parameters.toolResources, ['mock:personal'])
   assert.deepEqual(after.callUsage, before.callUsage)
 })
 

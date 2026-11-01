@@ -1,3 +1,6 @@
+import { MAIN_MEMORY_TOOLS } from './memory-tools.mjs'
+import { SESSION_HISTORY_TOOLS } from './history-search.mjs'
+import { INTRINSIC_TOOLS } from './tools.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
@@ -12,6 +15,9 @@ import { listBots } from './bots.mjs'
 import { ToolAccess, toolSets, toolDefinitions, checkToolCall } from './tools.mjs'
 import { PolicyRules, addRule, decide } from './policy.mjs'
 import { MAIN_TOOLS } from './main-tools.mjs'
+
+// Main-only discovery and manual review never become ordinary Task abilities.
+const mainIntrinsicTools = () => toolDefinitions([...INTRINSIC_TOOLS, ...SESSION_HISTORY_TOOLS, ...MAIN_MEMORY_TOOLS]).map(tool => tool.name)
 
 const copy = value => JSON.parse(JSON.stringify(value))
 const config = { baseUrl: 'https://fixture.invalid/v1', model: 'r1-static', apiKey: 'fixture-only' }
@@ -116,13 +122,13 @@ test('R1 new blank Bot chats in main and ordinary Task with no default business 
     await f.store.send(mainTaskId, '你好')
     const main = await settle(f.store, mainTaskId)
     assert.ok(main.messages.some(message => message.role === 'assistant' && message.content === '正常聊天'))
-    assert.deepEqual(main.toolSets.authorized, [])
-    assert.deepEqual(offered.at(-1), [])
+    assert.deepEqual(main.toolSets.authorized, mainIntrinsicTools())
+    assert.deepEqual(offered.at(-1), mainIntrinsicTools())
   }
   const task = await f.store.create({ botId: bot.id })
   await f.store.send(task.taskId, '普通聊天')
   const done = await settle(f.store, task.taskId)
-  assert.deepEqual(done.toolSets.authorized, [])
+  assert.deepEqual(done.toolSets.authorized, [...INTRINSIC_TOOLS])
   assert.ok(done.messages.some(message => message.role === 'assistant' && message.content === '正常聊天'))
 })
 
@@ -133,7 +139,7 @@ test('R1 exact main revocations override stale schema and assignments without po
     const access = { assignments: { calendar: { tools: [name], resources: [] } }, revoked: { calendar: [name] } }
     const sets = toolSets(identity, f.store.bots(), access)
     assert.ok(!sets.authorized.includes(name))
-    assert.deepEqual(toolDefinitions(sets.displayed), [])
+    assert.deepEqual(toolDefinitions(sets.displayed).map(tool => tool.name), mainIntrinsicTools())
     const denied = checkToolCall({ card: identity, record: { id: 1, input: { botId: 'calendar' } }, conversation: { owner: { taskId: 1 } },
       call: { name, arguments: {} }, displayed: [name], sets })
     assert.equal(denied.error.code, 'TOOL_NOT_AUTHORIZED')

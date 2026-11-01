@@ -15,13 +15,14 @@ type Props = {
   token: string; view: WorkspaceView; itemTab: ItemTab; onItemTab: (tab: ItemTab) => void; onView: (view: WorkspaceView) => void
   sidebar: (shell: { collapsed: boolean; onToggleCollapsed: () => void; onClose: () => void }) => ReactNode
   title: string; home: ReactNode; inboxSummary?: ReactNode; footer?: ReactNode; children: ReactNode
+  onOpenCapabilities?: () => void
 }
 
 /**
  * App shell: left column, optional mobile top bar, and the main column. Every panel stays mounted
  * (hidden attribute) so switching views never erases a draft or an unconfirmed request.
  */
-export default function UnifiedWorkspace({ bots, onOpenTask, token, view, itemTab, onItemTab, onView, sidebar, title, home, inboxSummary, footer, children }: Props) {
+export default function UnifiedWorkspace({ bots, onOpenTask, token, view, itemTab, onItemTab, onView, sidebar, title, home, inboxSummary, footer, children, onOpenCapabilities }: Props) {
   const restoreLegacyTodo = useEffectEvent(() => {
     const legacy = isLegacyTodoHash(window.location.hash)
     if (legacy) { onItemTab('calendar'); onView('items') }
@@ -83,7 +84,7 @@ export default function UnifiedWorkspace({ bots, onOpenTask, token, view, itemTa
         <section id="workspace-panel-inbox" hidden={view !== 'inbox'} className="workspace-page">
           {inboxSummary}
         </section>
-        <section id="workspace-panel-settings" hidden={view !== 'settings'} className="workspace-page"><SettingsPage token={token} footer={footer} /></section>
+        <section id="workspace-panel-settings" hidden={view !== 'settings'} className="workspace-page"><SettingsPage token={token} footer={footer} active={view === 'settings'} onOpenCapabilities={onOpenCapabilities} /></section>
         <section id="workspace-panel-chats" hidden={view !== 'chats'} className="shell-chat-page">{children}</section>
       </div>
     </div>

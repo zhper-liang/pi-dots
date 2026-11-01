@@ -32,13 +32,13 @@ export async function applySteering(tx, card, entryId) {
   return pending.length
 }
 
-export function steeringApi({ harness, context, TaskCard, ChatInput, ChatQueue, taskKind }) {
+export function steeringApi({ harness, context, TaskCard, ChatInput, ChatQueue, taskKind, bots, collaboration }) {
   return {
     async steer(id, input) {
       const object = input && typeof input === 'object' && !Array.isArray(input)
       const keys = object ? Object.keys(input) : []
       const convert = keys.length === 1 && keys[0] === 'messageId' && Number.isSafeInteger(input.messageId) && input.messageId > 0
-      const direct = keys.length === 1 && keys[0] === 'message' && typeof input.message === 'string' && input.message.trim() && input.message.length <= 4000
+      const direct = keys.every(key => ['message', 'blockerId'].includes(key)) && (input.blockerId === undefined || Number.isSafeInteger(input.blockerId)) && typeof input.message === 'string' && input.message.trim() && input.message.length <= 4000
       if (!convert && !direct) throw new TaskInputError(400, 'INVALID_STEER', '仅提供 message（1–4000字符）或待排队消息的 messageId。')
       if (direct) {
         const { mentionNames, groupMembers, assertGroupTask } = await import('./groups.mjs')
@@ -64,7 +64,28 @@ export function steeringApi({ harness, context, TaskCard, ChatInput, ChatQueue, 
         if((await tx.doc(Collaboration)).items.some(r=>r.childTaskId===id && r.reviewRequired)) throw new TaskInputError(409,'REVIEW_CHILD_INPUT_DENIED','受管子任务的返工仅接受绑定主管工具；信息回答和精确审批仍用原事项入口。')
         if (!['pending', 'running'].includes(record.state.status)) throw new TaskInputError(409, 'TASK_UNAVAILABLE', '当前 Task 无法插入。')
         if (record.state.checkpoint?.phase === 'awaitApproval') throw new TaskInputError(409, 'TASK_AWAITING_APPROVAL', '等待具体操作审批；插入不能代替审批。')
-        if (record.state.checkpoint?.phase === 'awaitBlocker') throw new TaskInputError(409, 'TASK_BLOCKED', '请从对应待办问题回答；插入不能解除阻塞。')
+        const { TaskBlockers, resolveInformation } = await import('./blockers.mjs')
+        const { admitNextInput } = await import('./task-creation.mjs')
+        const questions = await tx.doc(TaskBlockers, id)
+        const question = questions.items.find(item => item.status === 'pending' && item.assignee === 'user' && !item.rootWorkId && (input.blockerId !== undefined ? item.id === input.blockerId : item.id === record.state.checkpoint?.blockerId))
+          ?? (input.blockerId === undefined && (direct || convert) && (await tx.doc(ChatInput, id)).entryId === null ? questions.items.findLast(item => item.status === 'pending' && item.assignee === 'user' && !item.rootWorkId) : null)
+        if (input.blockerId !== undefined && !question) throw new TaskInputError(409, 'BLOCKER_UNAVAILABLE', '指定问题不存在、已处理或不允许调整，请刷新状态。')
+        if (question && (direct || convert)) {
+          let adjustment = input.message
+          if (convert) {
+            const queue = await tx.doc(ChatQueue, id)
+            const index = queue.entryIds.indexOf(input.messageId)
+            const entry = await tx.entry(input.messageId)
+            if (index < 0 || entry?.kind !== 'pidot.user' || entry.conversationId !== (await tx.doc(TaskCard, id)).conversationId) throw new TaskInputError(409, 'MESSAGE_NOT_QUEUED', '消息已被接收或不属于当前队列。')
+            if (entry.data.skillId) throw new TaskInputError(409, 'SKILL_COMMAND_NOT_STEERABLE', '指定了 Skill 的消息只能单独处理。')
+            queue.entryIds.splice(index, 1)
+            adjustment = entry.data.content
+            ;(await tx.doc(ChatSteering, id)).applied.push({ entryId: entry.id, targetInputId: question.inReplyTo, content: adjustment, appliedAt: new Date().toISOString() })
+          }
+          await resolveInformation(tx, { TaskCard, ChatInput, ChatQueue, admitNextInput, bots, collaboration }, id, question.id, { action: 'adjust', answer: adjustment, version: question.version, inReplyTo: question.inReplyTo }, null)
+          return { taskId: id, conversationId: (await tx.doc(TaskCard, id)).conversationId, messageId: question.answer.id, targetInputId: question.inReplyTo, status: 'steer-applied' }
+        }
+        if (record.state.checkpoint?.phase === 'awaitBlocker') throw new TaskInputError(409, 'TASK_BLOCKED', '请由对应问题处理人调整或回答。')
         const slot = await tx.doc(ChatInput, id)
         const targetInputId = slot.entryId ?? (record.state.checkpoint?.lastOutcome === 'limited' ? record.state.checkpoint.lastInputId : null)
         if (!targetInputId) throw new TaskInputError(409, 'STEER_UNAVAILABLE', '当前没有执行中或受限等待的输入，请使用普通发送。')

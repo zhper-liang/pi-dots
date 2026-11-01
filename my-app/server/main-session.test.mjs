@@ -9,6 +9,7 @@ import { TaskCard } from './tasks.mjs'
 import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { listBots } from './bots.mjs'
 import { TaskDigest, MainSessions, markMainChildOver, mirrorToMain } from './main-session.mjs'
+import { MAIN_TOOLS } from './main-tools.mjs'
 
 // PLAN §8.1 main session (phase 1). IDs follow T1-01..T1-09; D-04/D-05 per PLAN §11.
 const modelConfig = { baseUrl: 'https://fixture.invalid/v1', model: 'main-fixture', apiKey: 'fixture-only' }
@@ -44,7 +45,7 @@ async function say(s, state, botId, message, ...replies) {
 }
 const created = t => t.messages.filter(m => m.toolName === 'task_create').map(m => m.result)
 async function configure(s, extra = [], botId = 'calendar') {
-  const tools = [...WORKSPACE_TOOLS, ...extra], resources = ['workspace:local']
+  const tools = [...WORKSPACE_TOOLS, ...MAIN_TOOLS, 'automation_pause', ...extra], resources = ['workspace:local']
   const { bot } = await s.getBotConfiguration(botId)
   await s.updateBotConfiguration(botId, { requestId: `main-bot-${++seq}`, expectedVersion: bot.configRef.version, description: '日程助理', tools, resources })
 }
@@ -76,7 +77,7 @@ test('T1-02 the main session carries assigned write tools alongside task_create/
   assert.ok(state.seen.at(-1).context.tools.some(x => x.name === 'workspace.prepare_change'))
   const chief = await say(s, state, 'chief', '你好')
   assert.ok(chief.toolSets.authorized.includes('bot_manage') && chief.toolSets.authorized.includes('bot_inspect') && chief.toolSets.authorized.includes('report_blocker'))
-  // Main-session tools are intrinsic and do not appear on a normal Task.
+  // These assigned tools are limited to main sessions and do not appear on a normal Task.
   const thread = await s.create({ botId: 'calendar' }); assert.ok(!thread.toolSets.authorized.includes('task_create'))
 }))
 test('T1-03 task_create: idempotent, conflicting reuse refused, self only, inactive and concurrency refused', () => fixture(async ({ s, state }) => {

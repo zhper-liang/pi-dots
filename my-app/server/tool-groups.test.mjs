@@ -1,3 +1,6 @@
+import { SESSION_HISTORY_TOOLS } from './history-search.mjs'
+import * as memoryModule from './memory-tools.mjs'
+import { INTRINSIC_TOOLS } from './tools.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -7,10 +10,11 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { openTaskStore } from './fixtures/authorized-task-store.mjs'
 import { listBots } from './bots.mjs'
 import { toolCatalog, ToolAccess } from './tools.mjs'
-import { TOOL_GROUPS, groupTools } from './tool-groups.mjs'
+import { TOOL_GROUPS } from './tool-groups.mjs'
 import { decide, addRule, setAutomationPause, PolicyRules } from './policy.mjs'
 import { openTaskStore as openRawStore } from './tasks.mjs'
 import { TOOL_GROUPS_VERSION } from './bot-configuration.mjs'
+import { MAIN_TOOLS } from './main-tools.mjs'
 import { commandSkills } from './skills.mjs'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 
@@ -55,11 +59,11 @@ async function rawFixture(t, options = {}) {
   return state
 }
 
-test('R1 existing Bots keep their seeded capabilities, management stays Chief-only, and new Bots receive default capabilities', async (t) => {
+test('existing Bots keep seeded and former main rights, management stays Chief-only, and new Bots start blank', async (t) => {
   const { store } = await rawFixture(t)
   for (const seed of listBots(config)) {
     const view = await store.getBotConfiguration(seed.id)
-    assert.deepEqual(view.assigned, { tools: seed.defaults.tools, resources: seed.defaults.toolResources })
+    assert.deepEqual(view.assigned, { tools: [...seed.defaults.tools.filter(name => !INTRINSIC_TOOLS.includes(name)), ...(seed.id === 'chief' ? [] : [...MAIN_TOOLS, 'automation_pause'])], resources: seed.defaults.toolResources })
     assert.deepEqual(view.revoked, [])
     const bots = view.toolGroups.find((group) => group.id === 'bots')
     assert.equal(bots.available, seed.id === 'chief', seed.id)
@@ -67,17 +71,17 @@ test('R1 existing Bots keep their seeded capabilities, management stays Chief-on
   }
   const { bot } = await store.createBot({ name: '新助理', requestId: requestId() })
   const created = await store.getBotConfiguration(bot.id)
-  assert.deepEqual(created.assigned, { tools: [...groupTools('todos'), ...groupTools('history')], resources: ['workspace:local'] })
+  assert.deepEqual(created.assigned, { tools: [], resources: [] })
   const main = await store.get((await store.mainSessions())[bot.id])
-  assert.deepEqual([...main.toolSets.authorized].sort(), [...created.assigned.tools].sort())
+  assert.deepEqual([...main.toolSets.authorized].sort(), [...new Set([...INTRINSIC_TOOLS, ...SESSION_HISTORY_TOOLS, ...(memoryModule.MAIN_MEMORY_TOOLS ?? []), ...created.assigned.tools])].sort())
 })
 
-test('R4 writes run directly, deletion included; pause still asks', async (t) => {
+test('writes run directly, deletions require confirmation; pause still asks', async (t) => {
   const { store } = await rawFixture(t)
   const verdict = (call) => store.harness.commit((tx) => decide(tx, { botId: 'calendar', ...call }), context)
   const writes = [{ tool: 'workspace.prepare_change', action: 'create' }, { tool: 'workspace.prepare_change', action: 'update' },
     { tool: 'workspace.prepare_change', action: 'delete' }, { tool: 'routine_propose' }]
-  for (const call of [...writes, { tool: 'calendar_feishu_delete_event' }]) assert.equal((await verdict(call)).effect, 'allow', JSON.stringify(call))
+  for (const call of [...writes, { tool: 'calendar_feishu_delete_event' }]) assert.equal((await verdict(call)).effect, call.action === 'delete' || call.tool === 'calendar_feishu_delete_event' ? 'ask' : 'allow', JSON.stringify(call))
   assert.equal((await store.harness.commit((tx) => decide(tx, { botId: 'chief', tool: 'bot_manage', action: 'deactivate' }), context)).effect, 'allow')
   await store.harness.commit((tx) => setAutomationPause(tx, { paused: true, by: 'authenticated-user' }), context)
   assert.equal((await verdict({ tool: 'workspace.prepare_change', action: 'delete' })).effect, 'ask')

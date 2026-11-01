@@ -10,7 +10,8 @@ import { WorkspaceRecords, identityKey, payloadHash } from './workspace-schema.m
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { ToolAccess, toolSets } from './tools.mjs'
 import { BotDirectory } from './bot-directory.mjs'
-import { workspaceHistoryAllowed } from './workspace-grants.mjs'
+import { workspaceHistoryAllowed, workspaceDelegatedResultAllowed } from './workspace-grants.mjs'
+import { projectGroupResult } from './group-result-provenance.mjs'
 
 const start = Date.parse('2026-10-19T00:00:00Z')
 async function fixture(fn, options = {}) {
@@ -102,3 +103,38 @@ test('S2 existing Task records actual source use and follows current assignment'
   const call = { type: 'toolCall', id: 'local-read', name: 'workspace.list', arguments: { sourceId: 'local', type: 'Event' } }
   return { mode: 'model', reply: { content: '' }, toolCalls: [call], assistant: { role: 'assistant', content: [call], timestamp: Date.now() }, execution: { usage: { totalTokens: 1 } } }
 } }))
+
+test('delegated local result reaches its supervisor regardless of direct source range while author revocation still blocks it', () => fixture(async store => {
+  const parent = await store.create({ botId: 'todo' }), child = await store.create({ botId: 'calendar' })
+  const relation = { parentTaskId: parent.taskId, childTaskId: child.taskId }
+  const result = { content: '已核对本地日程' }
+  const project = () => store.harness.commit(async tx => projectGroupResult(tx, await tx.doc(TaskCard, parent.taskId), relation, result, { TaskCard, bots: (await tx.doc(BotDirectory)).items }), context)
+  await store.harness.commit(async tx => {
+    const card = await tx.doc(TaskCard, child.taskId)
+    // The source was used after this Task's original tool snapshot was made.
+    card.parameters.tools = card.parameters.tools.filter(name => !name.startsWith('workspace.'))
+    card.workspaceUsedResources = ['workspace:local']
+    card.workspaceUsedTools = ['workspace.list', 'workspace.get']
+  }, context)
+  assert.equal((await project()).content, result.content)
+  await store.harness.commit(async tx => {
+    const card = await tx.doc(TaskCard, parent.taskId)
+    card.workspaceUsedTools = ['workspace.list', 'workspace.get']
+    card.workspaceUsedResources = ['workspace:local']
+  }, context)
+  assert.equal((await project()).content, result.content)
+  await store.harness.commit(async tx => { const access = await tx.doc(ToolAccess); access.excludedResources ??= {}; access.excludedResources.todo = ['workspace:local'] }, context)
+  assert.equal((await project()).content, result.content)
+  await store.harness.commit(async tx => { (await tx.doc(ToolAccess)).excludedResources.todo = [] }, context)
+  await configure(store, ['workspace.list', 'workspace.get'], [])
+  assert.equal((await project()).visibility, 'permission-denied')
+}))
+
+test('delegated external MCP result does not require reader tool or source selection', () => {
+  const author = { externalMcpUsedRefs: [{ toolName: 'mcp_calendar_read', connectionId: 'calendar-account', catalogRevision: 'v1' }] }
+  const reader = { bot: { id: 'todo' } }
+  const access = { assignments: { todo: { tools: [], resources: [] } }, excludedResources: {} }
+  assert.equal(workspaceDelegatedResultAllowed(author, reader, access), true)
+  access.excludedResources.todo = ['mcp:calendar-account']
+  assert.equal(workspaceDelegatedResultAllowed(author, reader, access), true)
+})

@@ -30,5 +30,5 @@
 ## 原始材料
 
 - [共同契约](plan/proposal.md) · [依赖与阶段计划](plan/task_plan.md) · [源码发现](plan/findings.md) · [验收矩阵](plan/acceptance-matrix.md) · [代码差距分析](plan/code-gap-analysis.md)
-- 架构结论已提炼进 [统一工作区架构](../../../docs/architecture/unified-workspace-v2.md)。
+- 架构结论已提炼进 [统一工作区架构](../../../docs/architecture/workspace.md)。
 - 逐票票据、会话日志与证据在本地 `.scratch/unified-workspace-v2/`，不进仓库。

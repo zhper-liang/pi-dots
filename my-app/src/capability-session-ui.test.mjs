@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import ts from 'typescript'
 import { createSessionActionHandlers } from './session-lifecycle-client.mjs'
+import { publishCapabilityChange, subscribeCapabilityChanges } from './capabilities-changed.mjs'
 
 // Real TSX handlers and the real refresh hook/controller; only DOM layout and child rendering are adapted.
 const dataModule = source => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -105,6 +106,34 @@ test('same Bot capabilities load on visible entry and refresh through the existi
   assert.ok(reads > hiddenReads)
   assert.equal(list(h.render()).items[0].id, 'mcp:after-check')
   assert.equal(list(h.render()).items[0].status, 'needs_auth')
+})
+
+test('capability changes silently reconcile server state without resending mutations', async t => {
+  let current = catalog(), reads = 0, posts = 0
+  const changes = []
+  const unsubscribe = subscribeCapabilityChanges(change => changes.push(change))
+  t.after(unsubscribe)
+  const h = await harness(t, './BotCapabilities.tsx', { token: 'fixture-token', botId: 'alpha', readOnly: false, active: true }, async (_path, init) => {
+    if (init.method === 'POST') { posts++; current = catalog('alpha', { revision: 'bot-2', items: [capability({ enabledForBot: true })] }); return response({}) }
+    reads++
+    return response(structuredClone(current))
+  })
+  await h.settle()
+  assert.equal(button(h.render(), '刷新状态'), undefined)
+  current = catalog('alpha', { revision: 'external-change', items: [capability({ id: 'mcp:new' })] })
+  publishCapabilityChange({ botId: 'alpha', revision: 'external-change' })
+  await h.settle()
+  assert.equal(list(h.render()).items[0].id, 'mcp:new')
+  const before = reads
+  h.fireTimer(15000)
+  await h.settle()
+  assert.ok(reads > before)
+  assert.equal(posts, 0)
+  list(h.render()).onToggle('mcp:new', true)
+  await h.settle()
+  assert.equal(posts, 1)
+  assert.equal(changes.at(-1).botId, 'alpha')
+  assert.ok(text(h.render()).includes('当前会话从下一步使用最新能力'))
 })
 
 test('background capability reads cannot overwrite the original in-flight mutation or its unknown retry', async t => {

@@ -385,8 +385,8 @@ test('a stale target revision after host confirmation prevents a global source u
   const catalog = await f.options().readCatalog({ kind: 'mcp', targetBotId: a.id })
   await f.transaction(async tx => {
     const view = await listBotCapabilities(tx, a.id, { catalog })
-    await setCapabilityAssignment(tx, a.id, { requestId: 'separate-user-history-change', capabilityId: 'tool:history', enabled: true,
-      expectedRevision: view.revision, expectedCatalogRevision: view.items.find(item => item.id === 'tool:history').revision }, { catalog })
+    await setCapabilityAssignment(tx, a.id, { requestId: 'separate-user-history-change', capabilityId: 'tool:reports', enabled: true,
+      expectedRevision: view.revision, expectedCatalogRevision: view.items.find(item => item.id === 'tool:reports').revision }, { catalog })
   })
   const stopped = await f.manager.resume(pending.data.setupId, { taskId: f.caller.taskId, inputId })
   assert.equal(stopped.data.state, 'error'); assert.equal(stopped.error.code, 'SETUP_TARGET_CHANGED')

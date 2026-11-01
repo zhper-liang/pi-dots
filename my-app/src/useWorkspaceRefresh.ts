@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef } from 'react'
 import { createWorkspaceRefresh, type WorkspaceRead, type WorkspaceRefreshController } from './workspace-refresh.mjs'
+import { subscribeCapabilityChanges } from './capabilities-changed.mjs'
 
 type Options = {
   scopeKey: string
@@ -27,6 +28,7 @@ export function useWorkspaceRefresh(options: Options) {
       onInvalidate: reason => latest.current.onInvalidate?.(reason)
     })
     controller.current = instance
+    const unsubscribe = subscribeCapabilityChanges(() => instance.invalidate())
     const environment = () => instance.setEnvironment(document.visibilityState !== 'hidden', navigator.onLine !== false)
     environment()
     document.addEventListener('visibilitychange', environment)
@@ -35,6 +37,7 @@ export function useWorkspaceRefresh(options: Options) {
     const focus = () => { environment(); void instance.request() }
     window.addEventListener('focus', focus)
     return () => {
+      unsubscribe()
       instance.dispose()
       controller.current = null
       document.removeEventListener('visibilitychange', environment)

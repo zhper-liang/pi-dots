@@ -1,10 +1,12 @@
+import { formatContextWindow } from '../shared/model-context.mjs'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { publicRegistrations, type ModelRegistration } from './model-settings-ui.mjs'
 import CapabilityPicker from './CapabilityPicker'
 import { BOT_TEMPLATES, DEFAULT_CAPABILITIES, visibleCapabilities, type BotTemplate, type CapabilityItem } from './bot-capabilities.mjs'
 
 type CreatedBot = { id: string; name: string; description: string; configRef: { botId: string; version: string } }
 const pendingKey = 'pidot.pending-bot-creation'
-type Pending = { requestId: string; name: string; description: string; profile: string; capabilities?: string[] }
+type Pending = { requestId: string; name: string; description: string; profile: string; capabilities?: string[]; parameters?: { model: { id: string } } }
 function savedPending(): Pending | null {
   try {
     const value = JSON.parse(sessionStorage.getItem(pendingKey) ?? 'null')
@@ -18,6 +20,9 @@ export default function BotCreation({ token, onCreated, onCancel }: BotCreationP
   const [name, setName] = useState(pending?.name ?? '')
   const [description, setDescription] = useState(pending?.description ?? '')
   const profile = pending?.profile ?? 'general'
+  const [models, setModels] = useState<ModelRegistration[]>([])
+  const [model, setModel] = useState(pending?.parameters?.model?.id ?? '')
+  const [modelsLoading, setModelsLoading] = useState(true), [modelsError, setModelsError] = useState(false), [modelReload, setModelReload] = useState(0)
   const [items, setItems] = useState<CapabilityItem[] | null>(null)
   const [enabled, setEnabled] = useState<string[]>(pending?.capabilities ?? DEFAULT_CAPABILITIES)
   const [catalogError, setCatalogError] = useState(false)
@@ -44,6 +49,21 @@ export default function BotCreation({ token, onCreated, onCancel }: BotCreationP
       .catch(() => { if (!abort.signal.aborted) setCatalogError(true) })
     return () => abort.abort()
   }, [token, pending])
+  useEffect(() => {
+    const abort = new AbortController()
+    let revision = 0
+    const refresh = () => {
+      const generation = ++revision
+      setModelsLoading(true); setModelsError(false)
+      fetch('/api/settings/models', { signal: abort.signal, headers: { Authorization: `Bearer ${token}` } })
+        .then(async response => { if (!response.ok) throw new Error(); return publicRegistrations((await response.json()).data) })
+        .then(entries => { if (!abort.signal.aborted && generation === revision) { setModels(entries); setModelsLoading(false) } })
+        .catch(() => { if (!abort.signal.aborted && generation === revision) { setModelsError(true); setModelsLoading(false) } })
+    }
+    refresh()
+    window.addEventListener('pidot:model-settings-updated', refresh)
+    return () => { abort.abort(); window.removeEventListener('pidot:model-settings-updated', refresh) }
+  }, [token, modelReload])
   useEffect(() => () => controller.current?.abort(), [])
 
   function applyTemplate(template: BotTemplate) {
@@ -52,12 +72,18 @@ export default function BotCreation({ token, onCreated, onCancel }: BotCreationP
     setEnabled(template.capabilities.filter(id => items?.some(item => item.id === id)))
   }
 
+  function startBlank() {
+    setName('')
+    setDescription('')
+    setEnabled([])
+  }
+
   async function create(event: FormEvent) {
     event.preventDefault()
-    if (submitting.current || loading) return
-    const data = { name: name.trim(), description: description.trim(), profile, ...(items === null ? {} : { capabilities: enabled }) }
+    if (submitting.current || loading || modelsLoading || modelsError || (model && !models.some(entry => entry.selectionId === model))) return
+    const data = { ...(model ? { parameters: { model: { id: model } } } : {}), name: name.trim(), description: description.trim(), profile, ...(items === null ? {} : { capabilities: enabled }) }
     const previous = request.current
-    if (!previous || data.name !== previous.name || data.description !== previous.description || data.profile !== previous.profile || JSON.stringify(data.capabilities) !== JSON.stringify(previous.capabilities)) {
+    if (!previous || data.name !== previous.name || data.description !== previous.description || data.profile !== previous.profile || JSON.stringify(data.capabilities) !== JSON.stringify(previous.capabilities) || JSON.stringify(data.parameters) !== JSON.stringify(previous.parameters)) {
       request.current = { ...data, requestId: crypto.randomUUID() }
     }
     try { sessionStorage.setItem(pendingKey, JSON.stringify(request.current)) } catch { /* in-memory retry remains safe */ }
@@ -87,25 +113,37 @@ export default function BotCreation({ token, onCreated, onCancel }: BotCreationP
     }
   }
 
-  const enabledNames = items === null ? ['日程与待办', '历史与回读'] : items.filter(item => enabled.includes(item.id)).map(item => item.name)
+  const enabledNames = items?.filter(item => enabled.includes(item.id)).map(item => item.name) ?? []
   return <div className="bot-page">
-    <header className="bot-page-head"><h1>新建机器人</h1><p className="shell-muted">起个名字就能建，建完直接对话。</p></header>
+    <header className="bot-page-head"><h1>新建机器人</h1><p className="shell-muted">默认从空白机器人开始，起个名字就能建。职责和能力可以之后再设。</p></header>
     <form onSubmit={event => void create(event)} className="bot-form">
-      <div className="bot-template-options" role="group" aria-label="机器人模板">
-        {BOT_TEMPLATES.map(template => <button type="button" key={template.name} className="bot-template-option" disabled={busy || loading} onClick={() => applyTemplate(template)}>{template.name}</button>)}
-      </div>
+      <details className="bot-template-picker">
+        <summary>使用模板（可选）</summary>
+        <p className="bot-edit-hint">选择模板会填入名字、职责和能力。</p>
+        <div className="bot-template-options" role="group" aria-label="机器人模板">
+          {BOT_TEMPLATES.map(template => <button type="button" key={template.name} className="bot-template-option" disabled={busy || loading} onClick={() => applyTemplate(template)}>{template.name}</button>)}
+          <button type="button" className="bot-template-option" disabled={busy || loading} onClick={startBlank}>恢复空白</button>
+        </div>
+      </details>
       <label htmlFor="bot-name">名字</label>
       <input id="bot-name" required maxLength={60} value={name} onChange={event => setName(event.target.value)} disabled={busy} placeholder="例如：日程助理" />
-      <label htmlFor="bot-description">负责什么</label>
+      <label htmlFor="bot-description">负责什么（可选）</label>
       <textarea id="bot-description" rows={4} maxLength={2000} value={description} onChange={event => setDescription(event.target.value)} disabled={busy} placeholder="这个机器人帮你做什么？" />
+      <label htmlFor="bot-creation-model">模型</label>
+      <select id="bot-creation-model" value={model} disabled={busy || modelsLoading || modelsError} onChange={event => setModel(event.target.value)}>
+        <option value="">{modelsLoading ? '正在读取模型…' : models.length ? '使用默认模型' : '尚未配置模型（测试模式）'}</option>
+        {model && !models.some(entry => entry.selectionId === model) && <option value={model} disabled>原选择已不可用，请重新选择</option>}
+        {models.map(entry => <option key={entry.selectionId} value={entry.selectionId}>{entry.model} · {entry.providerId} · {formatContextWindow(entry.contextWindow)}{entry.id === 'default' ? '（默认连接）' : ''}</option>)}
+      </select>
+      {modelsError && <p role="alert" className="bot-edit-hint">模型列表读取失败。<button type="button" onClick={() => setModelReload(value => value + 1)}>重新读取</button></p>}
       <details className="bot-advanced">
         <summary>{enabledNames.length ? `高级 · 已开：${enabledNames.join('、')}` : '高级 · 没开能力'}</summary>
-        {catalogError ? <p className="bot-edit-hint">能力列表没读到，会按默认能力创建。</p> : items === null ? <p role="status" className="bot-edit-hint">正在读取…</p> : <CapabilityPicker items={items} enabled={enabled} disabled={busy} onToggle={(id, next) => setEnabled(current => next ? [...current, id] : current.filter(item => item !== id))} />}
+        {catalogError ? <p className="bot-edit-hint">能力列表没读到，将创建不启用能力的空白机器人。</p> : items === null ? <p role="status" className="bot-edit-hint">正在读取…</p> : <CapabilityPicker items={items} enabled={enabled} disabled={busy} onToggle={(id, next) => setEnabled(current => next ? [...current, id] : current.filter(item => item !== id))} />}
       </details>
       {error && <p role="alert" className="shell-alert-card">{error}</p>}
       <div className="bot-actions">
         {onCancel && <button type="button" onClick={onCancel} disabled={busy}>取消</button>}
-        <button className="primary" disabled={busy || loading || !name.trim()}>{busy ? '正在创建…' : '创建'}</button>
+        <button className="primary" disabled={busy || loading || modelsLoading || modelsError || !!(model && !models.some(entry => entry.selectionId === model)) || !name.trim()}>{busy ? '正在创建…' : '创建'}</button>
       </div>
     </form>
   </div>

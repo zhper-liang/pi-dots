@@ -1,3 +1,4 @@
+import { parseContextWindow } from '../shared/model-context.mjs'
 export class TaskInputError extends Error {
   constructor(status, code, message) {
     super(message)
@@ -93,4 +94,13 @@ export function raisedCallLimits(input, current, usage) {
   }
   if (!changed) fail('INVALID_CALL_LIMITS', '请显式提高至少一项上限；计数不会清零。')
   return next
+}
+
+/** Pin the selected model's capacity when a new task/configuration/input is admitted. */
+export function pinModelContext(parameters, models) {
+  if (parameters.mode !== 'model') return parameters
+  const id = parameters.model.id
+  const model = models.find(item => item.id === id)
+  parameters.contextWindows = { ...parameters.contextWindows, [id]: parseContextWindow(model?.contextWindow ?? parameters.contextWindows?.[id]) }
+  return parameters
 }

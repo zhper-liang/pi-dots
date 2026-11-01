@@ -8,6 +8,7 @@ import { openTaskStore } from './fixtures/authorized-task-store.mjs'
 import { listBots } from './bots.mjs'
 import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { ruleText } from './inbox.mjs'
+import { MAIN_TOOLS } from './main-tools.mjs'
 import { eventArgs, externalFixture } from './fixtures/workspace-external.mjs'
 
 // PLAN §8.5 routines under each Bot (phase 5). IDs follow T5-01..T5-05; D-12..D-14 per PLAN §11.
@@ -32,7 +33,7 @@ async function fixture(fn, { extraModel } = {}) {
     s = await openTaskStore(opts)
     for (const id of Object.values(await s.mainSessions())) state.mains.add(id)
     const { bot } = await s.getBotConfiguration('calendar')
-    await s.updateBotConfiguration('calendar', { requestId: 'routine-bot', expectedVersion: bot.configRef.version, description: '日程助理', tools: WORKSPACE_TOOLS, resources: ['workspace:local'] })
+    await s.updateBotConfiguration('calendar', { requestId: 'routine-bot', expectedVersion: bot.configRef.version, description: '日程助理', tools: [...WORKSPACE_TOOLS, ...MAIN_TOOLS], resources: ['workspace:local'] })
     await fn({ s, state, setTime: t => { time = t }, tick: () => s.workspaceScheduler.tick() })
   } finally { await s?.close(); await rm(dir, { recursive: true, force: true }) }
 }

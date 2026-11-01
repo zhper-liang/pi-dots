@@ -63,34 +63,30 @@ export function MutedDetectors({ token }: { token: string }) {
   </div>
 }
 
-// Settings (PLAN §8.7, P-16): "帮我想办法" is off by default. Turning it on may also give Chief read-only
-// access to local to-dos and calendar (D-19): only when ticked, only installed local read tools.
-type AssistState = { assist: boolean; chiefRead: { available: boolean; enabled: boolean } }
+// This preference only shows the analysis action. Tool access is managed in capabilities.
+type AssistState = { assist: boolean }
 export function AssistSettings({ token }: { token: string }) {
-  const [value, setValue] = useState<AssistState | null>(null), [read, setRead] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('')
+  const [value, setValue] = useState<AssistState | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const load = useCallback(async () => {
     try {
       const response = await fetch('/api/findings', { headers: { Authorization: `Bearer ${token}` } }), body = await response.json()
       if (!response.ok) throw new Error(body.error?.message)
-      setValue({ assist: body.data.assist === true, chiefRead: body.data.chiefRead ?? { available: false, enabled: false } })
+      setValue({ assist: body.data.assist === true })
     } catch { setError('读取失败，请稍后刷新。') }
   }, [token])
   useEffect(() => { void load() }, [load])
-  async function save(enabled: boolean, chiefRead = false) {
+  async function save(enabled: boolean) {
     setBusy(true); setError('')
-    try { setValue(await act(token, { action: 'assist-setting', enabled, ...(chiefRead ? { chiefRead: true } : {}) })); setRead(false) }
+    try { setValue(await act(token, { action: 'assist-setting', enabled })) }
     catch (e) { setError(e instanceof Error ? e.message : '保存失败。'); void load() } finally { setBusy(false) }
   }
   if (!value) return <p className="shell-muted">{error || '正在读取…'}</p>
-  const offerRead = !value.chiefRead.enabled
   return <div className="assist-settings">
     <h3>帮我想办法</h3>
     <p className="shell-muted small">打开后，提醒卡上多一个「帮我想办法」：pipi 只看不改地分析这条提醒，把办法发到对话里，每次会用一点模型额度。</p>
-    <p role="status">{value.assist ? '已打开' : '已关闭（默认）'}{value.chiefRead.enabled ? ' · pipi 能查看本地待办和日程（只读）' : ' · pipi 看不到本地待办和日程，只能凭卡上的内容分析'}</p>
-    {offerRead && <label className="assist-read"><input type="checkbox" checked={read} disabled={busy || !value.chiefRead.available} onChange={e => setRead(e.target.checked)} /> 同时让 pipi 能查看本地待办和日程（只读）{!value.chiefRead.available && <span className="shell-muted small">：本地查看工具暂不可用，请检查工具安装。</span>}</label>}
+    <p role="status">{value.assist ? '已打开' : '已关闭（默认）'}</p>
     <div className="bot-actions">
-      {!value.assist && <button type="button" className="primary" disabled={busy} onClick={() => void save(true, read)}>打开</button>}
-      {value.assist && offerRead && read && <button type="button" className="primary" disabled={busy} onClick={() => void save(true, true)}>保存</button>}
+      {!value.assist && <button type="button" className="primary" disabled={busy} onClick={() => void save(true)}>打开</button>}
       {value.assist && <button type="button" disabled={busy} onClick={() => void save(false)}>关闭</button>}
     </div>
     {value.assist && <p className="shell-muted small">关掉只是去掉按钮，已经开始的分析会做完。</p>}

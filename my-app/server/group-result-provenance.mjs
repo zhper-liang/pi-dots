@@ -10,9 +10,12 @@ export async function projectGroupResult(tx, card, relation, result, services) {
     const archive = record?.state.status === 'terminal' ? await (await import('./cancellation.mjs')).readCancelledArchive(tx, relation.childTaskId) : null
     const child = archive ? archive.documents[services.TaskCard.definition.kind] : record?.state.status === 'terminal' ? null : await tx.doc(services.TaskCard, relation.childTaskId)
     if (!child) return { ...result, content: '来源Task已结束，结果不可读取。', visibility: 'permission-denied', basis: undefined }
-    if (!(child.parameters?.tools ?? []).some(n => n.startsWith('workspace.')) && !(card.parameters?.tools ?? []).some(n => n.startsWith('workspace.'))) return result
-    const { workspaceHistoryAllowed, workspaceShareAllowed } = await import('./workspace-grants.mjs'), { toolSets, ToolAccess } = await import('./tools.mjs'), access = await tx.doc(ToolAccess)
-    if (!workspaceShareAllowed(child, card, access) || !await workspaceHistoryAllowed(tx, child, toolSets(child, services.bots, access)) || !await workspaceHistoryAllowed(tx, card, toolSets(card, services.bots, access))) return { ...result, content: '工作区来源许可不足；派生结果隐藏。', visibility: 'permission-denied', basis: undefined }
+    const { workspaceHistoryAllowed, workspaceShareAllowed, workspaceDelegatedResultAllowed, workspaceUsedResources, workspaceUsedTools } = await import('./workspace-grants.mjs')
+    if (!workspaceUsedResources(child).length && !workspaceUsedTools(child).length && !(child.externalMcpUsedRefs ?? []).length) return result
+    const { toolSets, ToolAccess } = await import('./tools.mjs'), access = await tx.doc(ToolAccess)
+    const shareAllowed = card.taskId === relation.parentTaskId ? workspaceDelegatedResultAllowed(child, card, access) : workspaceShareAllowed(child, card, access)
+    if (!shareAllowed || !await workspaceHistoryAllowed(tx, child, toolSets(child, services.bots, access)) ||
+      card.taskId !== relation.parentTaskId && !await workspaceHistoryAllowed(tx, card, toolSets(card, services.bots, access))) return { ...result, content: '结果涉及当前不可访问的来源，已隐藏。请检查来源连接及相关机器人的使用范围。', visibility: 'permission-denied', basis: undefined }
     return result
   }
   try {

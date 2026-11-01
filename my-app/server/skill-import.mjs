@@ -28,12 +28,25 @@ export function createSkillImportService(options) {
   const serialized = (work) => { const next = (queues.get(root) ?? Promise.resolve()).then(work); const tail = next.catch(() => {}); queues.set(root, tail); void tail.then(() => { if (queues.get(root) === tail) queues.delete(root) }); return next }
   return {
     prepareSkillImport: (source) => prepare(source, { root, limits, fetchImpl: options.fetchImpl ?? globalThis.fetch, preparations }),
+    // Host-only learning preparation: no filesystem paths, scripts or executable attachments.
+    prepareLearnedSkill: async ({ markdown, references = [], source }) => {
+      if (source?.kind !== 'learned' || typeof source.ownerBotId !== 'string' || !source.ownerBotId || !Array.isArray(source.evidence) || !source.evidence.length) fail('SKILL_LEARNING_SOURCE_INVALID', '学习产物需要宿主所有者与证据。')
+      const files = [{ path: 'SKILL.md', bytes: Buffer.from(markdown) }, ...references.map(ref => ({ path: ref.path, bytes: Buffer.from(ref.content) }))]
+      if (files.slice(1).some(file => !/^references\/[A-Za-z0-9_./-]+\.(md|txt)$/.test(file.path))) fail('SKILL_FILE_UNSUPPORTED', '学习产物只能附带参考文本。')
+      return preparePackage({ files, source }, { root, limits, preparations })
+    },
     importSkill: (input) => serialized(() => install(root, preparations, input, false)),
     updateSkill: (input) => serialized(() => install(root, preparations, input, true)),
     rollbackSkill: (input) => serialized(() => rollback(root, input)),
     removeSkill: (input) => serialized(() => remove(root, input)),
     requestStatus: requestId => requestStatus(root, requestId),
     skillCatalog: () => catalog(root),
+    // Host-only lookup includes tombstones; public catalogs deliberately omit them.
+    skillRegistration: async skillId => {
+      if (!ID.test(skillId)) fail('SKILL_INPUT_INVALID', '无效 skillId。')
+      const index = await readIndex(root)
+      return Object.hasOwn(index.skills, skillId) ? clone(index.skills[skillId]) : null
+    },
     skillSource: (skillId, version = {}) => sourceFor(root, skillId, version),
   }
 }
@@ -254,6 +267,9 @@ async function prepare(source, options) {
   if (!source || typeof source !== 'object' || Array.isArray(source) || !['local', 'repository'].includes(source.kind)) fail('SKILL_SOURCE_INVALID', '来源仅支持本机目录/SKILL.md 或公开仓库。')
   const result = source.kind === 'local' ? await localFiles(source.path, options.limits) : await repositoryFiles(source, options)
   if (result.candidates) return { status: 'needs_directory', candidates: result.candidates, commit: result.commit }
+  return preparePackage(result, options)
+}
+async function preparePackage(result, options) {
   checkFiles(result.files, options.limits)
   const document = result.files.find((file) => file.path === 'SKILL.md')
   if (!document) fail('SKILL_DOCUMENT_MISSING', '指定目录缺少 SKILL.md；不会猜测其他目录。')
@@ -341,6 +357,7 @@ async function install(root, preparations, input, updating) {
   try { await lstat(new URL(`./skills/${id}/manifest.json`, import.meta.url)); fail('SKILL_NAME_CONFLICT', '该名称属于内置 Skill，不能覆盖。') } catch (error) { if (error.code !== 'ENOENT') throw error }
   if (updating && input.skillId !== id) fail('SKILL_ID_MISMATCH', '更新不能更名或覆盖其他 Skill。')
   const current = Object.hasOwn(index.skills, id) ? index.skills[id] : null
+  if (prepared.source?.kind === 'learned' && current?.removed) fail('SKILL_LEARNING_USER_CONFLICT', '用户已移除该方法，自动学习不能恢复。')
   if (updating && (!current || current.removed)) fail('SKILL_NOT_FOUND', '未登记该 Skill。')
   if (!updating && current && !current.removed) {
     if (current.hash !== prepared.hash || JSON.stringify(current.source) !== JSON.stringify(prepared.source)) fail('SKILL_NAME_CONFLICT', '同名 Skill 已登记，不覆盖；请显式更新或使用其他名称。')
@@ -409,7 +426,7 @@ async function rollback(root, input) {
   const current = Object.hasOwn(index.skills, input.skillId) ? index.skills[input.skillId] : null
   if (!current || current.removed || !current.versions.includes(input.hash)) fail('SKILL_VERSION_NOT_FOUND', '该历史版本不可回退。')
   const pkg = await readPackage(root, input.hash)
-  Object.assign(current, { hash: pkg.hash, version: pkg.manifest.version, status: pkg.status, source: pkg.source, requirements: requirements(pkg.manifest),
+  Object.assign(current, { ...(current.source?.kind === 'learned' ? { userRolledBack: true } : {}), hash: pkg.hash, version: pkg.manifest.version, status: pkg.status, source: pkg.source, requirements: requirements(pkg.manifest),
     lastCheck: { checkedAt: new Date().toISOString(), status: pkg.status } })
   return finish(root, index, input, start.fingerprint, current, 'rollback')
 }

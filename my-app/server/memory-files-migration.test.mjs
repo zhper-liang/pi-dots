@@ -121,7 +121,7 @@ test('R2-05 on → write → hand edit → off → read → on: nothing lost; of
   await s.editBotMemory('chief', { kind: 'memory', action: 'delete', id: 'fact', expectedVersion: view.memory.version, requestId: 'off-delete' })
   calls = []
   const { taskId } = await s.create({ botId: 'chief' })
-  await s.send(taskId, '你好')
+  await s.send(taskId, '关闭前手写 有来源的记忆')
   for (let i = 0; i < 300 && !calls.length; i++) await new Promise(resolve => setTimeout(resolve, 5))
   assert.ok(calls[0].includes('Bot记忆：关闭前手写 [手写]'))
   assert.equal(calls[0].includes('开启时写入'), false)
@@ -149,7 +149,7 @@ test('R2-05 Document mode on a fresh store: no files, no file ledgers, file:null
   assert.equal(view.memory.file, null); assert.equal(prefs.file, null)
   calls = []
   const { taskId } = await s.create({ botId: 'chief' })
-  await s.send(taskId, '你好')
+  await s.send(taskId, '关闭前手写 有来源的记忆')
   for (let i = 0; i < 300 && !calls.length; i++) await new Promise(resolve => setTimeout(resolve, 5))
   assert.ok(calls[0].includes(`Bot记忆：有来源的记忆 [${ref.taskId}/${ref.entryId}]`))
   assert.equal(calls[0].includes('文件提示'), false)

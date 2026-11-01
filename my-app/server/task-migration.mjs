@@ -10,6 +10,8 @@ import { assertNotCancelled } from './cancellation.mjs'
 import { ChatSteering } from './steering.mjs'
 import { ContextCompaction, contextPolicy, contextTokens } from './context-compaction.mjs'
 import { buildTaskContext } from './task-context.mjs'
+import { MAIN_TOOLS } from './main-tools.mjs'
+import { AUTOMATION_PAUSE_TOOL } from './policy.mjs'
 
 const copy = (x) => JSON.parse(JSON.stringify(x))
 const canonical = (x) => Array.isArray(x) ? x.map(canonical) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, canonical(x[k])])) : x
@@ -43,6 +45,7 @@ export function migrationApi({ harness, context, TaskCard, ChatInput, ChatQueue,
     if (!bot || !version || hash(version.defaults) !== hash(bot.defaults) || version.description !== bot.description) fail(409, 'MIGRATION_TARGET_INVALID', '目标配置不存在或不可变快照不一致。')
     if (card.configRef.version === bot.configRef.version) fail(409, 'MIGRATION_NOT_NEEDED', '当前会话已使用该配置版本，无需迁移。')
     const next = copy(card), parameters = copy(bot.defaults), sources = {}
+    if (card.kind !== 'main') parameters.tools = parameters.tools.filter(name => !MAIN_TOOLS.includes(name) && name !== AUTOMATION_PAUSE_TOOL)
     for (const key of Object.keys(parameters)) {
       const source = card.parameterSources?.[key]
       if (['user-request', 'user-limit-increase'].includes(source?.type) && !['tools', 'toolResources', 'mode', 'contextWindows'].includes(key) && Object.hasOwn(card.parameters, key)) {

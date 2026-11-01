@@ -16,8 +16,8 @@ export const automationPauseTool = Object.freeze({ name: AUTOMATION_PAUSE_TOOL,
 export const validAutomationPauseArgs = call => !call.argumentsError && call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments) &&
   Object.keys(call.arguments).every(k => k === 'reason') && (call.arguments.reason === undefined || typeof call.arguments.reason === 'string' && call.arguments.reason.length <= 200)
 
-const READ_AND_INTERNAL = new Set(['calendar_read_schedule', 'calendar_read_event', 'calendar_feishu_read_schedule', 'calendar_feishu_read_event', 'calendar_feishu_freebusy',
-  'tool_result_read', 'task_history_read', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'workspace.list', 'workspace.get', 'workspace.operation_status',
+const READ_AND_INTERNAL = new Set(['bash', 'read', 'write', 'edit', 'calendar_read_schedule', 'calendar_read_event', 'calendar_feishu_read_schedule', 'calendar_feishu_read_event', 'calendar_feishu_freebusy',
+  'tool_result_read', 'task_history_read', 'session_search', 'session_history_read', 'memory_read', 'memory_edit', 'memory_review', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'workspace.list', 'workspace.get', 'workspace.operation_status',
   'collaborators_list', 'bot_inspect', 'shared_read', 'task_status', AUTOMATION_PAUSE_TOOL,
   'report_blocker', 'blocker_resolve', 'blocker_escalate', 'task_assign', 'task_review', 'shared_publish', 'shared_link', 'task_create'])
 export const WRITE_TOOLS = new Set(['calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_feishu_delete_event', 'calendar_reschedule_event',
@@ -60,6 +60,14 @@ function pickItemRule(rules, call) {
   return best
 }
 
+export function deletionCall(call, externalTool) {
+  if (call.tool === 'workspace.prepare_change') return (call.action ?? call.args?.action) === 'delete'
+  if (call.tool === 'calendar_feishu_delete_event') return true
+  if (!externalTool) return false
+  const tokens = value => typeof value === 'string' && /(^|[^a-z])(delete|remove|trash|purge|destroy)([^a-z]|$)/i.test(value.replace(/([a-z])([A-Z])/g, '$1_$2'))
+  return tokens(externalTool.originalName ?? call.tool) || ['action', 'operation', 'method'].some(key => tokens(call.args?.[key]))
+}
+
 export async function decide(tx, call, { externalTool } = {}) {
   const action = call.action ?? call.args?.action
   const verdict = (effect, reason, allowAlways = false) => ({ effect, reason, allowAlways,
@@ -75,9 +83,11 @@ export async function decide(tx, call, { externalTool } = {}) {
   // Tool groups default to on: an unmatched write, deletion included, runs directly.
   let effect = rule?.effect ?? 'allow'
   let reason = rule ? rule.origin + '-rule' : 'write-default'
+  const deletion = deletionCall(call, externalTool)
+  if (deletion && effect !== 'deny') { effect = 'ask'; reason = 'delete-confirmation' }
   const paused = (await tx.doc(AutomationPause)).paused
   if (effect === 'allow' && paused) { effect = 'ask'; reason = 'automation-paused' }
-  return verdict(effect, reason, effect === 'ask' && !paused)
+  return verdict(effect, reason, effect === 'ask' && !paused && !deletion)
 }
 
 const policyError = (status, code, message) => new TaskInputError(status, code, message)

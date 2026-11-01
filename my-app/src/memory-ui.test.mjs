@@ -218,3 +218,25 @@ test('R2 save notice does not promise the Bot sees an edit while its file is rej
   assert.match(memorySavedNotice('update', rejected), /机器人暂时拿不到/)
   assert.equal(memorySavedNotice('delete', rejected), '已删除，编辑历史仍保留。')
 })
+
+test('learning actions use authenticated review endpoint and return live status', async () => {
+  const calls = []
+  const learning = { enabled: true, paused: false, pending: 1 }
+  const api = createMemoryApi('test-token', async (...args) => { calls.push(args); return response(learning) })
+  assert.deepEqual(await api.reviewBot('a/b', 'review'), learning)
+  assert.equal(calls[0][0], '/api/bots/a%2Fb/memory/review')
+  assert.equal(calls[0][1].headers.Authorization, 'Bearer test-token')
+  assert.deepEqual(JSON.parse(calls[0][1].body), { action: 'review' })
+  await api.reviewBot('a/b', 'pause')
+  assert.deepEqual(JSON.parse(calls[1][1].body), { action: 'pause' })
+})
+
+test('learning record reasons are bounded Chinese labels and tool receipt sources navigate', async () => {
+  const { memoryLearningReason } = await import('./memory-helpers.mjs')
+  assert.match(memoryLearningReason({ state: 'blocked', code: 'MEMORY_SOURCE_UNAVAILABLE' }), /撤权/)
+  assert.match(memoryLearningReason({ state: 'retry-wait', code: 'MEMORY_FOREGROUND_PRIORITY' }), /优先/)
+  assert.equal(memoryLearningReason({ state: 'no-change', code: null }), '没有需要保存的新内容')
+  assert.equal(memoryLearningReason({ state: 'unknown-private-value', code: 'secret-private-code' }), '等待核对整理状态')
+  const target = await resolveMemorySourceHash('token', { taskId: 2, entryId: 8 }, undefined, async () => new Response(JSON.stringify({ task: { taskId: 2, bot: { id: 'chief' }, messages: [{ id: 8, role: 'tool', toolName: 'read', result: { ok: true } }] } }), { status: 200 }))
+  assert.equal(target, '#bot=chief&task=2&message=8')
+})

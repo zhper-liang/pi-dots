@@ -253,7 +253,7 @@ test('iss15 large tool receipt and exact raw artifact survive cancellation and n
 
 test('iss15 cancellation interrupts compaction too; late summary does not apply or restart business work', async (t) => {
   const hold = gate(); let normalCalls = 0, summaries = 0, signal
-  const bots = listBots(config, { maxOutputTokens: 1024, contextWindows: { [config.model]: 16000 }, callLimits: { modelCalls: 50, toolCalls: 40 } })
+  const bots = listBots(config, { maxOutputTokens: 1024, contextWindows: { [config.model]: 20096 }, callLimits: { modelCalls: 50, toolCalls: 40 } })
   const { store } = await fixture(t, { bots, modelReply: async (_message, options) => {
     if (options.purpose === 'context-compaction') { summaries++; signal = options.signal; await hold.promise; return result('取消后迟到摘要') }
     normalCalls++; return result('已核实事实，尚未解决的事项保留原文。'.repeat(200))

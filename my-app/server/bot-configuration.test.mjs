@@ -1,3 +1,5 @@
+import { INTRINSIC_TOOLS } from './tools.mjs'
+import { NATIVE_TOOLS } from './native-tools.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
@@ -13,6 +15,7 @@ import { ToolAccess, CALENDAR_TOOL, CALENDAR_EVENT_TOOL, readMockSchedule } from
 import { MockCalendar, CALENDAR_WRITE_TOOL } from './approvals.mjs'
 import { createApiServer } from './app.mjs'
 import { allGroupTools } from './bot-configuration.mjs'
+import { MAIN_TOOLS } from './main-tools.mjs'
 
 const config = { baseUrl: 'https://fixture.invalid/v1', model: 'config-fixture', apiKey: 'do-not-persist-fixture-secret' }
 const args = { resource: 'mock:personal', date: '2026-10-20' }
@@ -57,7 +60,7 @@ test('02 immutable configuration versions update Bot metadata while Task access 
   const changed = await store.updateBotConfiguration('calendar', await edit(store, 'calendar', { description: '新的专业职责', tools: [CALENDAR_TOOL], parameters: { model: { id: config.model }, maxOutputTokens: 1024 } }))
   const fresh = await store.create({ botId: 'calendar' }), current = await store.get(old.taskId)
   assert.deepEqual(current.parameters, old.parameters); assert.deepEqual(current.configRef, old.configRef); assert.deepEqual(current.bot, old.bot)
-  assert.deepEqual(current.toolSets.authorized, [CALENDAR_TOOL])
+  assert.deepEqual(current.toolSets.authorized, [...NATIVE_TOOLS, CALENDAR_TOOL, 'tool_result_read', 'task_history_read', 'memory_read', 'memory_edit'])
   assert.equal(fresh.bot.description, '新的专业职责'); assert.deepEqual(fresh.configRef, changed.bot.configRef); assert.equal(fresh.parameters.maxOutputTokens, 1024)
   const after = await store.getBotConfiguration('calendar')
   assert.equal(after.versions.length, 2); assert.deepEqual(after.versions[0], before.versions[0]); assert.equal(after.versions[1].source, 'authenticated-user')
@@ -72,7 +75,7 @@ test('02 CAS concurrency chooses one complete version; failed stale edit persist
   assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1)
   assert.equal(results.find((r) => r.status === 'rejected').reason.code, 'CONFIG_VERSION_CONFLICT')
   const view = await store.getBotConfiguration('calendar')
-  assert.equal(view.versions.length, 2); assert.equal(view.bot.description, '胜者A'); assert.deepEqual(view.assigned.tools, a.tools)
+  assert.equal(view.versions.length, 2); assert.equal(view.bot.description, '胜者A'); assert.deepEqual(view.assigned.tools, a.tools.filter(name => !INTRINSIC_TOOLS.includes(name)))
   assert.ok(view.audit.some((e) => e.type === 'management-denied' && e.code === 'CONFIG_VERSION_CONFLICT'))
 })
 
@@ -285,8 +288,8 @@ test('02 fresh runtime keeps existing grants and new Bots blank; legacy assignme
   store = await rawOpen({ file, bots: listBots(config), modelReply: async () => text() })
   let view = await store.getBotConfiguration('calendar')
   assert.ok(view.installed.includes(CALENDAR_TOOL))
-  // Intrinsic main-session management tools are not configurable business grants.
-  assert.deepEqual(view.assigned.tools.filter(name => allGroupTools().includes(name)), view.bot.defaults.tools.filter(name => allGroupTools().includes(name)))
+  // Old main-only rights are now explicit, with the original seeded business grants.
+  assert.deepEqual(view.assigned.tools, [...view.bot.defaults.tools.filter(name => !INTRINSIC_TOOLS.includes(name)), ...MAIN_TOOLS, 'automation_pause'])
   assert.deepEqual(view.assigned.resources, view.bot.defaults.toolResources)
   const existing = structuredClone(view.assigned)
   const old = await store.create({ botId: 'calendar' }); assert.ok(old.toolSets.authorized.includes(CALENDAR_TOOL))
@@ -294,7 +297,7 @@ test('02 fresh runtime keeps existing grants and new Bots blank; legacy assignme
   assert.deepEqual(bot.defaults.tools, []); assert.deepEqual(bot.defaults.toolResources, [])
   assert.deepEqual((await store.getBotConfiguration(bot.id)).assigned, { tools: [], resources: [] })
   // A prior record without assignment metadata initializes from the current Bot defaults.
-  await store.harness.commit(async (tx) => { const access = await tx.doc(ToolAccess); delete access.assignments; const directory = await tx.doc(BotDirectory); delete directory.configurations; delete directory.managementAudit; delete directory.managementRequests }, context)
+  await store.harness.commit(async (tx) => { const access = await tx.doc(ToolAccess); delete access.assignments; delete access.mainAssignments; const directory = await tx.doc(BotDirectory); delete directory.configurations; delete directory.managementAudit; delete directory.managementRequests }, context)
   await store.close(); store = await rawOpen({ file, bots: listBots(config) })
   view = await store.getBotConfiguration('calendar')
   assert.deepEqual(view.assigned, existing)

@@ -1,3 +1,5 @@
+import { INTRINSIC_TOOLS, RECALL_TOOLS } from './tools.mjs'
+import { NATIVE_TOOLS } from './native-tools.mjs'
 import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { FEISHU_TOOLS } from './feishu-calendar.mjs'
 import test from 'node:test'
@@ -14,6 +16,7 @@ import { createModelReply, modelParameters } from './model-reply.mjs'
 import { listBots } from './bots.mjs'
 import { createApiServer } from './app.mjs'
 import { RESULT_READ_TOOL } from './tool-results.mjs'
+import { MAIN_TOOLS } from './main-tools.mjs'
 import { CALENDAR_TOOL, CALENDAR_EVENT_TOOL, CallUsage, calendarTool, calendarEventTool, toolDefinitions, readMockSchedule,
   readMockEvent, toolSets, checkToolCall, validSchedule, validEventDetail } from './tools.mjs'
 
@@ -68,8 +71,8 @@ test('tool declares strict input/result and installed/authorized/displayed sets 
   const bots = listBots(config)
   for (const bot of bots) {
     const sets = toolSets({ bot, parameters: bot.defaults }, bots, { revoked: {} })
-    assert.deepEqual(sets.installed, [CALENDAR_TOOL, CALENDAR_EVENT_TOOL, RESULT_READ_TOOL, 'task_history_read', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event', 'collaborators_list', 'task_assign', 'task_review', 'shared_publish', 'shared_read', 'shared_link', 'blocker_resolve', 'blocker_escalate', ...FEISHU_TOOLS, 'calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_feishu_delete_event', ...WORKSPACE_TOOLS, 'automation_pause'])
-    assert.deepEqual(sets.authorized, bot.id === 'calendar' ? [CALENDAR_TOOL, CALENDAR_EVENT_TOOL, RESULT_READ_TOOL, 'task_history_read', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'] : ['report_blocker'])
+    assert.deepEqual(sets.installed, [...NATIVE_TOOLS, CALENDAR_TOOL, CALENDAR_EVENT_TOOL, RESULT_READ_TOOL, 'task_history_read', 'memory_read', 'memory_edit', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event', 'collaborators_list', 'task_assign', 'task_review', 'shared_publish', 'shared_read', 'shared_link', 'blocker_resolve', 'blocker_escalate', ...FEISHU_TOOLS, 'calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_feishu_delete_event', ...WORKSPACE_TOOLS, 'automation_pause'])
+    assert.deepEqual(sets.authorized, bot.id === 'calendar' ? [...NATIVE_TOOLS, CALENDAR_TOOL, CALENDAR_EVENT_TOOL, RESULT_READ_TOOL, 'task_history_read', 'memory_read', 'memory_edit', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'] : [...INTRINSIC_TOOLS, 'report_blocker'])
     assert.deepEqual(sets.displayed, sets.authorized)
   }
   assert.deepEqual(toolDefinitions([CALENDAR_TOOL, CALENDAR_EVENT_TOOL]).map((t) => t.name), [CALENDAR_TOOL, CALENDAR_EVENT_TOOL])
@@ -333,11 +336,11 @@ test('revocation during model request blocks old Task execution and persists acr
   const result = await settled(store, task.taskId)
   assert.equal(executions, 0)
   assert.equal(result.messages[2].result.error.code, 'TOOL_NOT_AUTHORIZED')
-  assert.deepEqual(result.toolSets.authorized, [RESULT_READ_TOOL, 'task_history_read', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'])
+  assert.deepEqual(result.toolSets.authorized, [...NATIVE_TOOLS, RESULT_READ_TOOL, 'task_history_read', 'memory_read', 'memory_edit', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'])
   assert.deepEqual(result.parameters, task.parameters)
   await store.close()
   const reopened = await open()
-  assert.deepEqual((await reopened.get(task.taskId)).toolSets.authorized, [RESULT_READ_TOOL, 'task_history_read', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'])
+  assert.deepEqual((await reopened.get(task.taskId)).toolSets.authorized, [...NATIVE_TOOLS, RESULT_READ_TOOL, 'task_history_read', 'memory_read', 'memory_edit', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'])
   await reopened.updateToolAccess('calendar', { revoked: [] })
   assert.equal((await reopened.get(task.taskId)).toolSets.authorized.includes(CALENDAR_TOOL), true, 'live assignment immediately restores access to an existing Task')
   assert.equal((await reopened.create({ botId: 'calendar' })).toolSets.authorized.includes(CALENDAR_TOOL), true)
@@ -440,7 +443,7 @@ test('legacy Task reads current assignment; newly installed tools do not auto-as
   const reopened = await open({ bots: listBots(config) })
   const saved = await send(reopened, old)
   assert.deepEqual(saved.parameters, old.parameters)
-  assert.deepEqual(saved.toolSets.authorized, [])
+  assert.deepEqual(saved.toolSets.authorized, [...INTRINSIC_TOOLS])
   assert.equal(saved.messages[2].result.error.code, 'TOOL_NOT_AUTHORIZED')
   assert.equal(executions, 0)
 })
@@ -462,8 +465,8 @@ test('an existing v4 calendar Task keeps list-only access after the new detail t
   await store.close()
   const reopened = await open({ bots: listBots(config) })
   const result = await send(reopened, oldTask, '读取事件详情')
-  assert.deepEqual(result.parameters.tools, [CALENDAR_TOOL])
-  assert.deepEqual(result.toolSets.authorized, [CALENDAR_TOOL])
+  assert.deepEqual(result.parameters.tools, [CALENDAR_TOOL, ...MAIN_TOOLS, 'automation_pause'])
+  assert.deepEqual(result.toolSets.authorized, [...NATIVE_TOOLS, CALENDAR_TOOL, ...RECALL_TOOLS, 'memory_read', 'memory_edit'])
   assert.equal(detailExecutions, 0)
   assert.equal(result.messages.find((item) => item.role === 'tool').result.error.code, 'TOOL_NOT_AUTHORIZED')
 })
@@ -661,7 +664,7 @@ test('iss8 authenticated limits API, atomic concurrent updates, and single-tool 
   await Promise.all([req(`/api/bots/calendar/tool-access/${CALENDAR_TOOL}`, 'DELETE'), req(`/api/bots/calendar/tool-access/${CALENDAR_EVENT_TOOL}`, 'DELETE')])
   const access = (await (await req('/api/bots/calendar/tool-access')).json()).access
   assert.deepEqual(access.revoked.sort(), [CALENDAR_TOOL, CALENDAR_EVENT_TOOL].sort())
-  assert.deepEqual((await store.get(task.taskId)).toolSets.authorized, [RESULT_READ_TOOL, 'task_history_read', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'])
+  assert.deepEqual((await store.get(task.taskId)).toolSets.authorized, [...NATIVE_TOOLS, RESULT_READ_TOOL, 'task_history_read', 'memory_read', 'memory_edit', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'])
 })
 
 test('iss8 raising limits during a model request is rejected without mutation', async (t) => {

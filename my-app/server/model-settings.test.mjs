@@ -60,14 +60,14 @@ async function api(t, store) {
 
 test('T02 settings save is 0600, private, atomic, idempotent and preserves a blank key', async t => {
   const { dir, settings } = await fixture(t)
-  assert.deepEqual(await settings.get(), { baseUrl: '', model: '', hasKey: false, source: 'none' })
+  assert.deepEqual(await settings.get(), { baseUrl: '', model: '', hasKey: false, contextWindow: 256000, source: 'none' })
   await assert.rejects(settings.save(input({ apiKey: '' })), errorCode('INVALID_MODEL_SETTINGS'))
   const saved = await settings.save(input())
-  assert.deepEqual(saved, { baseUrl: first.baseUrl, model: first.model, hasKey: true, source: 'file' })
+  assert.deepEqual(saved, { baseUrl: first.baseUrl, model: first.model, hasKey: true, contextWindow: 256000, source: 'file' })
   assert.deepEqual(await settings.save(input()), saved)
   await assert.rejects(settings.save(input({ model: 'other' })), errorCode('MODEL_SETTINGS_REQUEST_CONFLICT'))
   assert.equal((await stat(join(dir, 'model-settings.json'))).mode & 0o777, 0o600)
-  assert.deepEqual(JSON.parse(await readFile(join(dir, 'model-settings.json'), 'utf8')), first)
+  assert.deepEqual(JSON.parse(await readFile(join(dir, 'model-settings.json'), 'utf8')), { ...first, contextWindow: 256000 })
   await settings.save(input({ requestId: 'model-blank-key-02', baseUrl: 'http://[::1]:9999/v1/', apiKey: '  ' }))
   assert.equal((await settings.read()).apiKey, key)
   assert.equal((await settings.read()).baseUrl, 'http://[::1]:9999/v1')
@@ -87,7 +87,7 @@ test('T02 invalid input and unsafe URLs fail without overwriting a saved connect
   for (const changes of [{ apiKey: 'bad\nkey' }, { apiKey: false }, { model: '../bad?model' }, { model: key }, { requestId: '__proto__' }, { unknown: key }]) {
     await assert.rejects(settings.save(input({ requestId: 'invalid-input-request', ...changes })), errorCode('INVALID_MODEL_SETTINGS'))
   }
-  assert.deepEqual(await settings.read(), first)
+  assert.deepEqual(await settings.read(), { ...first, contextWindow: 256000 })
 })
 
 test('T02 process > app dotenv > root dotenv > saved file, with env changes read live', async t => {
@@ -98,7 +98,7 @@ test('T02 process > app dotenv > root dotenv > saved file, with env changes read
   await writeFile(app, 'OPENAI_BASE_URL=https://app.fixture.invalid/v1\nMODEL=app-model\n')
   const env = { base_url: 'https://process.fixture.invalid/v1' }
   const live = createModelSettings({ file, env, envFiles: [app, root] })
-  assert.deepEqual(await live.get(), { baseUrl: env.base_url, model: 'app-model', hasKey: true, source: 'env' })
+  assert.deepEqual(await live.get(), { baseUrl: env.base_url, model: 'app-model', hasKey: true, contextWindow: 256000, source: 'env' })
   await assert.rejects(live.save(input()), errorCode('MODEL_SETTINGS_ENV_LOCKED'))
   env.OPENAI_BASE_URL = 'http://localhost:9090/v1'
   assert.equal((await live.get()).baseUrl, env.OPENAI_BASE_URL)
@@ -108,7 +108,7 @@ test('T02 process > app dotenv > root dotenv > saved file, with env changes read
   assert.equal((await live.get()).model, 'root-model')
   await writeFile(root, '')
   assert.equal((await live.get()).source, 'file')
-  assert.deepEqual(await settings.read(), first)
+  assert.deepEqual(await settings.read(), { ...first, contextWindow: 256000 })
   const isolated = createModelSettings({ file, env: { PIDOT_REPLY_MODE: 'test' }, envFiles: [app, root] })
   assert.equal(await isolated.read(), undefined)
   await assert.rejects(isolated.save(input()), errorCode('MODEL_SETTINGS_TEST_MODE'))

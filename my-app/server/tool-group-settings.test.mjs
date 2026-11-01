@@ -7,13 +7,13 @@ const group = id => TOOL_GROUPS.find(item => item.id === id)
 const view = (overrides = {}) => describeGroups({ botId: 'calendar', assigned: [], revoked: [], mainSession: true, ...overrides })
 
 test('R1-08 projection: read-only tools can be disabled independently', () => {
-  const names = [...group('history').tools]
-  const enabled = view({ assigned: names }).find(item => item.id === 'history')
+  const names = [...group('skills').tools]
+  const enabled = view({ assigned: names }).find(item => item.id === 'skills')
   assert.equal(enabled.enabled, true)
   assert.equal(enabled.partiallyEnabled, false)
   assert.equal(enabled.available, true)
   assert.ok(enabled.tools.every(tool => tool.enabled && !tool.write))
-  const disabled = view({ assigned: names, revoked: names }).find(item => item.id === 'history')
+  const disabled = view({ assigned: names, revoked: names }).find(item => item.id === 'skills')
   assert.equal(disabled.enabled, false)
   assert.equal(disabled.available, false)
   assert.ok(disabled.tools.every(tool => !tool.enabled && tool.status === 'revoked'))

@@ -11,10 +11,13 @@ export type MemoryActor = 'user' | 'candidate' | 'file'
 export type MemoryRevision = { kind: MemoryKind; botId?: string; version: number; updatedAt: string | null; content?: string; items?: MemoryItem[]; sourceEntries: MemorySource[]; actor: MemoryActor }
 export type MemoryHistory = { items: MemoryRevision[]; nextBeforeVersion: number | null }
 export type MemoryDocument = { kind: MemoryKind; botId?: string; version: number; updatedAt: string | null; sourceEntries: MemorySource[]; status: MemoryStatus; content?: string; items?: MemoryItem[]; history?: MemoryRevision[]; historyNextBeforeVersion?: number | null; file?: MemoryFileStatus | null }
-export type BotMemoryView = { personality: MemoryDocument; preferences: MemoryDocument; memory: MemoryDocument; history?: { personality: MemoryRevision[]; memory: MemoryRevision[] }; historyNextBeforeVersion?: { personality: number | null; memory: number | null } }
+export type MemoryLearningJob = { jobId: string; trigger: string; state: string; code: string | null; dueAt: number; updatedAt: number; attempts: number; changes: { kind: string; content: string; sourceEntries: MemorySource[] }[]; usage?: { calls?: number; tokens?: number }; sourceEntries: MemorySource[] }
+export type MemoryLearning = { enabled: boolean; paused: boolean; pending: number; lastReviewAt: number | null; day: string; calls: number; tokens: number; limits: { calls: number; tokens: number }; jobs: MemoryLearningJob[] }
+export type BotMemoryView = { learning?: MemoryLearning; personality: MemoryDocument; preferences: MemoryDocument; memory: MemoryDocument; history?: { personality: MemoryRevision[]; memory: MemoryRevision[] }; historyNextBeforeVersion?: { personality: number | null; memory: number | null } }
 export type MemoryEdit = { kind: MemoryKind; expectedVersion: number; requestId: string; action: 'set' | 'update' | 'delete'; id?: string; content?: string; sourceEntries?: MemorySource[] }
 export type MemoryOutcome = { ok: boolean; code: string | null; version: number; changed: boolean; replayed: boolean; document: MemoryDocument }
 export interface MemoryApi {
+  reviewBot?(botId: string, action: 'review' | 'pause' | 'resume'): Promise<MemoryLearning>
   getBot(botId: string, signal?: AbortSignal): Promise<BotMemoryView>
   editBot(botId: string, edit: MemoryEdit): Promise<MemoryOutcome>
   getPreferences(signal?: AbortSignal): Promise<MemoryDocument>

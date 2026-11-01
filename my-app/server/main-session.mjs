@@ -1,8 +1,9 @@
+import { enqueueMemoryEvidence } from './memory-learning-queue.mjs'
 import { defineDoc } from '@earendil-works/pi-durable'
 import { createHash } from 'node:crypto'
-import { TaskInputError, taskParameters } from './task-config.mjs'
+import { TaskInputError, taskParameters, pinModelContext } from './task-config.mjs'
 import { BotDirectory } from './bot-directory.mjs'
-import { workspaceShareAllowed, workspaceHistoryAllowed, workspaceUsedTools, workspaceUsedResources } from './workspace-grants.mjs'
+import { workspaceDelegatedResultAllowed, workspaceHistoryAllowed, workspaceUsedTools, workspaceUsedResources } from './workspace-grants.mjs'
 import { TaskApprovals } from './approvals.mjs'
 import { TaskBlockers } from './blockers.mjs'
 import { CallUsage, ToolAccess, toolSets } from './tools.mjs'
@@ -120,7 +121,7 @@ export function mainSessionService({ TaskCard, ChatInput, createTask }) {
         pendingApprovals = (await tx.doc(TaskApprovals, taskId)).items.filter(i => i.status === 'pending').length
         pendingBlockers = (await tx.doc(TaskBlockers, taskId)).items.filter(i => i.status === 'pending').length
         const childCard = await tx.doc(TaskCard, taskId), access = await tx.doc(ToolAccess)
-        shared = c.result !== null && workspaceShareAllowed(childCard, card, access) && await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, (await tx.doc(BotDirectory)).items, access)) && (!c.source || workspaceShareAllowed(c.source, card, access) && await workspaceHistoryAllowed(tx, c.source, toolSets(c.source, (await tx.doc(BotDirectory)).items, access)))
+        shared = c.result !== null && workspaceDelegatedResultAllowed(childCard, card, access) && await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, (await tx.doc(BotDirectory)).items, access)) && (!c.source || workspaceDelegatedResultAllowed(c.source, card, access) && await workspaceHistoryAllowed(tx, c.source, toolSets(c.source, (await tx.doc(BotDirectory)).items, access)))
       }
       items.push({ taskId, title: c.title, state: view.state, outcome: view.outcome, createdAt: c.createdAt, overAt: c.overAt, pendingApprovals, pendingBlockers, ...(shared ? { resultExcerpt: c.result } : {}) })
     }
@@ -137,7 +138,7 @@ export function mainSessionService({ TaskCard, ChatInput, createTask }) {
 }
 
 /** P-21: the first brief input finished (success/failure) or the Task was cancelled. Idempotent. */
-export async function markMainChildOver(tx, childCard, outcome, content = null) {
+export async function markMainChildOver(tx, childCard, outcome, content = null, evidenceRefs = []) {
   const parent = childCard.mainParent
   if (!parent) return
   const doc = await tx.doc(MainSessions), row = doc.children[childCard.taskId]
@@ -158,6 +159,8 @@ export async function markMainChildOver(tx, childCard, outcome, content = null) 
   // D-20: a "帮我想办法" card shows its conclusion (user-facing system card only; never model context, I-08).
   const result = childCard.findingAssist && outcome === 'succeeded' && typeof content === 'string' && content.trim() ? { result: content.length > 500 ? `${content.slice(0, 500)}…` : content } : {}
   await mirrorToMain(tx, childCard, { mirrorKind: 'finished', outcome, summary: `任务「${childCard.title}」${OUTCOME[outcome] ?? outcome}`, ...result })
+  // Result mirror and fixed evidence commit together; the idle worker owns all writing.
+  if (outcome === 'succeeded' && evidenceRefs.length) await enqueueMemoryEvidence(tx, { botId: childCard.bot.id, sourceTaskId: childCard.taskId, refs: evidenceRefs, trigger: 'task-result', revision: overAt, dueAt: Date.now() + 3600000 })
   // PLAN §8.5 "本 Bot 的派生 Task 结束" routine trigger.
   await markDirty(tx, { sourceId: `bot:${childCard.bot.id}`, type: 'TaskFinished', id: childCard.taskId })
 }
@@ -195,7 +198,7 @@ export async function mirrorToMain(tx, childCard, data) {
     conversationId = doc.conversations?.[targetId]
     if (!conversationId) return
     const access = await tx.doc(ToolAccess), bots = (await tx.doc(BotDirectory)).items
-    if (!workspaceShareAllowed(childCard, { bot: { id: botId } }, access) || !await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, bots, access))) return
+    if (!workspaceDelegatedResultAllowed(childCard, { bot: { id: botId } }, access) || !await workspaceHistoryAllowed(tx, childCard, toolSets(childCard, bots, access))) return
   }
   const receipts = doc.mirrorReceipts
   const entry = await tx.appendEntry(conversationId, { kind: 'pidot.mirror', data: { ...copy(data), childTaskId: childCard.taskId, childTitle: childCard.title, botId: childCard.bot.id,
@@ -237,7 +240,8 @@ export function mainInputModel(card, input = {}, models = []) {
   const model = explicit ? input.model : { id: card.parameters.model.id }
   const parameters = taskParameters({ model }, copy(card.parameters))
   if (explicit && !models.some(item => item.id === parameters.model.id)) fail(400, 'MODEL_NOT_CONFIGURED', '请选择当前已配置的模型。')
-  return { id: parameters.model.id }
+  pinModelContext(parameters, models)
+  return { id: parameters.model.id, contextWindow: parameters.contextWindows[parameters.model.id] }
 }
 
 /**
@@ -253,7 +257,10 @@ export async function beginMainInput(tx, card, entryId) {
   const model = entry?.kind === 'pidot.user' && entry.conversationId === card.conversationId ? entry.data.model : undefined
   usage.lifetime ??= { modelCalls: 0, toolCalls: 0, totalTokens: 0, unknownTokenCalls: 0 }
   for (const key of ['modelCalls', 'toolCalls', 'totalTokens', 'unknownTokenCalls']) { usage.lifetime[key] += usage[key] ?? 0; usage[key] = 0 }
-  if (model !== undefined) card.parameters = taskParameters({ model }, copy(card.parameters))
+  if (model !== undefined) {
+    card.parameters = taskParameters({ model: { id: model.id } }, copy(card.parameters))
+    pinModelContext(card.parameters, [model])
+  }
   usage.inputEntryId = entryId
   await reconcileMainChildren(tx, card)
 }

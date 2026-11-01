@@ -167,7 +167,7 @@ test('R1 capability HTTP replays frozen receipts across later changes and restar
 test('R1 capability HTTP concurrent changes have one CAS winner and inactive Bots cannot mutate', async t => {
   const f = await fixture(t)
   const initial = await view(f)
-  const responses = await Promise.all(['tool:todos', 'tool:history'].map(capabilityId => f.request('todo', { body: assignment(initial, { capabilityId }) })))
+  const responses = await Promise.all(['tool:todos', 'tool:reports'].map(capabilityId => f.request('todo', { body: assignment(initial, { capabilityId }) })))
   assert.deepEqual(responses.map(response => response.status).sort(), [200, 409])
   const created = await f.store.createBot({ capabilities: [], requestId: randomUUID(), name: '空白隔离测试' })
   const blank = await view(f, created.bot.id)

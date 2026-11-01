@@ -7,7 +7,6 @@ import BotMemory from './BotMemory'
 import { resolveMemorySourceHash } from './memory-helpers.mjs'
 import type { MemoryApi, MemorySource, MemorySourceHandler } from './memory-types'
 import BotCapabilities from './BotCapabilities'
-import FeishuCalendarPanel from './FeishuCalendarPanel'
 import { botTabs, type BotTab } from './bot-directory.mjs'
 import { nextTab } from './workspace-navigation.mjs'
 
@@ -20,7 +19,7 @@ type Props = {
   memoryApi?: MemoryApi; onOpenPreferences?: () => void; onOpenMemorySource?: MemorySourceHandler
 }
 
-export default function BotTemplatePage({ bot, token, tab, mainTaskId, onTab, onChat, onSaved, onDeactivate, active = true, memoryApi, onOpenPreferences, onOpenMemorySource }: Props) {
+export default function BotTemplatePage({ bot, token, tab, onTab, onChat, onSaved, onDeactivate, active = true, memoryApi, onOpenPreferences, onOpenMemorySource }: Props) {
   const [look, setLook] = useState<BotLook>(() => loadLook(bot.id))
   const [sourceNotice, setSourceNotice] = useState('')
   const sourceRequest = useRef<AbortController | null>(null)
@@ -79,7 +78,7 @@ export default function BotTemplatePage({ bot, token, tab, mainTaskId, onTab, on
       {!chief && !inactive && <section className="bot-edit-section bot-danger" aria-label="停用机器人"><h2>停用机器人</h2><p>停用后不能再和它对话，记录都保留。</p><button type="button" onClick={() => {
         if (window.confirm(`停用 ${bot.name}？停用后不能再和它对话，正在做的事会尽量停下，记录都保留，暂时不能重新启用。`)) onDeactivate()
       }}>停用机器人</button></section>}
-      <details className="tech-info"><summary>飞书日历</summary><FeishuCalendarPanel token={token} taskId={mainTaskId} /></details>
+      <p className="bot-edit-hint">飞书日历与来源范围已移到<button type="button" className="text-button" onClick={() => onTab('capabilities')}>能力 → 工具集</button>。</p>
     </div>
   </div>
 }

@@ -65,7 +65,7 @@ test('server-only config supports root dotenv, environment overrides and explici
   }
 })
 
-test('Pi sends exact fixed model and explicit disabled thinking, only header contains key; response is allowlisted', async () => {
+test('Pi sends exact fixed model without vendor extensions, only header contains key; response is allowlisted', async () => {
   let request
   const reply = createModelReply(config, { fetch: async (url, init) => {
     request = { url, body: JSON.parse(init.body), headers: new Headers(init.headers), redirect: init.redirect }
@@ -78,7 +78,8 @@ test('Pi sends exact fixed model and explicit disabled thinking, only header con
   assert.deepEqual(request.body.messages, [{ role: 'user', content: '本轮消息' }])
   assert.equal(JSON.stringify(request.body).includes(secret), false)
   assert.equal(request.body.model, 'old-pinned-model')
-  assert.deepEqual(request.body.thinking, { type: 'disabled' })
+  assert.equal(Object.hasOwn(request.body, 'thinking'), false)
+  assert.equal(Object.hasOwn(result.execution, 'thinking'), false)
   assert.equal(request.body.stream, true)
   for (const key of ['tools', 'reasoning_effort']) assert.equal(Object.hasOwn(request.body, key), false)
   assert.equal(request.body.max_tokens ?? request.body.max_completion_tokens, 4096)
@@ -102,6 +103,26 @@ test('low/high thinking sends provider reasoning_effort and stays off unless req
   await reply('本轮消息', { parameters })
   assert.equal(Object.hasOwn(bodies.at(-1), 'reasoning_effort'), false)
   assert.deepEqual(bodies.at(-1).thinking, { type: 'disabled' })
+})
+
+test('strict GPT gateway accepts off/low/high without the DeepSeek thinking extension', async () => {
+  const selected = { ...config, model: 'gpt-6.1-sol', selectionId: 'registered:synthetic:gpt-model' }
+  const bodies = []
+  const reply = createModelReply(selected, { fetch: async (_url, init) => {
+    const body = JSON.parse(init.body)
+    bodies.push(body)
+    if (Object.hasOwn(body, 'thinking')) return new Response(JSON.stringify({ error: { message: 'Invalid request.' } }), { status: 400 })
+    return sse('OK', 'stop', selected.model)
+  } })
+  for (const level of ['off', 'low', 'high']) {
+    const result = await reply('Reply with exactly OK.', { parameters: { ...modelParameters(selected), thinkingLevel: level } })
+    assert.equal(result.reply.content, 'OK')
+    assert.equal(bodies.at(-1).model, selected.model)
+    assert.equal(bodies.at(-1).reasoning_effort, level === 'off' ? undefined : level)
+    assert.equal(Object.hasOwn(result.execution, 'thinking'), false)
+    assert.equal(result.execution.thinkingLevel, level)
+  }
+  assert.equal(bodies.length, 3)
 })
 
 for (const [status, code] of [[401, 'MODEL_AUTH_FAILED'], [403, 'MODEL_AUTH_FAILED'], [408, 'MODEL_TIMEOUT'],

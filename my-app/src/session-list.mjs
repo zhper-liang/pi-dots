@@ -6,7 +6,7 @@ const dayIndex = (ms) => { const d = new Date(ms); return Math.floor(Date.UTC(d.
 
 /** Last activity of a session: its newest message, else when it was created. */
 export function lastActivity(task) {
-  const times = [task.createdAt, task.messages?.at(-1)?.createdAt].map((iso) => Date.parse(iso ?? '')).filter(Number.isFinite)
+  const times = [task.createdAt, task.messages?.at(-1)?.createdAt, task.lastMessage?.createdAt].map((iso) => Date.parse(iso ?? '')).filter(Number.isFinite)
   return times.length ? Math.max(...times) : 0
 }
 

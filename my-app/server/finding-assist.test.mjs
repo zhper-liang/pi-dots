@@ -89,20 +89,24 @@ test('T7-02 on: a read-only Task in Chief\'s main session, origin user, 5 model 
   await assert.rejects(s.findings.act({ id: c.id, action: 'assist' }), { code: 'FINDING_CLOSED' })
 }))
 
-test('D-19 turning it on can assign Chief read-only local access without a capability pool', () => fixture(async ({ s, state }) => {
+test('assist setting cannot grant permissions; local access is managed by the capability assignment', () => fixture(async ({ s, state }) => {
   assert.deepEqual((await s.findings.list()).chiefRead, { available: true, enabled: false })
   for (const bad of [{ action: 'assist-setting' }, { action: 'assist-setting', enabled: false, chiefRead: true }, { action: 'assist', id: 'x', enabled: true }, { action: 'assist-setting', enabled: 'yes' }])
     await assert.rejects(s.findings.act(bad), { code: 'INVALID_FINDING_ACTION' })
   assert.deepEqual((await s.findings.list()).chiefRead, { available: true, enabled: false })
   const version = (await s.getBotConfiguration('chief')).bot.configRef.version
-  const on = await s.findings.act({ action: 'assist-setting', enabled: true, chiefRead: true })
-  assert.deepEqual(on, { assist: true, chiefRead: { available: true, enabled: true } })
+  await assert.rejects(s.findings.act({ action: 'assist-setting', enabled: true, chiefRead: true }), { code: 'FINDING_ASSIST_PERMISSION_MOVED' })
+  assert.equal((await s.getBotConfiguration('chief')).bot.configRef.version, version)
+  const on = await s.findings.act({ action: 'assist-setting', enabled: true })
+  assert.deepEqual(on, { assist: true, chiefRead: { available: true, enabled: false } })
+  const before = await s.getBotConfiguration('chief')
+  await s.updateBotConfiguration('chief', { requestId: 'explicit-read', expectedVersion: before.bot.configRef.version, description: before.bot.description, tools: [...before.assigned.tools, 'workspace.list', 'workspace.get'], resources: [...before.assigned.resources, 'workspace:local'] })
   const config = await s.getBotConfiguration('chief')
   assert.ok(config.assigned.tools.includes('workspace.list') && config.assigned.tools.includes('workspace.get'))
   assert.ok(!config.assigned.tools.includes('workspace.prepare_change')); assert.ok(config.assigned.resources.includes('workspace:local'))
   // Repeating changes nothing.
   const after = config.bot.configRef.version; assert.notEqual(after, version)
-  await s.findings.act({ action: 'assist-setting', enabled: true, chiefRead: true })
+  await s.findings.act({ action: 'assist-setting', enabled: true })
   assert.equal((await s.getBotConfiguration('chief')).bot.configRef.version, after)
   // The analysis can now read the local to-dos.
   const [f] = await findings(s, '交周报')

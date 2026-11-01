@@ -22,6 +22,7 @@ export function createMemoryApi(token, fetcher = (...args) => fetch(...args)) {
   }
   return {
     getBot: (botId, signal) => request(`/api/bots/${encodeURIComponent(botId)}/memory`, undefined, signal),
+    reviewBot: (botId, action) => request(`/api/bots/${encodeURIComponent(botId)}/memory/review`, { action }),
     editBot: (botId, edit) => request(`/api/bots/${encodeURIComponent(botId)}/memory`, edit),
     getPreferences: signal => request('/api/settings/preferences', undefined, signal),
     editPreferences: ({ kind: _kind, ...edit }) => request('/api/settings/preferences', edit),

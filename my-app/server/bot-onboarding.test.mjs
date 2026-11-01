@@ -1,4 +1,6 @@
-import { groupTools } from './tool-groups.mjs'
+import { SESSION_HISTORY_TOOLS } from './history-search.mjs'
+import * as memoryModule from './memory-tools.mjs'
+import { INTRINSIC_TOOLS } from './tools.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -64,8 +66,8 @@ test('T6-01 a name alone creates a Bot, on the page and through Chief, with no c
   const receipt = chief.messages.find(m => m.toolName === 'bot_manage').result
   assert.equal(receipt.ok, true); assert.equal(receipt.data.created, true)
   assert.equal(receipt.data.bot.description, '')
-  assert.deepEqual(receipt.data.bot.defaults.tools, [...groupTools('todos'), ...groupTools('history')])
-  assert.deepEqual(receipt.data.bot.defaults.toolResources, ['workspace:local'])
+  assert.deepEqual(receipt.data.bot.defaults.tools, [])
+  assert.deepEqual(receipt.data.bot.defaults.toolResources, [])
   assert.equal(chief.approvals.items.length, 0)
   assert.ok((await s.mainSessions())[receipt.data.bot.id])
 }))
@@ -87,13 +89,13 @@ test('R1 a new Bot starts blank and uses local tools only after explicit configu
   assert.equal(bot.capabilityDefaultsVersion, 2)
   assert.deepEqual(bot.defaults.tools, []); assert.deepEqual(bot.defaults.toolResources, [])
   const task = await s.create({ botId: bot.id })
-  assert.deepEqual(task.toolSets.authorized, [])
+  assert.deepEqual(task.toolSets.authorized, [...INTRINSIC_TOOLS])
   await assignBotTools(s, bot.id, WORKSPACE_TOOLS, ['workspace:local'])
   const configured = await s.get(task.taskId)
   for (const name of WORKSPACE_TOOLS) assert.ok(configured.toolSets.authorized.includes(name), name)
   assert.deepEqual(configured.toolSets.resources, ['workspace:local'])
   const verdict = action => s.harness.commit(tx => decide(tx, localCall(bot.id, action)), context)
-  for (const action of ['create', 'update', 'delete']) assert.equal((await verdict(action)).effect, 'allow', action)
+  for (const action of ['create', 'update', 'delete']) assert.equal((await verdict(action)).effect, action === 'delete' ? 'ask' : 'allow', action)
 }))
 
 test('T6-04 creation returns the Bot\'s main session; it opens empty (no suggested first task) and replays to the same one', () => fixture(async ({ s }) => {
@@ -101,8 +103,8 @@ test('T6-04 creation returns the Bot\'s main session; it opens empty (no suggest
   const main = await s.get(mainTaskId)
   assert.deepEqual([main.kind, main.bot.id], ['main', bot.id])
   assert.deepEqual(main.messages, [])
-  assert.deepEqual([...main.toolSets.authorized].sort(), [...bot.defaults.tools].sort())
-  assert.deepEqual(main.toolSets.resources, ['workspace:local'])
+  assert.deepEqual([...main.toolSets.authorized].sort(), [...new Set([...INTRINSIC_TOOLS, ...SESSION_HISTORY_TOOLS, ...(memoryModule.MAIN_MEMORY_TOOLS ?? []), ...bot.defaults.tools])].sort())
+  assert.deepEqual(main.toolSets.resources, [])
   assert.equal((await s.createBot({ name: '会议助手', requestId: 'onboard-main' })).mainTaskId, mainTaskId)
 }))
 

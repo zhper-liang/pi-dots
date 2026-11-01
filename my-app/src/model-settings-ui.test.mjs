@@ -7,7 +7,7 @@ import { MODEL_SETTINGS_NOTICE, modelSettingsAttempt, modelSettingsSummary, mode
 // Deliberately synthetic values, never read host environment or credential files.
 test('T10 public projection strips unexpected fields and rejects missing public settings', () => {
   const view = publicModelSettings({ baseUrl: 'https://fixture.invalid/v1', model: 'model-a', hasKey: true, source: 'file', apiKey: 'synthetic-discarded' })
-  assert.deepEqual(Object.keys(view), ['baseUrl', 'model', 'hasKey', 'source'])
+  assert.deepEqual(Object.keys(view), ['baseUrl', 'model', 'hasKey', 'contextWindow', 'source'])
   assert.equal(JSON.stringify(view).includes('synthetic-discarded'), false)
   assert.throws(() => publicModelSettings({ source: 'file' }), /暂时不可用/)
 })
@@ -33,8 +33,10 @@ async function component(name, reactModule = import.meta.resolve('react')) {
   const ts = await import('typescript')
   const source = (await readFile(new URL(`./${name}.tsx`, import.meta.url), 'utf8'))
     .replace(/^import '\.\/model-settings\.css'\n/m, '')
+    .replaceAll("'../shared/model-context.mjs'", JSON.stringify(new URL('../shared/model-context.mjs', import.meta.url).href))
     .replaceAll("'./model-settings-ui.mjs'", JSON.stringify(new URL('./model-settings-ui.mjs', import.meta.url).href))
     .replace(/from 'react'/g, `from ${JSON.stringify(reactModule)}`)
+    .replace("import ModelRegistrationSettings from './ModelRegistrationSettings'", "const ModelRegistrationSettings = 'model-registrations'")
     .replace("import EditorDialog from './EditorDialog'", "const EditorDialog = 'editor-dialog'")
   const { outputText } = ts.transpileModule(source, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } })
   const compiled = outputText.replaceAll('"react/jsx-runtime"', JSON.stringify(import.meta.resolve('react/jsx-runtime')))
@@ -245,4 +247,59 @@ test('R1-05 picker offers only real catalog ids, preserves rejected snapshot and
   tree = harness.render()
   assert.ok(element(tree, 'option', item => item.value === 'newest-model'))
   assert.equal(element(tree, 'option', item => item.value === 'stale-model'), undefined)
+})
+
+test('registered model editor keeps connection and capacity fields and retries an unknown save with the same request', async t => {
+  const fixture = { id: 'fixture-registration', selectionId: 'registered:fixture:hash', providerId: 'fixture-provider', baseUrl: 'https://fixture.invalid/v1', model: 'fixture-model', hasKey: true, source: 'file' }
+  const sent = []
+  const harness = await settingsHarness(t, async (_url, options) => {
+    if (!options.method) return { ok: true, json: async () => ({ data: [{ ...fixture, apiKey: 'synthetic-discarded-key' }] }) }
+    sent.push(JSON.parse(options.body))
+    if (sent.length === 1) throw new Error('unknown synthetic transport')
+    return { ok: true, json: async () => ({ data: fixture }) }
+  }, 'ModelRegistrationSettings')
+  harness.render(); await harness.idle()
+  let tree = harness.render()
+  element(tree, 'button', props => props.children === '编辑模型').props.onClick()
+  tree = harness.render()
+  assert.equal(element(tree, 'input', props => props.type === 'password').props.value, '')
+  assert.doesNotMatch(JSON.stringify(tree), /synthetic-discarded-key/)
+  change(tree, props => props.name === 'provider-id', 'edited-provider')
+  change(tree, props => props.type === 'url', 'https://edited.fixture.invalid/v1')
+  change(tree, props => props.type === 'password', 'synthetic-replacement')
+  change(tree, props => props.placeholder === '填写接口使用的模型名', 'edited-model')
+  change(tree, props => props.placeholder === '256K', '1M')
+  tree = harness.render(); submit(tree); await harness.idle(); tree = harness.render()
+  const dialog = element(tree, 'editor-dialog')
+  assert.equal(dialog.props.disabled, true)
+  assert.equal(dialog.props.pending, false)
+  assert.equal(element(tree, 'input', props => props.type === 'password').props.value, 'synthetic-replacement')
+  element(dialog.props.footer, 'button', props => props.children === '重试').props.onClick()
+  await harness.idle(); tree = harness.render()
+  assert.deepEqual(sent[1], sent[0])
+  assert.equal(sent[0].id, fixture.id)
+  assert.equal(sent[0].providerId, 'edited-provider')
+  assert.equal(sent[0].contextWindow, 1000000)
+  assert.equal(sent[0].baseUrl, 'https://edited.fixture.invalid/v1')
+  assert.equal(sent[0].model, 'edited-model')
+  assert.equal(sent[0].apiKey, 'synthetic-replacement')
+  assert.equal(element(tree, 'editor-dialog').props.open, false)
+  assert.doesNotMatch(JSON.stringify(tree), /synthetic-replacement/)
+})
+
+test('registered model editor cancellation leaves no write and clears its secret', async t => {
+  let writes = 0
+  const harness = await settingsHarness(t, async (_url, options) => {
+    if (options.method) writes++
+    return { ok: true, json: async () => ({ data: [] }) }
+  }, 'ModelRegistrationSettings')
+  harness.render(); await harness.idle()
+  element(harness.render(), 'button', props => props.children === '添加模型').props.onClick()
+  let tree = harness.render()
+  change(tree, props => props.type === 'password', 'synthetic-cancelled')
+  element(tree, 'editor-dialog').props.onClose()
+  tree = harness.render()
+  assert.equal(writes, 0)
+  assert.equal(element(tree, 'editor-dialog').props.open, false)
+  assert.doesNotMatch(JSON.stringify(tree), /synthetic-cancelled/)
 })

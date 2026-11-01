@@ -33,7 +33,7 @@ test('R4 Feishu binding shares both resource forms; reconnect restores only non-
   assert.ok(calendar.assigned.resources.includes(resource))
   assert.ok(calendar.assigned.resources.some(value => value.startsWith('feishu:')))
   assert.ok(!(await f.store.getBotConfiguration('todo')).assigned.resources.includes(resource))
-  const { bot } = await f.store.createBot({ name: '另一个日程机器人', requestId: 'r4-resource-other' })
+  const { bot } = await f.store.createBot({ name: '另一个日程机器人', requestId: 'r4-resource-other', capabilities: ['tool:todos'] })
   await narrowOverHttp(f.store, 'calendar', resource)
   await f.store.feishuCalendar.manage({ action: 'disconnect', confirm: true })
   await f.store.workspace.externalSources({})
@@ -49,7 +49,7 @@ test('R4 Google discovery and reconnect share sources while preserving per-Bot n
   const store = await openTaskStore({ file: join(dir, 'tasks.sqlite') })
   t.after(async () => { await store.close(); await rm(dir, { recursive: true, force: true }) })
   const sourceId = externalSourceId('google-calendar', 'r4-account', 'primary'), resource = `workspace:${sourceId}`
-  const { bot } = await store.createBot({ name: 'Google 日程机器人', requestId: 'r4-google-other' })
+  const { bot } = await store.createBot({ name: 'Google 日程机器人', requestId: 'r4-google-other', capabilities: ['tool:todos'] })
   const discover = () => store.harness.commit(async tx => {
     await applyGoogleAccount(tx, { status: 'connected', accountKey: 'r4-account', services: ['calendar'] }, { ToolAccess })
     await registerExternalSource(tx, { sourceId, title: '我的日历', accountKey: 'r4-account', authEpoch: 1 })

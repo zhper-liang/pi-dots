@@ -4,20 +4,28 @@
 
 | 状态 | 目录 | 含义 |
 |---|---|---|
-| 进行中 | `active/` | 已授权、正在实施或已完成实现但还没验收的计划 |
-| 已完成 | [`done/`](done) | 已实施并验收的计划，正文冻结，不再更新状态 |
+| 进行中 | `active/` | 已授权立项规划、正在实施或已完成实现但还没验收的计划；具体范围看正文 |
+| 已完成 | [`done/`](done) | 已实施并验收、或已被后续计划替代的计划；正文冻结，不再更新状态 |
 | 候选 | [`backlog/`](backlog) | 想法和草案，未授权开工；不代表路线承诺 |
 
 ## 进行中
 
-| 计划 | 更新 | 状态 |
+长任务持续执行已完成计划与分票，代码未开始；其余下列计划已实现、等用户验收。验证结果见 [NEXT_STAGE](../NEXT_STAGE.md)。
+
+| 计划 | 更新 | 内容 |
 |---|---|---|
-| [第三轮：Google Workspace](active/r3-google-workspace/README.md) | 2026-10-30 | 实现完成，test 1531/1531、lint/build 通过；待用户验收（真实 Google 账号手测由用户做） |
-| [第四轮：降低使用负担](active/r4-simplify/README.md) | 2026-10-31 | 实现完成，test 1537/1537、lint 10 条既有 warning（无新增）、build 通过；双尺寸 UI 22 画面通过，待用户验收；与第三轮并行 |
+| [长任务持续执行](active/long-running-agent/README.md) | 2026-11-02 | 四类职责、九张本地票、设计契约与验收矩阵已发布；当前可领取 LR-01，尚未开发 |
+| [协作、会话与模型故障修复](active/collaboration-session-reliability/task_plan.md) | 2026-11-01 | 协作结果交付、机器人主会话列表、目录和时间提示；本地验证完成，真实模型原因待查 |
+| [会话提问与能力管理优化](active/conversation-capabilities/task_plan.md) | 2026-11-01 | 表单与输入挂起恢复、能力同步、飞书来源统一入口、自动诊断（ADR-027）；实现完成，待验收 |
+| [主会话长期记忆与经验沉淀](active/memory-learning/README.md) | 2026-11-01 | 按会话整理记忆、持久作业、历史搜索、学成 Skill（ADR-026） |
+| [原生能力与删除确认](active/native-capabilities/README.md) | 2026-11-01 | 自带 bash/read/write/edit，只有删除逐次确认，历史回查默认自带（ADR-024、025） |
+| [多模型登记与创建 Bot 选择](active/model-registry/README.md) | 2026-11-01 | 多供应商登记，新建机器人可选模型 |
+| [普通 Bot 平等与空白创建](active/bot-equality/README.md) | 2026-11-01 | 除主管外地位相同，默认空白（ADR-023） |
+| [第三轮：Google Workspace](active/r3-google-workspace/README.md) | 2026-10-30 | Google 混合接入（ADR-020、021），真实账号待用户手测 |
 
 ## 已完成
 
-按完成时间排序。
+按完成时间排序。标“未验收即归档”的是已被后续计划替代、用户没有单独验收的。
 
 | 完成日期 | 计划 | 一句话结果 |
 |---|---|---|
@@ -32,18 +40,20 @@
 | 2026-10-30 | [Bot 工作区与 Hermes 风格统一](done/2026-10-30-hermes-workspace/README.md) | T01–T12：工具组开关、模型连接实时生效、Hermes 外壳与视觉、Bot 目录、事项与日历、周/月例行任务、模型设置、人格与记忆 |
 | 2026-10-30 | [第一轮：交互收口与 Agent 能力配置](done/2026-10-30-workspace-experience-r1/README.md) | 12 票：会话删除、模型卡片、@ 菜单、日历与定时任务卡片、能力开关与空白 Bot、外部 MCP、Skill 导入、对话配置；ADR-018 去掉其确认关卡 |
 | 2026-10-30 | [第二轮：文件式记忆](done/2026-10-30-r2-file-memory/README.md) | 8 票：每 Bot PROFILE/MEMORY 与共享 USER.md 文件、对账与原子写回、迁移与回滚开关、记忆页文件状态（ADR-019） |
+| 2026-11-01 归档 | [第四轮：降低使用负担](done/2026-10-31-r4-simplify/README.md) | **未验收即归档**：能力三栏开关、日程与待办合并、对话/设置/事项收简（ADR-022）；新建默认能力后被 ADR-023 改为空白 |
+| 2026-11-01 归档 | [模型上下文、Pi 压缩与记忆工具](done/2026-11-01-context-memory/README.md) | **未验收即归档**：模型容量默认 256K、复用 Pi 压缩、固有记忆工具；后续由记忆学习计划承接 |
 
 ## 候选
 
 | 计划 | 状态 |
 |---|---|
-| [Grok 风格前端布局](backlog/frontend-layout-grok.md) | 草案，未授权开工 |
-| [2026-10-29 使用反馈：会话、卡片任务与可组合 Bot](backlog/2026-10-29-workspace-experience.md) | 11 项需求来源；第一轮、第二轮已完成（见上方已完成），Google 为第三轮候选 |
+| [长任务持续推进调研](backlog/2026-11-01-long-running-agent/README.md) | 研究记录；已由长任务持续执行正式计划承接，不单独实施 |
+| [2026-10-29 使用反馈：会话、卡片任务与可组合 Bot](backlog/2026-10-29-workspace-experience.md) | 11 项需求来源；第一、二轮已完成，第三轮 Google 实现完成待验收 |
 
 ## 约定
 
 1. 计划正文写"要做什么、怎么验收、边界在哪"；实施过程与原始证据留在本地 `.scratch/<topic>/`（不进仓库，可在 git 历史中查到）。
-2. 计划完成并验收后，从 `active/` 移到 `done/`，日期取验收日期，正文不再修改；后续变更由新计划承接。
+2. 计划完成并验收后，从 `active/` 移到 `done/`，日期取验收日期，正文不再修改；后续变更由新计划承接。被后续计划替代的也可以归档，开头写明“未验收即归档”和替代它的计划。
 3. 长期有效的结论（产品规则、架构、接口、决策）提炼进 [docs](../docs/README.md)，计划不承担规范职责。
 4. 每份计划开头写明状态与依据；没有明确授权，候选计划不得开工。
 5. `plans/done/` 里的计划正文是**当时的原文**，不随结构调整改写。文中 `issues/`、`progress/evidence/` 等相对链接指向原始实施目录，这些票据与证据已归档到仓库外的备份仓库 `~/code/pidot-history-backup-20261025.git`，不随本仓库分发。

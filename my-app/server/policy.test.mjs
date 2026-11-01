@@ -10,13 +10,13 @@ import { addRule, decide, listRules, openGroup, pickRule, PolicyRules, setAutoma
 const fakeTx = () => { const docs = new Map(); return { async doc(token) { const key = token.definition.kind; if (!docs.has(key)) docs.set(key, token.definition.initial()); return docs.get(key) } } }
 const call = (action, extra = {}) => ({ botId: 'calendar', tool: 'workspace.prepare_change', action, sourceId: 'local', type: 'Todo', ...extra })
 
-test('T01 groups default on: every write runs directly, deletion included; reads bypass rules and unknown tools are denied', async () => {
+test('T01 groups default on: create/update run directly, deletion asks each time; reads bypass rules and unknown tools are denied', async () => {
   const tx = fakeTx()
   assert.equal((await decide(tx, call('create'))).effect, 'allow')
   assert.equal((await decide(tx, call('update'))).effect, 'allow')
   const deletion = await decide(tx, call('delete'))
-  assert.deepEqual([deletion.effect, deletion.reason, deletion.allowAlways, deletion.expiresInMs], ['allow', 'write-default', false, undefined])
-  assert.equal((await decide(tx, { botId: 'calendar', tool: 'calendar_feishu_delete_event' })).effect, 'allow')
+  assert.deepEqual([deletion.effect, deletion.reason, deletion.allowAlways, deletion.expiresInMs], ['ask', 'delete-confirmation', false, 300000])
+  assert.equal((await decide(tx, { botId: 'calendar', tool: 'calendar_feishu_delete_event' })).effect, 'ask')
   assert.equal((await decide(tx, { botId: 'chief', tool: 'bot_manage', action: 'deactivate' })).effect, 'allow')
   for (const tool of ['calendar_feishu_create_event', 'calendar_feishu_update_event', 'calendar_reschedule_event', 'routine_propose', 'workspace.prepare_schedule'])
     assert.equal((await decide(tx, { botId: 'calendar', tool })).effect, 'allow', tool)
@@ -34,7 +34,7 @@ test('S3 most specific rule wins; equal specificity prefers deny then ask', asyn
   await addRule(tx, { botId: 'calendar', match: { tool: 'workspace.prepare_change' }, effect: 'ask' })
   assert.ok(!(await tx.doc(PolicyRules)).items.some(r => r.origin === 'preset'))
   await addRule(tx, { botId: 'calendar', match: { tool: 'workspace.prepare_change', action: 'delete' }, effect: 'allow' })
-  assert.equal((await decide(tx, call('delete'))).effect, 'allow')
+  assert.equal((await decide(tx, call('delete'))).effect, 'ask')
   ;(await tx.doc(PolicyRules)).items.push({ id: 'equal', botId: 'calendar', origin: 'user', effect: 'deny', match: { tool: 'workspace.prepare_change', action: 'delete' } })
   assert.deepEqual([pickRule((await tx.doc(PolicyRules)).items, call('delete')).id, (await decide(tx, call('delete'))).effect], ['equal', 'deny'])
   ;(await tx.doc(PolicyRules)).items.push({ id: 'source', botId: 'calendar', origin: 'user', effect: 'ask', match: { tool: 'workspace.prepare_change', sourceId: 'local' } })
@@ -73,9 +73,9 @@ test('T01 openGroup clears only that group\'s rules for that Bot', async () => {
   await addRule(tx, { botId: 'calendar', match: { tool: 'calendar_feishu_delete_event' }, effect: 'ask' })
   await addRule(tx, { botId: 'todo', match: { tool: 'workspace.prepare_change' }, effect: 'ask' })
   assert.equal((await openGroup(tx, 'calendar', 'workspace.prepare_change')).length, 3)
-  assert.equal((await decide(tx, call('delete'))).effect, 'allow')
+  assert.equal((await decide(tx, call('delete'))).effect, 'ask')
   assert.equal((await decide(tx, { botId: 'calendar', tool: 'routine_propose' })).effect, 'allow')
-  assert.equal((await decide(tx, { botId: 'calendar', tool: 'calendar_feishu_delete_event' })).effect, 'allow')
+  assert.equal((await decide(tx, { botId: 'calendar', tool: 'calendar_feishu_delete_event' })).effect, 'ask')
   assert.equal((await decide(tx, call('delete', { botId: 'todo' }))).effect, 'ask')
 })
 

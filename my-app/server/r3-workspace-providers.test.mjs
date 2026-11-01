@@ -180,7 +180,7 @@ async function mcpClient(s, token) {
   await send({ jsonrpc: '2.0', method: 'notifications/initialized' })
   return async (name, args) => { const r = await send({ jsonrpc: '2.0', id: ++id, method: 'tools/call', params: { name, arguments: args } }); return r.result.isError ? { error: JSON.parse(r.result.content[0].text).error } : r.result.structuredContent.data }
 }
-test('R3-01 D4: with the group on, Agent external create and delete run directly; 先问 still waits', async () => externalFixture(async ({ store: s, sourceId, writes }) => {
+test('R3-01 D4: with the group on, Agent external create runs directly and delete waits for confirmation', async () => externalFixture(async ({ store: s, sourceId, writes }) => {
   await configure(s, WORKSPACE_TOOLS, [`workspace:${sourceId}`])
   const credential = await s.workspaceAgent.issueClient({ sourceId, botId: 'calendar', actions: ['read', 'create', 'delete'], readScope: 'full', ttlSeconds: 600, confirmed: true })
   const call = await mcpClient(s, credential.token)
@@ -189,7 +189,9 @@ test('R3-01 D4: with the group on, Agent external create and delete run directly
   const eventId = created.receipt.providerReceipt.eventId
   const detail = (await s.workspace.getExternal({ sourceId, eventId })).items[0]
   const removed = await call('workspace.prepare_change', { sourceId, requestId: 'd4-delete', action: 'delete', change: { arguments: { eventId, beforeHash: detail.remoteVersion }, expectedVersion: detail.version } })
-  assert.equal(removed.state, 'succeeded', 'deletion has no extra confirmation either'); assert.equal(writes.length, 2)
+  assert.equal(removed.state, 'awaiting_confirmation'); assert.equal(writes.length, 1)
+  await s.workspace.confirmExternal({ requestId: removed.requestId, payloadHash: removed.payloadHash, confirmed: true })
+  assert.equal((await s.workspace.executeExternal({ requestId: removed.requestId })).state, 'succeeded'); assert.equal(writes.length, 2)
   await askWorkspaceChange(s)
   const asked = await call('workspace.prepare_change', { sourceId, requestId: 'd4-ask', action: 'create', change: { arguments: { ...eventArgs, title: 'ask first' } } })
   assert.equal(asked.state, 'awaiting_confirmation'); assert.equal(writes.length, 2)

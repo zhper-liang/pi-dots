@@ -62,7 +62,10 @@ export async function boundToolResult(tx, card, result, source) {
 export async function readToolResult(tx, card, args, sets) {
   if (card.forkSource) await forkPublicEntries(tx, card)
   if (!validResultReadArgs(args)) return denied('TOOL_INVALID_ARGUMENTS', '产物读取参数无效。')
-  const artifact = (await tx.doc(ToolResults, card.taskId)).artifacts[args.resultRef]
+  const record = await tx.task?.(card.taskId)
+  const archived = record?.state.status === 'terminal' ? await (await import('./cancellation.mjs')).readCancelledArchive(tx, card.taskId) : null
+  const artifacts = archived ? archived.documents[ToolResults.definition.kind]?.artifacts ?? {} : (await tx.doc(ToolResults, card.taskId)).artifacts
+  const artifact = artifacts[args.resultRef]
   if (!artifact || artifact.taskId !== card.taskId || artifact.conversationId !== card.conversationId) {
     return denied('TOOL_RESULT_NOT_FOUND', '当前 Task 无权读取此结果或结果不存在。')
   }

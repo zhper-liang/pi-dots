@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises'
 import { defineDoc } from '@earendil-works/pi-durable'
 import { BotDirectory, assertBotActive } from './bot-directory.mjs'
 import { initializeConfiguration, availableResourceList } from './bot-configuration.mjs'
-import { ToolAccess, toolCatalog } from './tools.mjs'
+import { ToolAccess, toolCatalog, INTRINSIC_TOOLS, modelVisible } from './tools.mjs'
 import { TOOL_GROUPS, groupTools } from './tool-groups.mjs'
 import { MANAGEMENT_TOOLS } from './management-tools.mjs'
 import { MAIN_TOOLS } from './main-tools.mjs'
@@ -14,7 +14,7 @@ import { TaskInputError } from './task-config.mjs'
 // MCP tools, remains in ToolAccess. Catalogs and credentials are never persisted here.
 export const CapabilityAssignments = defineDoc({ kind: 'pidot.capability-assignments', version: 1, scope: 'session',
   initial: () => ({ legacySkillIds: null, legacyBots: [], skills: {}, bindings: {} }) })
-export const DEFAULT_CAPABILITIES = ['tool:todos', 'tool:history']
+export const DEFAULT_CAPABILITIES = []
 const copy = value => JSON.parse(JSON.stringify(value))
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value
@@ -34,7 +34,7 @@ export function builtinCapabilityCatalog() {
 function catalogItems(catalog = []) {
   if (!Array.isArray(catalog) || catalog.length > 512) fail(400, 'INVALID_CAPABILITY_CATALOG', '能力目录无效或超出上限。')
   const staticItems = builtinCapabilityCatalog(), installed = new Set(toolCatalog().map(tool => tool.name))
-  const reserved = new Set([...installed, ...MANAGEMENT_TOOLS, ...MAIN_TOOLS])
+  const reserved = new Set([...installed, ...INTRINSIC_TOOLS, ...MANAGEMENT_TOOLS, ...MAIN_TOOLS])
   const ids = new Set(), aliases = new Set()
   const external = []
   for (const item of catalog) {
@@ -56,7 +56,7 @@ function catalogItems(catalog = []) {
       aliases.add(name)
     }
     // Select fields, rather than spreading provider data into UI/receipts.
-    external.push({ id: item.id, kind: item.kind, name: item.name, description: item.description, status: item.status,
+    external.push({ ...(typeof item.ownerBotId === 'string' ? { ownerBotId: item.ownerBotId } : {}), id: item.id, kind: item.kind, name: item.name, description: item.description, status: item.status,
       revision: item.revision, ...(typeof item.version === 'string' ? { version: item.version } : {}), toolNames: [...item.toolNames],
       requirements: copy(item.requirements), ...(item.lastCheck === undefined ? {} : { lastCheck: copy(item.lastCheck) }) })
   }
@@ -97,6 +97,7 @@ export function syncSkillTools(access, state, botId) {
 // Shared mutation for creation (version 1) and later authenticated capability changes.
 async function applyAssignment(tx, state, capabilityId, item, enabled) {
   const { access, bot } = state, botId = bot.id
+  if (item?.ownerBotId && item.ownerBotId !== botId) fail(404, 'CAPABILITY_NOT_FOUND', '能力未登记。')
   const binding = state.state.bindings[botId]?.[capabilityId], kind = item?.kind ?? binding.kind
   const assigned = access.assignments[botId]
   const names = [...new Set([...(item?.toolNames ?? []), ...(binding?.toolNames ?? [])])]
@@ -119,14 +120,16 @@ async function applyAssignment(tx, state, capabilityId, item, enabled) {
 }
 
 export async function enableAtCreation(tx, botId, capabilityId, catalog) {
+  // Older templates may still send this id. Recall is now intrinsic, with no binding to create.
+  if (capabilityId === 'tool:history') return
   const item = catalogItems(catalog).find(entry => entry.id === capabilityId)
   if (!item) fail(404, 'CAPABILITY_NOT_FOUND', '能力未登记。')
   if (item.status === 'disabled' || item.kind !== 'skill' && !item.toolNames.length) fail(409, 'CAPABILITY_UNAVAILABLE', '能力已停用或尚未发现工具，不能启用。')
   await applyAssignment(tx, await stateFor(tx, botId), capabilityId, item, true)
 }
 
-export function listCapabilityCatalog(catalog) {
-  return catalogItems(catalog).map(({ id, kind, name, description, status, revision, version }) =>
+export function listCapabilityCatalog(catalog, botId) {
+  return catalogItems(catalog).filter(item => !item.ownerBotId || item.ownerBotId === botId).map(({ id, kind, name, description, status, revision, version }) =>
     ({ id, kind, name, description, status, revision, ...(version ? { version } : {}) }))
 }
 
@@ -136,14 +139,19 @@ function project(item, { bot, access, state }) {
   const enabledForBot = item.kind === 'skill'
     ? state.skills[bot.id]?.[item.id] ?? (state.legacyBots.includes(bot.id) && state.legacySkillIds.includes(item.id))
     : tools.length > 0
+  const sourceTools = tools.filter(name => name.startsWith('calendar_') || ['workspace.list', 'workspace.get', 'workspace.prepare_change'].includes(name))
+  const noSource = item.id === 'tool:todos' && sourceTools.length > 0 && modelVisible(sourceTools, assigned.resources).length === 0
+  const unavailableReason = bot.status === 'inactive' ? '这个机器人已停用。' : !enabledForBot ? '尚未为这个机器人开启。'
+    : item.status !== 'ready' ? ({ configured: '连接已登记，等待检查。', needs_auth: '连接缺少凭据或需要重新授权。', missing_dependency: '连接缺少所需依赖。', error: '连接暂不可用，请检查连接状态。', disabled: '连接已停用。' })[item.status]
+      : noSource ? '工具已开启，但还没有可使用的日历或待办来源。' : undefined
   return { ...copy(item), enabledForBot, partiallyEnabled: item.kind !== 'skill' && tools.length > 0 && tools.length < item.toolNames.length,
-    assignedToolNames: tools, available: bot.status !== 'inactive' && enabledForBot && item.status === 'ready' }
+    assignedToolNames: tools, available: !unavailableReason, ...(unavailableReason ? { unavailableReason } : {}) }
 }
 
 // All three functions run inside the caller's existing authenticated Harness transaction.
 export async function listBotCapabilities(tx, botId, { catalog = [] } = {}) {
   const items = catalogItems(catalog), state = await stateFor(tx, botId)
-  return { botId, revision: state.bot.configRef.version, items: items.map(item => project(item, state)) }
+  return { botId, revision: state.bot.configRef.version, items: items.filter(item => !item.ownerBotId || item.ownerBotId === botId).map(item => project(item, state)) }
 }
 
 export async function setCapabilityAssignment(tx, botId, input, { catalog = [] } = {}) {
@@ -162,6 +170,7 @@ export async function setCapabilityAssignment(tx, botId, input, { catalog = [] }
   }
   await assertBotActive(tx, botId)
   if (bot.configRef.version !== input.expectedRevision) fail(409, 'CONFIG_VERSION_CONFLICT', '配置已更新，请重新读取。')
+  if (input.capabilityId === 'tool:history') fail(400, 'CAPABILITY_INTRINSIC', '历史回查与结果补读已默认自带，无需开启或关闭。')
   const item = catalogItems(catalog).find(entry => entry.id === input.capabilityId)
   const binding = state.state.bindings[botId]?.[input.capabilityId]
   // An unavailable/unregistered provider must not prevent revoking its saved binding.
@@ -190,4 +199,14 @@ export async function assertCapabilityEnabled(tx, botId, capabilityId, { catalog
   if (!item?.enabledForBot) fail(403, 'CAPABILITY_NOT_ENABLED', '能力未分配或已撤销。')
   if (!item.available) fail(409, 'CAPABILITY_UNAVAILABLE', '能力当前不可用，请核对连接、凭据和依赖。')
   return item
+}
+
+/** Host-only learning registration. Never re-enable a user-disabled learned capability. */
+export async function assignLearnedSkill(tx, botId, capabilityId, catalog) {
+  const item = catalogItems(catalog).find(entry => entry.id === capabilityId)
+  if (!item || item.kind !== 'skill' || item.ownerBotId !== botId) fail(404, 'CAPABILITY_NOT_FOUND', '学习能力不属于该Bot。')
+  const state = await stateFor(tx, botId)
+  await assertBotActive(tx, botId)
+  if (Object.hasOwn(state.state.skills[botId] ?? {}, capabilityId) || Object.hasOwn(state.state.bindings[botId] ?? {}, capabilityId)) return
+  await applyAssignment(tx, state, capabilityId, item, true)
 }

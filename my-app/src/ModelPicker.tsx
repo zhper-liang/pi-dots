@@ -1,3 +1,4 @@
+import { formatContextWindow } from '../shared/model-context.mjs'
 import { useEffect, useState } from 'react'
 import { modelChoices, type ModelChoice } from './model-settings-ui.mjs'
 import './model-settings.css'
@@ -43,8 +44,9 @@ export default function ModelPicker({ token, task, value, disabled = false, onCh
   if (!editable) return <span className="pd-tool pd-tool-static" title="本会话使用的模型">{task.parameters.mode === 'model' ? current || '模型' : '测试模式'}</span>
   const choices = modelChoices(current, models)
   const available = new Set(modelChoices('', models))
+  const labels = new Map(models.filter(model => model && typeof model.id === 'string').map(model => [model.id, `${model.name ?? model.id}${model.name && model.provider ? ` · ${model.provider}` : ''} · ${formatContextWindow(model.contextWindow)}`]))
   return <>
-    <label className="pd-tool model-picker" title="从下一条消息开始用这个模型"><span>模型</span><select aria-label="下一条消息的模型" value={current} disabled={disabled || loading || available.size === 0} onChange={event => { if (available.has(event.target.value)) onChange({ id: event.target.value }) }}>{!current && <option value="" disabled>{loading ? '读取中…' : '请选择模型'}</option>}{choices.map(id => <option key={id} value={id} disabled={!available.has(id)}>{id}{!loading && !error && !available.has(id) ? '（当前，不在可选列表）' : ''}</option>)}</select></label>
+    <label className="pd-tool model-picker" title="从下一条消息开始用这个模型"><span>模型</span><select aria-label="下一条消息的模型" value={current} disabled={disabled || loading || available.size === 0} onChange={event => { if (available.has(event.target.value)) onChange({ id: event.target.value }) }}>{!current && <option value="" disabled>{loading ? '读取中…' : '请选择模型'}</option>}{choices.map(id => <option key={id} value={id} disabled={!available.has(id)}>{labels.get(id) ?? id}{!loading && !error && !available.has(id) ? '（当前，不在可选列表）' : ''}</option>)}</select></label>
     {error && <span className="model-picker-error" role="status">{error}</span>}
   </>
 }

@@ -1,14 +1,15 @@
+import { parseContextWindow } from '../shared/model-context.mjs'
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 // Project only the public contract: never retain an unexpected credential field.
 export function publicModelSettings(value) {
   if (!object(value) || typeof value.baseUrl !== 'string' || typeof value.model !== 'string' ||
     typeof value.hasKey !== 'boolean' || !['env', 'file', 'none'].includes(value.source)) throw new Error('模型设置暂时不可用，请重试。')
-  return { baseUrl: value.baseUrl, model: value.model, hasKey: value.hasKey, source: value.source }
+  return { baseUrl: value.baseUrl, model: value.model, hasKey: value.hasKey, contextWindow: parseContextWindow(value.contextWindow), source: value.source }
 }
 
-export function modelSettingsPayload({ baseUrl, model, apiKey }, requestId) {
-  return { requestId, baseUrl: baseUrl.trim(), model: model.trim(), ...(apiKey.trim() ? { apiKey } : {}) }
+export function modelSettingsPayload({ baseUrl, model, apiKey, contextWindow }, requestId) {
+  return { requestId, baseUrl: baseUrl.trim(), model: model.trim(), ...(contextWindow === undefined ? {} : { contextWindow: parseContextWindow(contextWindow) }), ...(apiKey.trim() ? { apiKey } : {}) }
 }
 
 export const MODEL_SETTINGS_NOTICE = '改完后，之后的对话用新设置。'
@@ -42,4 +43,12 @@ export function modelSettingsAttempt(input, previous, requestId) {
   const candidate = modelSettingsPayload(input, previous?.requestId ?? '')
   if (previous && JSON.stringify(candidate) === JSON.stringify(previous)) return previous
   return { ...candidate, requestId: requestId() }
+}
+
+export function publicRegistrations(value) {
+  if (!Array.isArray(value)) throw new Error('unavailable')
+  return value.map(entry => {
+    if (!entry || !['id', 'selectionId', 'providerId', 'baseUrl', 'model'].every(key => typeof entry[key] === 'string') || typeof entry.hasKey !== 'boolean' || !['env', 'file'].includes(entry.source)) throw new Error('unavailable')
+    return { id: entry.id, selectionId: entry.selectionId, providerId: entry.providerId, baseUrl: entry.baseUrl, model: entry.model, hasKey: entry.hasKey, contextWindow: parseContextWindow(entry.contextWindow), source: entry.source }
+  })
 }

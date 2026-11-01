@@ -1,5 +1,4 @@
 import { assignMockResource } from './fixtures/authorized-task-store.mjs'
-import { groupTools } from './tool-groups.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -95,7 +94,10 @@ test('list items carry the last visible message for the sidebar, never hidden co
   assert.equal(last.content, (await store.get(task.taskId)).messages.at(-1).content)
   // Replies the full view hides (here: below a retired external source's floor) are skipped.
   await store.harness.commit(async (tx) => { (await tx.doc(TaskCard, task.taskId)).externalMcpHistoryFloor = Number.MAX_SAFE_INTEGER }, context)
-  assert.deepEqual((await item(task.taskId)).lastMessage, { role: 'user', content: '下周三下午有空吗？' })
+  const visible = (await item(task.taskId)).lastMessage
+  assert.equal(visible.role, 'user')
+  assert.equal(visible.content, '下周三下午有空吗？')
+  assert.ok(Number.isFinite(Date.parse(visible.createdAt)))
 })
 
 test('directory initializes three stable presets once; seeds cannot replace persisted config or Task snapshots', async (t) => {
@@ -169,8 +171,8 @@ test('creation accepts bounded ordinary settings but legacy profiles use the sam
   const calendar = (await store.createBot(creation('模拟日程专家', 'request-0002', 'mock-calendar'))).bot
   for (const bot of [general, calendar]) {
     assert.equal(bot.capabilityDefaultsVersion, 2)
-    assert.deepEqual(bot.defaults.tools, [...groupTools('todos'), ...groupTools('history')])
-    assert.deepEqual(bot.defaults.toolResources, ['workspace:local'])
+    assert.deepEqual(bot.defaults.tools, [])
+    assert.deepEqual(bot.defaults.toolResources, [])
   }
   assert.equal(general.defaults.maxOutputTokens, 128)
   assert.equal(JSON.stringify(await store.harness.snapshot(BotDirectory, context)).includes(config.apiKey), false)
@@ -183,8 +185,8 @@ test('general specialists cannot inherit Chief management tools; reordered setti
   const first = await store.createBot(input)
   const retry = await store.createBot({ ...input, parameters: { callLimits: { toolCalls: 2, modelCalls: 3 }, maxOutputTokens: 128, thinkingLevel: 'off' } })
   assert.equal(retry.created, false); assert.equal(retry.bot.id, first.bot.id)
-  assert.deepEqual(first.bot.defaults.tools, [...groupTools('todos'), ...groupTools('history')])
-  assert.deepEqual(first.bot.defaults.toolResources, ['workspace:local'])
+  assert.deepEqual(first.bot.defaults.tools, [])
+  assert.deepEqual(first.bot.defaults.toolResources, [])
 })
 
 test('authenticated Bot HTTP creation, idempotent retry, filtering and every scoped Task control reject wrong Bot', async (t) => {

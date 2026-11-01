@@ -51,9 +51,10 @@ async function durableEntry(tx, ref) {
  * getSecrets MUST return [currentModelApiKey, pidotApiToken] on every call, not a startup snapshot.
  * readEntry(tx, { taskId, entryId }, { botId, kind, actor }) returns a real EntryRecord
  * or null. The DEFAULT checks only durable identity/ownership, NOT business authorization.
- * For background extraction the host MUST additionally enforce: current Bot's private
- * authenticated-user Entry; consumed/eligible watermark; no group, delegation, other
- * Bot, external content or future/unconsumed Entry (especially for shared preferences).
+ * For background candidates the host additionally validates current same-Bot private
+ * identity/parentage and original evidence: consumed authenticated-user text, or a
+ * successful tool receipt with current source permissions. Shared preferences accept
+ * only direct user statements. Group, cross-Bot, automated and unconsumed text is excluded.
  * Non-personality entries require existing source references, including user additions.
  */
 export function createBotMemoryService({ readEntry = durableEntry, getSecrets, now = () => Date.now(), limits: overrides = {} } = {}) {
@@ -124,7 +125,7 @@ export function createBotMemoryService({ readEntry = durableEntry, getSecrets, n
       return { ...copy(outcome), replayed, document: projection }
     }
     // 'file' = host-internal import of a user's hand edit (R2): user rights, no credential rejection,
-    // no source suppression; failures throw so the whole commit rolls back without status/receipt writes.
+    // source suppression follows explicit corrections; failures throw so the whole commit rolls back without status/receipt writes.
     const internal = actor === 'file'
     try {
       let serialized
@@ -169,11 +170,12 @@ export function createBotMemoryService({ readEntry = durableEntry, getSecrets, n
             // idempotent. Rewrites keep the item's sources; new lines are hand-written (no sources).
             if (patch.action === 'delete') {
               if (patch.content !== undefined) fail(400, 'MEMORY_PATCH')
-              if (old) { next.items.splice(index, 1); changes.push({ action: 'delete', id: patch.id, sourceEntries: copy(old.sourceEntries) }) }
+              if (old) { for (const ref of old.sourceEntries) suppressed.set(hash(ref), await tx.doc(SuppressedSources, hash(ref), null)); next.items.splice(index, 1); changes.push({ action: 'delete', id: patch.id, sourceEntries: copy(old.sourceEntries) }) }
               continue
             }
             const text = content(patch.content, limits.contentChars)
             if (old?.content === text) continue
+            if (old) for (const ref of old.sourceEntries) suppressed.set(hash(ref), await tx.doc(SuppressedSources, hash(ref), null))
             const refs = old ? copy(old.sourceEntries) : []
             const updated = { id: patch.id, content: text, sourceEntries: refs, createdAt: old?.createdAt ?? at, updatedAt: at }
             if (old) next.items[index] = updated
@@ -306,7 +308,7 @@ export async function applyMemoryCandidateWithRetry({ transaction, service, cand
 
 const FILE_NOTICE = { personality: 'PROFILE.md（人格）', memory: 'MEMORY.md（Bot 记忆）', preferences: 'USER.md（共享偏好）' }
 /** Optional context only: host must append AFTER goals/rules/active Skills and reserve their budget first. */
-export function buildMemoryContext(documents, { maxChars = BOT_MEMORY_LIMITS.contextChars, secrets = [] } = {}) {
+export function buildMemoryContext(documents, { maxChars = BOT_MEMORY_LIMITS.contextChars, secrets = [], query = '' } = {}) {
   if (!Number.isSafeInteger(maxChars) || maxChars < 0 || maxChars > BOT_MEMORY_LIMITS.maxContextChars) fail(400, 'MEMORY_CONTEXT_LIMIT')
   const protectedValues = secretsList(secrets)
   const versions = Object.fromEntries(kinds.map(kind => [kind, documents?.[kind]?.version ?? 0]))
@@ -321,8 +323,12 @@ export function buildMemoryContext(documents, { maxChars = BOT_MEMORY_LIMITS.con
     if (sensitive(personality, protectedValues)) truncated = true
     else parts.push(`人格：${personality}`)
   }
+  const terms = memoryQueryTerms(query)
   for (const kind of ['preferences', 'memory']) {
-    const items = rejected(kind) ? [] : [...(documents?.[kind]?.items ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
+    const score = item => terms.reduce((sum, term) => sum + (item.content.toLocaleLowerCase().includes(term) ? term.length : 0), 0)
+    const items = rejected(kind) ? [] : [...(documents?.[kind]?.items ?? [])]
+      .filter(item => kind === 'preferences' || !terms.length || score(item) > 0)
+      .sort((a, b) => (kind === 'memory' ? score(b) - score(a) : 0) || a.id.localeCompare(b.id))
     for (const item of items) {
       const line = `${kind === 'preferences' ? '共享偏好' : 'Bot记忆'}：${item.content} [${item.sourceEntries.length ? item.sourceEntries.map(ref => `${ref.taskId}/${ref.entryId}`).join(',') : '手写'}]`
       if (sensitive(line, protectedValues)) { truncated = true; continue }
@@ -337,4 +343,9 @@ export function buildMemoryContext(documents, { maxChars = BOT_MEMORY_LIMITS.con
   // Entire entries are dropped, oldest first within each section, never cut into dangling provenance.
   if (text === prefix) text = ''
   return { text, chars: text.length, truncated, versions }
+}
+
+export function memoryQueryTerms(query) {
+  const words = String(query).normalize('NFKC').toLocaleLowerCase().match(/[a-z0-9_./-]+|[\p{Script=Han}]+/gu) ?? []
+  return [...new Set(words.flatMap(word => /[\p{Script=Han}]/u.test(word) && word.length > 2 ? Array.from({ length: word.length - 1 }, (_, i) => word.slice(i, i + 2)) : [word]).filter(word => word.length > 1))]
 }

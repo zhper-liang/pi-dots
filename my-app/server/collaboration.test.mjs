@@ -10,6 +10,7 @@ import { TaskCard, ChatInput, ChatQueue, ChatTask } from './tasks.mjs'
 import { createChatTask } from './task-creation.mjs'
 import { Collaboration, collaborationService } from './collaboration.mjs'
 import { COLLABORATION_TOOLS } from './collaboration-tools.mjs'
+import { ToolAccess } from './tools.mjs'
 import { listBots } from './bots.mjs'
 import { buildTaskContext } from './task-context.mjs'
 const config={baseUrl:'https://fixture.invalid/v1',model:'collaboration-fixture',apiKey:'fixture-only'}
@@ -32,6 +33,38 @@ async function fixture(t,{modelReply=async()=>text('child data'),beforeCommit}={
 const service=s=>collaborationService({TaskCard,ChatInput,bots:s.bots(),createTask:(tx,input,creationConversationId)=>createChatTask(tx,input,{ChatTask,TaskCard,ChatInput,ChatQueue,creationConversationId,configuredModels:[]})})
 async function active(s){const p=await s.create({botId:'todo'});const e=await s.send(p.taskId,'原始委派输入');return {p,entryId:e.messageId}}
 const exec=(s,id,entryId,a=args,name='task_assign')=>s.harness.commit(async tx=>service(s).execute(tx,await tx.doc(TaskCard,id),{name,arguments:a},entryId),context)
+test('ordinary delegation accepts a goal from a supervisor with a different source range', async t => {
+ let started, release
+ const entered = new Promise(resolve => { started = resolve })
+ const held = new Promise(resolve => { release = resolve })
+ t.after(() => release())
+ const { s } = await fixture(t, { modelReply: async (_message, options) => {
+   if (options.parametersBotId === 'todo') { started(); await held }
+   return text('source-independent result')
+ } })
+ await s.workspace.manageLocalGrant({ requestId: 'delegation-local-grant', sourceId: 'local', enabled: true, expectedEpoch: 0, confirmed: true })
+ const parent = await s.create({ botId: 'todo' })
+ const sent = await s.send(parent.taskId, 'delegate a task')
+ await entered
+ await s.harness.commit(async tx => {
+   const access = await tx.doc(ToolAccess)
+   access.assignments.todo.tools.push('workspace.list', 'workspace.get')
+   access.assignments.todo.resources.push('workspace:local')
+   const card = await tx.doc(TaskCard, parent.taskId)
+   card.workspaceUsedTools = ['workspace.list', 'workspace.get']
+   card.workspaceUsedResources = ['workspace:local']
+ }, context)
+ const assigned = await exec(s, parent.taskId, sent.messageId)
+ const child = await s.get(assigned.data.childTaskId)
+ assert.equal(child.toolSets.resources.includes('workspace:local'), false)
+ await s.harness.commit(tx => service(s).guard(tx, child.taskId), context)
+ await s.harness.commit(async tx => { (await tx.doc(ToolAccess)).assignments.todo.resources = [] }, context)
+ await s.harness.commit(tx => service(s).guard(tx, child.taskId), context)
+ await s.harness.commit(async tx => { (await tx.doc(ToolAccess)).assignments.todo.resources = ['workspace:local'] }, context)
+ release()
+ const done = await until(s, parent.taskId, view => view.collaborations[0]?.result?.content === 'source-independent result')
+ assert.equal(done.collaborations[0].result.visibility, undefined)
+})
 test('01 non-Chief model supervisor delegates independent task, waits once and receives original-input data',async t=>{
  let parentCalls=0
  const f=await fixture(t,{modelReply:async(_m,o)=>o.parametersBotId==='todo'?(++parentCalls===1?turn('task_assign',args):(parentCalls===2&&assert.ok(JSON.stringify(o.context.messages).includes('真实夹具子结果')),text('主管收取，尚未验收'))):text('真实夹具子结果；模拟来源')})

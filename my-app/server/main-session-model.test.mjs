@@ -18,8 +18,8 @@ const code = expected => error => error.code === expected
 
 test('T10 mainInputModel freezes a safe id and never mutates task settings or accepts endpoint/key overrides', () => {
   const main = card(), before = structuredClone(main)
-  assert.deepEqual(mainInputModel(main, { model: { id: 'model-b' } }, models), { id: 'model-b' })
-  assert.deepEqual(mainInputModel(main), { id: 'model-a' })
+  assert.deepEqual(mainInputModel(main, { model: { id: 'model-b' } }, models), { id: 'model-b', contextWindow: 256000 })
+  assert.deepEqual(mainInputModel(main), { id: 'model-a', contextWindow: 256000 })
   assert.deepEqual(main, before)
   assert.throws(() => mainInputModel(main, { model: { id: 'unknown' } }, models), code('MODEL_NOT_CONFIGURED'))
   for (const model of [null, 'model-b', {}, { id: 'bad model' }, { id: 'model-b', baseUrl: 'https://denied.invalid' }, { id: 'model-b', apiKey: 'synthetic-denied' }]) {

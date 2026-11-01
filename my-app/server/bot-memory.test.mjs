@@ -361,7 +361,7 @@ test('T11a bounded preference rebase catches add/delete ABA and never resurrects
   assert.equal(await f.transaction(tx => bounded.rebaseCandidate(tx, disjoint)), null)
 })
 
-test('R2 file actor: user rights incl. personality, no credential rejection, tolerant upsert/delete, no tombstones, failures roll back without status or receipt', async t => {
+test('R2 file actor: user rights incl. personality, no credential rejection, tolerant upsert/delete, correction tombstones, failures roll back without status or receipt', async t => {
   const f = await fixture(t)
   const file = input => f.transaction(tx => f.service.importFile(tx, { botId: 'chief', kind: 'memory', requestId: randomUUID(), expectedVersion: 0, ...input }))
   await f.candidate({ patches: [add(f.source, 'tone')] })
@@ -375,14 +375,14 @@ test('R2 file actor: user rights incl. personality, no credential rejection, tol
   assert.equal(revision.actor, 'file')
   assert.deepEqual(revision.changes.map(change => change.action), ['update', 'add', 'add'], 'no-op patches are not recorded')
   await file({ expectedVersion: 2, patches: [{ action: 'delete', id: 'tone' }] })
-  assert.equal((await f.candidate({ expectedVersion: 3, patches: [add(f.source, 'again', '同一来源再次提取')] })).ok, true, 'a stored key no longer blocks candidates, and the file deletion wrote no SuppressedSources (Q5)')
-  await file({ expectedVersion: 4, patches: [{ action: 'delete', id: 'tone-copy' }] })
+  assert.equal((await f.candidate({ expectedVersion: 3, patches: [add(f.source, 'again', '同一来源再次提取')] })).code, 'MEMORY_SOURCE_SUPPRESSED', 'file corrections and deletions prevent old evidence from reviving')
+  await file({ expectedVersion: 3, patches: [{ action: 'delete', id: 'tone-copy' }] })
   const before = await f.get('chief')
-  await assert.rejects(file({ requestId: 'too-many', expectedVersion: 5, patches: Array.from({ length: 64 }, (_, i) => ({ action: 'add', id: `n${i}`, content: `条${i}` })) }), error => error.code === 'MEMORY_DOCUMENT_LIMIT')
-  await assert.rejects(file({ requestId: 'with-sources', expectedVersion: 5, patches: [{ ...add(f.source, 'x', 'y') }] }), error => error.code === 'MEMORY_PATCH')
+  await assert.rejects(file({ requestId: 'too-many', expectedVersion: 4, patches: Array.from({ length: 64 }, (_, i) => ({ action: 'add', id: `n${i}`, content: `条${i}` })) }), error => error.code === 'MEMORY_DOCUMENT_LIMIT')
+  await assert.rejects(file({ requestId: 'with-sources', expectedVersion: 4, patches: [{ ...add(f.source, 'x', 'y') }] }), error => error.code === 'MEMORY_PATCH')
   const after = await f.get('chief')
   assert.deepEqual(after.memory, before.memory, 'rolled back: no pending status, no new version')
-  const replay = await file({ requestId: 'too-many', expectedVersion: 5, patches: [{ action: 'add', id: 'ok', content: '可以' }] })
+  const replay = await file({ requestId: 'too-many', expectedVersion: 4, patches: [{ action: 'add', id: 'ok', content: '可以' }] })
   assert.equal(replay.ok, true, 'a failed file import leaves no receipt behind')
 })
 

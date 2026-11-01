@@ -1,4 +1,3 @@
-import { groupTools } from './tool-groups.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
@@ -64,12 +63,12 @@ function resultFor(options, name) {
   return messages.length ? JSON.parse(messages.at(-1).content[0].text) : null
 }
 
-test('cold store creates a default-capability Bot and both direct/scoped main GET work while management registration is off', async t => {
+test('cold store creates a blank Bot and both direct/scoped main GET work while management registration is off', async t => {
   const f = await fixture(t, { enabled: false })
   const created = await f.call('/api/bots', { name: 'Cold GET fixture', requestId: 'cold-get-new-bot' })
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const { bot, mainTaskId } = created.body
-  assert.deepEqual(bot.defaults.tools, [...groupTools('todos'), ...groupTools('history')])
+  assert.deepEqual(bot.defaults.tools, [])
   assert.equal((await f.call(`/api/tasks/${mainTaskId}`)).status, 200)
   assert.equal((await f.call(`/api/bots/${bot.id}/tasks/${mainTaskId}`)).status, 200)
   assert.equal((await f.store.get(mainTaskId)).bot.id, bot.id)

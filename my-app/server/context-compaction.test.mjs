@@ -31,7 +31,8 @@ async function settled(store, id) {
 }
 async function fixture(t, script, { overrides = {}, events = readMockEvent, schedule = readMockSchedule, executionDefaults = defaults } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pidot-iss12-')), stores = [], requests = []
-  const bots = listBots(config, executionDefaults)
+  // Native schemas add fixed context; preserve these scenarios' original history headroom.
+  const bots = listBots(config, { ...executionDefaults, contextWindows: Object.fromEntries(Object.entries(executionDefaults.contextWindows ?? {}).map(([id, window]) => [id, window + 8192])) })
   const open = async () => {
     const store = await openTaskStore({ file: join(dir, 'test.sqlite'), bots, eventImpl: events, toolImpl: schedule,
       modelReply: async (message, options) => { requests.push({ message, ...options }); return script(message, options, requests.length) } })
@@ -47,9 +48,9 @@ const long = '已核实事实，尚未解决的事项保留原文。'.repeat(200
 const summary = '已完成先前交流；未解决：日程冲突分析。上午会议不能调整。已执行工具不可重做；缺失信息按entryId只读回查。'
 
 test('capacity is explicit per model, validated, frozen, and includes output/headroom', () => {
-  assert.equal(contextPolicy({ model: { id: 'unknown' } }), null)
+  assert.equal(contextPolicy({ model: { id: 'unknown' } }).contextWindow, 256000)
   const p = contextPolicy({ ...defaults, model: { id: config.model } })
-  assert.equal(p.triggerTokens + p.outputTokens + p.reserveTokens, p.contextWindow)
+  assert.equal(p.triggerTokens + p.reserveTokens, p.contextWindow)
   for (const raw of ['{}', '[]', 'null', '{"x":8191}', '{"x":4000001}', 'not-json']) assert.throws(() => readExecutionDefaults({ PIDOT_CONTEXT_WINDOWS: raw }))
   assert.deepEqual(readExecutionDefaults({ PIDOT_CONTEXT_WINDOWS: '{"custom":32000}' }).contextWindows, { custom: 32000 })
   assert.equal(taskParameters({ model: { id: 'unknown' } }, { ...defaults, ...listBots(config)[0].defaults, contextWindows: defaults.contextWindows }).contextWindows[config.model], 16000)
@@ -170,10 +171,10 @@ test('invalid summary cannot execute tools and is charged once', async (t) => {
   assert.equal(task.callUsage.toolCalls, 0)
 })
 
-test('legacy model without capacity stays unmodified and old tools are not expanded', async (t) => {
+test('model without capacity uses 256K and short conversations need no compaction', async (t) => {
   const f = await fixture(t, () => answer(long), { executionDefaults: { maxOutputTokens: 1024, callLimits: { modelCalls: 20, toolCalls: 10 } } })
   await f.send(); const task = await f.send()
-  assert.equal(task.contextPolicy, null)
+  assert.equal(task.contextPolicy.contextWindow, 256000)
   assert.equal(task.compaction.revision, 0)
   assert.equal(f.requests.filter(r => r.purpose === 'context-compaction').length, 0)
 })

@@ -76,7 +76,7 @@ test('R2-04 ledger content is written back; empty targets create nothing; repeat
   assert.deepEqual(f.files.summary(), { targets: 5, synced: 5, rejected: 0, pending: 0 })
 })
 
-test('R2-04 hand modify/add/delete → one actor:file revision; rewrites keep sources, new lines are hand-written; no tombstone; no reformat', async t => {
+test('R2-04 hand modify/add/delete → one actor:file revision; rewrites keep sources, new lines are hand-written; correction tombstones; no reformat', async t => {
   const f = await fixture(t)
   await f.candidate('memory', [add(f.source, 'tone', '偏好简洁的中文回答'), add(f.source, 'city', '我在杭州工作')])
   await f.files.settled()
@@ -90,13 +90,13 @@ test('R2-04 hand modify/add/delete → one actor:file revision; rewrites keep so
   const [revision] = (await f.history('memory')).items
   assert.equal(revision.actor, 'file')
   assert.deepEqual(revision.changes.map(change => `${change.action}:${change.id}`), ['update:tone', 'delete:city', `add:${hand}`])
-  // Q5: deleting in the file writes no SuppressedSources; the same old evidence may be extracted again.
+  // A hand correction/deletion suppresses the old evidence across later automatic triggers.
   const again = await f.candidate('memory', [add(f.source, 'city-again', '我在杭州工作')], 2)
-  assert.equal(again.ok, true, JSON.stringify(again.code))
+  assert.equal(again.code, 'MEMORY_SOURCE_SUPPRESSED')
   await f.files.settled()
   const written = parseMemoryFile('memory', await f.read('memory')).value.items.map(item => item.content)
-  assert.deepEqual(written.sort(), ['偏好简洁、先给结论', '这是我手写的一条', '我在杭州工作'].sort(), 'extraction after a hand edit appears in the file')
-  assert.equal((await f.read('memory')).startsWith(MEMORY_FILE_HEADER), true)
+  assert.deepEqual(written.sort(), ['偏好简洁、先给结论', '这是我手写的一条'].sort(), 'old evidence cannot resurrect a file deletion')
+  assert.equal(await f.read('memory'), text, 'rejected stale extraction leaves the hand edit intact')
 })
 
 test('R2-04 PROFILE.md hand edit sets personality with user rights; an emptied file clears it', async t => {

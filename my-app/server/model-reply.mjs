@@ -1,3 +1,4 @@
+import { parseContextWindow } from '../shared/model-context.mjs'
 import { WORKSPACE_TOOLS } from './workspace-tools.mjs'
 import { readFile } from 'node:fs/promises'
 import { parseEnv } from 'node:util'
@@ -16,7 +17,7 @@ export const MODEL_ERRORS = Object.freeze({
   MODEL_TIMEOUT: '模型请求超时，请稍后发送新消息重试。',
   MODEL_RATE_LIMITED: '模型服务限流，请稍后重试。',
   MODEL_UNAVAILABLE: '模型服务暂不可用，请稍后重试。',
-  MODEL_REJECTED: '模型服务拒绝请求，请检查此 Task 的固定模型名是否在当前服务商可用及参数配置；不会自动换模型。',
+  MODEL_REJECTED: '模型服务拒绝了请求。可能是模型名称、接口兼容性或参数不受支持，请检查模型配置；不会自动换模型。',
   MODEL_OUTPUT_LIMIT: '模型达到单次输出 Token 上限，本次生成未完成；已保存可获得的实际用量，不会自动重试。',
   MODEL_INVALID_REPLY: '模型未返回完整文本回复，本次执行失败。',
   MODEL_CONFIG_UNAVAILABLE: '此 Task 的固定模型配置当前不可用；不会切换模型或返回测试回复。',
@@ -28,7 +29,7 @@ export class ModelReplyError extends Error {
 }
 
 /** Validate server-owned connection data without including values in errors. */
-export function validateModelConfig({ baseUrl, apiKey, model } = {}) {
+export function validateModelConfig({ baseUrl, apiKey, model, contextWindow } = {}) {
   let url
   try { url = new URL(baseUrl) } catch { throw new Error('PIDOT_模型接口地址无效。') }
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash ||
@@ -38,7 +39,7 @@ export function validateModelConfig({ baseUrl, apiKey, model } = {}) {
     url.href.includes(apiKey) || model.includes(apiKey)) {
     throw new Error('PIDOT_真实模型需配置安全的 base_url、MODEL 和服务端 OPENAI_API_KEY。')
   }
-  return { baseUrl: url.href.replace(/\/$/, ''), apiKey, model }
+  return { baseUrl: url.href.replace(/\/$/, ''), apiKey, model, ...(contextWindow === undefined ? {} : { contextWindow: parseContextWindow(contextWindow) }) }
 }
 
 /** Process > app dotenv > root dotenv; partial/invalid configuration fails closed. */
@@ -55,26 +56,35 @@ export async function readModelEnvironment({ env = process.env, file, files = fi
   if (mode !== undefined && mode !== 'model') throw new Error('PIDOT_REPLY_MODE 仅支持 model 或 test。')
   const baseUrl = get('OPENAI_BASE_URL', 'base_url'), apiKey = get('OPENAI_API_KEY'), model = get('MODEL')
   if ([baseUrl, apiKey, model].every(value => value === undefined) && mode !== 'model') return { mode }
-  return { mode: 'model', config: validateModelConfig({ baseUrl, apiKey, model }) }
+  let contextWindow
+  const rawWindows = get('PIDOT_CONTEXT_WINDOWS')
+  if (rawWindows !== undefined) {
+    try {
+      const windows = JSON.parse(rawWindows)
+      if (!windows || typeof windows !== 'object' || Array.isArray(windows)) throw new Error()
+      if (Object.hasOwn(windows, model)) contextWindow = parseContextWindow(windows[model])
+    } catch { throw new Error('PIDOT_CONTEXT_WINDOWS 模型容量配置无效。') }
+  }
+  return { mode: 'model', config: validateModelConfig({ baseUrl, apiKey, model, contextWindow }) }
 }
 
 export async function readModelConfig(options) { return (await readModelEnvironment(options)).config }
 
 export function modelParameters(config) {
-  return { mode: 'model', model: { provider: 'openai-compatible', api: 'openai-completions', id: config.model, baseUrl: config.baseUrl },
+  return { mode: 'model', contextWindows: { [config.selectionId ?? config.model]: parseContextWindow(config.contextWindow) }, model: { provider: 'openai-compatible', api: 'openai-completions', id: config.selectionId ?? config.model, baseUrl: config.baseUrl },
     thinkingLevel: 'off', maxOutputTokens: 4096, requestTimeoutMs: 60000, tools: [], callLimits: { ...DEFAULT_CALL_LIMITS } }
 }
 
-/** The snapshot pins only model.id; resolve the live connection for every invocation. */
+/** The snapshot pins the model selection; resolve the live connection for every invocation. */
 export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fetch } = {}) {
   const knownKeys = new Set()
   const redactText = value => [...knownKeys].reduce((text, key) => text.split(key).join('[已隐藏凭证]'), value)
   return async (message, { parameters, signal, context } = {}) => {
     let config
-    try { config = typeof readConfig === 'function' ? await readConfig() : readConfig } catch { throw new ModelReplyError('MODEL_CONFIG_UNAVAILABLE') }
+    try { config = typeof readConfig === 'function' ? await readConfig(parameters?.model) : readConfig } catch { throw new ModelReplyError('MODEL_CONFIG_UNAVAILABLE') }
     if (config?.apiKey) knownKeys.add(config.apiKey)
     const selected = parameters?.model
-    const model = selected && { id: selected.id, provider: 'openai-compatible', api: 'openai-completions', baseUrl: config?.baseUrl }
+    const model = selected && { id: config?.selectionId ? config.model : selected.id, provider: 'openai-compatible', api: 'openai-completions', baseUrl: config?.baseUrl }
     if (!config || parameters?.mode !== 'model' || !['off', 'low', 'high'].includes(parameters.thinkingLevel) ||
       typeof model?.id !== 'string' || !/^[\w./:-]{1,200}$/.test(model.id) ||
       !Number.isInteger(parameters.requestTimeoutMs) || parameters.requestTimeoutMs < 1 || parameters.requestTimeoutMs > 600000) {
@@ -93,13 +103,13 @@ export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fet
       timer = setTimeout(() => { timedOut = true; controller.abort(); reject(new ModelReplyError('MODEL_TIMEOUT')) }, parameters.requestTimeoutMs)
     })
     try {
-      // No guessed token prices, context limits or output cap are sent to the provider.
+      // Token prices remain unknown; context capacity is local bookkeeping, not a provider override.
       // Pi requires catalog bookkeeping fields; NaN rates denote unknown cost, never persisted.
       // low/high map to the provider's standard reasoning_effort field only when the Task asked for it.
       const reasoning = parameters.thinkingLevel === 'low' || parameters.thinkingLevel === 'high'
       const descriptor = { ...model, name: model.id, reasoning, input: ['text'],
         cost: { input: NaN, output: NaN, cacheRead: NaN, cacheWrite: NaN },
-        contextWindow: 0, maxTokens: 0,
+        contextWindow: parameters.contextWindows?.[selected.id] ?? parseContextWindow(config.contextWindow), maxTokens: 0,
         compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: reasoning, supportsUsageInStreaming: true } }
       const response = await Promise.race([stream(descriptor, normalizeContext(context ?? { messages: [
         { role: 'user', content: message, timestamp: Date.now() },
@@ -108,7 +118,9 @@ export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fet
         ...(reasoning ? { reasoningEffort: parameters.thinkingLevel } : {}),
         fetch: async (url, init) => { const result = await fetchImpl(url, { ...init, redirect: 'error' }); status = result.status; return result },
         onPayload: (payload) => {
-          payload.thinking = reasoning ? { type: 'enabled' } : { type: 'disabled' }
+          // DeepSeek's thinking extension is not part of Chat Completions.
+          // Strict GPT gateways reject it even when explicitly disabled.
+          if (/(?:^|\/)deepseek[-/]/i.test(model.id)) payload.thinking = reasoning ? { type: 'enabled' } : { type: 'disabled' }
           for (const tool of payload.tools ?? []) if (tool.function) tool.function.name = toModelTool(tool.function.name)
           for (const message of payload.messages ?? []) {
             for (const call of message.tool_calls ?? []) if (call.function) call.function.name = toModelTool(call.function.name)
@@ -122,7 +134,7 @@ export function createModelReply(readConfig, { fetch: fetchImpl = globalThis.fet
           }
           // Keep only the allowlisted actual request fields, never headers or messages.
           sent = { provider: model.provider, api: model.api, baseUrl: model.baseUrl, model: payload.model,
-            thinkingLevel: parameters.thinkingLevel, thinking: { ...payload.thinking },
+            thinkingLevel: parameters.thinkingLevel, ...(payload.thinking ? { thinking: { ...payload.thinking } } : {}),
             ...(reasoning ? { reasoningEffort: payload.reasoning_effort } : {}), stream: payload.stream,
             timeoutMs: parameters.requestTimeoutMs, maxOutputTokens, maxRetries: 0 }
         },

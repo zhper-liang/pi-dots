@@ -1,4 +1,4 @@
-import { TaskInputError, taskParameters, parseTaskState } from './task-config.mjs'
+import { TaskInputError, taskParameters, pinModelContext, parseTaskState } from './task-config.mjs'
 import { BotDirectory, assertBotActive } from './bot-directory.mjs'
 import { ToolAccess } from './tools.mjs'
 import { isCancelled } from './cancellation.mjs'
@@ -26,6 +26,7 @@ export async function createChatTask(tx, input, { ChatTask, TaskCard, ChatInput,
   const { bot, title, parameters, state } = parseInput(input, JSON.parse(JSON.stringify(directory.items)))
   await assertBotActive(tx, bot.id)
   if (input.parameters?.model && parameters.mode === 'model' && !configuredModels.some((m) => m.id === parameters.model.id)) throw new TaskInputError(400, 'MODEL_NOT_CONFIGURED', '仅可选择服务端已配置模型。')
+  pinModelContext(parameters, configuredModels)
   parameters.tools = [...access.assignments[bot.id].tools]
   parameters.toolResources = [...access.assignments[bot.id].resources]
   const taskId = await tx.createTask(ChatTask, { botId: bot.id }, { ownership: { kind: 'conversation' }, ...(creationConversationId === undefined ? {} : { conversationId: creationConversationId, forkSource }) })

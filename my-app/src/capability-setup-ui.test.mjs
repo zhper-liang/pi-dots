@@ -232,7 +232,7 @@ test('App groups one latest host setup card and never promotes provider content,
   const task = { taskId: 1, conversationId: 1, kind: 'main', title: 'Chief main', bot: bots[0], configRef: bots[0].configRef, createdAt: '2026-10-29T01:00:00Z', messages, parameters: { mode: 'test' }, parameterSources: {}, activeInputId: null,
     capabilitySetups: [readyReceipt({ inputId: 11 }), readyReceipt({ setupId: 'wrong-task', taskId: 999 })], runtime: { status: 'running', checkpoint: { phase: 'awaitInput' } } }
   const h = await harness(t, './App.tsx', {}, async (path) => {
-    const body = path === '/api/bots' ? { bots, mainSessions: { chief: 1, alpha: 2 } } : path === '/api/tasks' ? { tasks: [] } : /\/configuration$/.test(path) ? { toolLabels: {} } : /\/tasks\/1$/.test(path) ? { task } : null
+    const body = path === '/api/bots' ? { bots, mainSessions: { chief: 1, alpha: 2 } } : path === '/api/tasks?includeMain=1' ? { tasks: [] } : /\/configuration$/.test(path) ? { toolLabels: {} } : /\/tasks\/1$/.test(path) ? { task } : null
     assert.ok(body, `unexpected App read ${path}`)
     return { ok: true, json: async () => body }
   })
@@ -349,7 +349,7 @@ async function appWithMessages(t, messages, approvals = { activeId: null, items:
   const task = { taskId: 1, conversationId: 1, kind: 'main', title: 'Chief main', bot: bots[0], configRef: bots[0].configRef, createdAt: '2026-10-29T01:00:00Z', messages,
     parameters: { mode: 'test' }, parameterSources: {}, activeInputId: 10, capabilitySetups: [], approvals, runtime: { status: 'running', checkpoint: { phase: approvals.activeId ? 'awaitApproval' : 'awaitInput' } } }
   return harness(t, './App.tsx', {}, async path => {
-    const body = path === '/api/bots' ? { bots, mainSessions: { chief: 1, alpha: 2 } } : path === '/api/tasks' ? { tasks: [] } : /\/configuration$/.test(path) ? { toolLabels: {} } : /\/tasks\/1$/.test(path) ? { task } : null
+    const body = path === '/api/bots' ? { bots, mainSessions: { chief: 1, alpha: 2 } } : path === '/api/tasks?includeMain=1' ? { tasks: [] } : /\/configuration$/.test(path) ? { toolLabels: {} } : /\/tasks\/1$/.test(path) ? { task } : null
     assert.ok(body, `unexpected App read ${path}`)
     return { ok: true, json: async () => body }
   })

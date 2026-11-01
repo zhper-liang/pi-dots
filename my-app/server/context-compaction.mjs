@@ -1,3 +1,6 @@
+import { enqueueMemoryEvidence } from './memory-learning-queue.mjs'
+import { DEFAULT_CONTEXT_WINDOW } from '../shared/model-context.mjs'
+import { DEFAULT_COMPACTION_POLICY, piCompactionPrefix, serializeConversation, PI_SUMMARY_PROMPT } from './pi-compaction.mjs'
 import { defineDoc } from '@earendil-works/pi-durable'
 import { estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
 
@@ -10,12 +13,13 @@ export const contextTokens = (value) => {
   return Math.max(estimateTextTokens(text), Buffer.byteLength(text, 'utf8')) + 64
 }
 export function contextPolicy(parameters) {
-  const window = parameters.contextWindows?.[parameters.model?.id]
+  const window = parameters.contextWindows?.[parameters.model?.id] ?? DEFAULT_CONTEXT_WINDOW
   if (!Number.isSafeInteger(window) || window < 8192 || window > 4000000) return null
   const output = parameters.maxOutputTokens ?? 4096
-  const reserve = Math.max(1024, Math.ceil(window * 0.05))
+  const reserve = Math.max(output + 1024, Math.min(DEFAULT_COMPACTION_POLICY.reserveTokens, Math.floor(window * 0.2)))
   return { contextWindow: window, outputTokens: output, reserveTokens: reserve,
-    triggerTokens: window - output - reserve, summaryTokens: Math.min(2048, Math.floor(window * 0.08)) }
+    triggerTokens: window - reserve, summaryTokens: Math.min(Math.floor(reserve * 0.8), 32768),
+    keepRecentTokens: Math.min(DEFAULT_COMPACTION_POLICY.keepRecentTokens, Math.floor(window * 0.2)) }
 }
 export function restoreCompaction(state, segments) {
   const covered = new Set(state.coveredKeys)
@@ -40,19 +44,30 @@ const cleanMessage = (message) => {
 /** Select complete logical segments, never a tool-result-only cut. Chunk before sending an oversized summary. */
 export function planCompaction(context, parameters) {
   const policy = contextPolicy(parameters)
-  if (!policy) return null // Legacy/unknown models are explicitly unconfigured, never assigned a guessed capacity.
+  if (!policy) return null
   const estimatedTokens = contextTokens({ systemPrompt: context.systemPrompt, tools: context.tools, messages: context.messages })
   if (estimatedTokens < policy.triggerTokens) return null
-  const eligible = context.segments.filter((segment) => !segment.currentInput)
   const selected = []
   const previousSummary = context.compaction?.latest?.summary ?? ''
-  const summaryContext = { systemPrompt: SUMMARY_SYSTEM, messages: [] }
+  const summaryContext = { systemPrompt: SUMMARY_SYSTEM + '\n' + PI_SUMMARY_PROMPT, messages: [] }
   const inputBudget = policy.contextWindow - policy.summaryTokens - policy.reserveTokens
   let source = []
-  for (const segment of eligible) {
-    const next = [...source, { entryId: segment.entryId, key: segment.key, messages: segment.messages.map(cleanMessage) }]
+  // Pi selects an old prefix while retaining recent work and complete call/result units.
+  // Pidot keeps the active input in its original position before tool rounds. Give Pi a
+  // non-persisted tail anchor for that protected input, allowing the final completed tool
+  // round to enter the old prefix when necessary. The anchor is never summarized or sent.
+  const active = context.segments.find(segment => segment.currentInput)
+  const selection = active && !context.segments.at(-1)?.currentInput ? [...context.segments, active] : context.segments
+  let prefix = piCompactionPrefix(selection, policy.keepRecentTokens).filter(segment => !segment.currentInput)
+  const remainingAfter = selected => {
+    const keys = new Set(selected.map(segment => segment.key))
+    return contextTokens({ systemPrompt: context.systemPrompt, tools: context.tools, messages: context.segments.filter(segment => !keys.has(segment.key)).flatMap(segment => segment.messages) })
+  }
+  if (!prefix.length || remainingAfter(prefix) >= policy.triggerTokens) prefix = piCompactionPrefix(selection, 0).filter(segment => !segment.currentInput)
+  for (const segment of prefix) {
+    const next = [...source, { entryId: segment.entryId, key: segment.key, transcript: serializeConversation(segment.messages.map(cleanMessage)) }]
     const candidate = [{ role: 'user', content: JSON.stringify({ currentRequest: context.currentRequest, taskState: context.taskState, previousSummary, history: next }), timestamp: Date.now() }]
-    if (contextTokens({ systemPrompt: SUMMARY_SYSTEM, messages: candidate }) > inputBudget) break
+    if (contextTokens({ systemPrompt: summaryContext.systemPrompt, messages: candidate }) > inputBudget) break
     selected.push(segment)
     source = next
     summaryContext.messages = candidate
@@ -80,4 +95,6 @@ export async function saveCompaction(tx, card, entryId, plan, result) {
   state.revision = data.revision
   state.coveredKeys = [...new Set([...state.coveredKeys, ...data.coveredKeys])]
   state.latest = { ...data, entryId: audit.id }
+  // Evidence registration shares the summary/revision transaction; extraction runs outside it.
+  await enqueueMemoryEvidence(tx, { botId: card.bot.id, sourceTaskId: card.taskId, trigger: 'compaction', revision: data.revision, refs: [...new Set(data.sourceEntryIds)].map(entryId => ({ taskId: card.taskId, entryId })), dueAt: Date.now() })
 }

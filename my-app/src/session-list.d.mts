@@ -1,6 +1,6 @@
 export type SectionId = 'pinned' | 'confirm' | 'today' | 'yesterday' | 'week' | 'earlier' | 'archived'
 export type SessionItem = { id: number; title: string; botName: string; at: number; confirm: boolean; archived: boolean; deleted?: boolean; deletedAt?: string | null }
-export function lastActivity(task: { createdAt: string; messages?: { createdAt: string }[] }): number
+export function lastActivity(task: { createdAt: string; messages?: { createdAt: string }[]; lastMessage?: { role?: string; createdAt?: string } | null }): number
 export function timeBucket(at: number, now: number): 'today' | 'yesterday' | 'week' | 'earlier'
 export function relativeTime(at: number, now: number): string
 export function sessionPreview(messages?: { role: string; content?: string; systemKind?: string; botName?: string; intermediate?: boolean; undone?: boolean }[], options?: { group?: boolean }): string

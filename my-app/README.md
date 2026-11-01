@@ -1,4 +1,4 @@
-# Pidot 本地原型
+# Pidot v3 工程指南
 
 > 工程命令与环境说明的唯一正文。阶段状态与交接见 [NEXT_STAGE.md](../NEXT_STAGE.md)；历次按票实现记录见 [已完成计划](../plans/README.md)。
 
@@ -26,6 +26,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 | `PIDOT_API_TOKEN` | 必填，32–256 位无空白 ASCII 字符。服务端配置；网页手动输入后仅保存在当前标签页 sessionStorage，断开即清除；不能加 `VITE_` 前缀。 |
 | `PIDOT_API_PORT` | 可选，默认 `3001`，范围 `1–65535`。 |
 | `PIDOT_DB_PATH` | 可选 SQLite 文件路径；默认 `my-app/data/pidot.sqlite`，不随启动 cwd 改变。相对自定义路径按 cwd 解析。 |
+| `PIDOT_MEMORY_LEARNING` | 可选 `1` / `0`，默认 `1`。启用逐会话空闲与压缩触发的持久整理和同 Bot Skill 学习；`0` 停消费但保留队列、显式工具与已有文件。记忆页可单独暂停/恢复。 |
 | `PIDOT_MEMORY_FILES` | 可选 `1` / `0`，默认 `1`。`1` 时人格、记忆和共享偏好保存在数据库同目录的 `bot-workspaces/` 下，可直接编辑；`0` 回到只用内部记录，先导入一次未同步的手改。见[运行手册](../docs/engineering/operations.md#文件式记忆的开关与回滚r2)。 |
 | `PIDOT_WORKSPACE_MCP_URL` | 可选，workspace-mcp 的地址，默认 `http://127.0.0.1:8000/mcp`，只接受本机地址。只在服务端配置，不存进连接，模型和界面都改不了。见[运行手册](../docs/engineering/operations.md#google-连接与-workspace-mcpr3)。 |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | 可选，Google OAuth 桌面应用客户端；设置后设置页的客户端配置只读。也可在设置页填写，保存在数据库同目录的 0600 凭据文件。 |
@@ -64,10 +65,10 @@ pnpm start:api
 ## 网页使用
 
 1. 输入 `my-app/.env` 中的 `PIDOT_API_TOKEN` 连接本地服务。
-2. 首页与 Chief 对话；点机器人直接进其主会话，点齿轮进「能力 / 记忆 / 设置」。新建只需名字，可选模板与职责，高级能力默认开启「日程与待办」「历史与回读」。
-3. 能力按 Skills / MCP / 工具集开关；日历和任务列表随「日程与待办」分配，单机器人高级可收窄。启用后写入直接做，全局暂停时等你确认。
-4. 事项为日历、定时任务、执行记录；通知为需要你处理、提醒。设置为连接、模型、自动化、偏好、高级，飞书 / Google / MCP 放同一个连接列表，stdio 凭证在高级。
-5. 会话详情保留任务目标，技术字段和时间线入口折叠在技术信息；主会话模型与思考深度在输入框「⋯」。刷新、前进后退保留原会话，断开网页不删除数据。
+2. 首页与 Chief 对话；点机器人直接进其主会话，点齿轮进「能力 / 记忆 / 设置」。除主管外，所有机器人地位相同。新建默认空白，只需名字；模板默认折叠且可选，职责和能力都可之后设置，Skills / MCP / 工具集默认全关；每个机器人自带 bash/read/write/edit、历史回查和结果补读，无需开启或发放凭证。
+3. 能力按 Skills / MCP / 工具集开关；日历和任务列表随「日程与待办」分配，单机器人高级可收窄。启用后新建和修改直接做，删除每次确认，规则见[能力与权限](../docs/architecture/capabilities.md)。
+4. 事项为日历、定时任务、执行记录；通知为需要你处理、提醒。设置为连接、模型、自动化、偏好、高级，飞书 / Google / MCP 放同一个连接列表，高级保留技术状态，已移除 Agent 凭证面板。
+5. 会话详情显示任务目标、模型和开始时间，底部可打开时间线；主会话模型与思考深度在输入框「⋯」。刷新、前进后退保留原会话，断开网页不删除数据。
 
 第四轮升级前停服务并复制整个 `my-app/data/`，第一次 `pnpm start:api` 自动迁移一次，详见[运行手册](../docs/engineering/operations.md#第四轮升级r4)。`/api/chat` 仍为不持久化测试接口。
 
@@ -94,7 +95,7 @@ pnpm start:api
 | --- | --- |
 | `POST /api/chat` | 不持久化测试接口，只接受 `{"message":"..."}`（非空、≤4000 个 UTF-16 单元）。 |
 | `GET /api/bots` | 机器人目录与主会话引用。 |
-| `POST /api/bots` | `{name,requestId,description?,profile?,parameters?,capabilities?}`；默认 `tool:todos` + `tool:history`，可传空数组，不包 data 返回创建结果。 |
+| `POST /api/bots` | `{name,requestId,description?,profile?,parameters?,capabilities?}`；默认空白、不启用可选能力（自带 bash/read/write/edit 与历史回查/结果补读），`capabilities` 可显式选择，不包 data 返回创建结果。 |
 | `GET /api/capabilities` | `{data:{items}}`：本机已装、已连接的全局能力目录。 |
 | `GET /api/bots/:id/capabilities` | `{data:{botId,revision,items}}`：机器人能力与启用状态。 |
 | `POST /api/bots/:id/capabilities` | `{requestId,expectedRevision,capabilityId,enabled,expectedCatalogRevision}` 切换能力。 |
@@ -181,15 +182,15 @@ pnpm build
 
 同一 SQLite/Harness 初始化 `pidot.workspace.*` schemaVersion 1 Documents，不自动给用户/Bot新来源权限。`GET /api/workspace/status` 查看诊断；用户本地许可与Bot来源许可独立。
 
-- 业务请求、字段和版本/幂等规则见 [HTTP契约](../docs/interfaces/http-api.md) 与 [工作区架构](../docs/architecture/unified-workspace-v2.md)，能力矩阵见 [MVP范围](../docs/product/mvp-scope.md)。
+- 业务请求、字段和版本/幂等规则见 [HTTP契约](../docs/interfaces/http-api.md) 与 [工作区架构](../docs/architecture/workspace.md)，能力矩阵见 [MVP范围](../docs/product/mvp-scope.md)。
 - 修改/删除使用 expectedVersion；断线按原 requestId 查询，不创建重复副作用。待办与本地/外部事件只显式关联，不级联删除。
 - `PIDOT_WORKSPACE_ENABLED=0` 禁用新入口/初始化但保留数据和审计。仅空白业务v0标记可显式 `PIDOT_WORKSPACE_MIGRATION=v0-to-v1` 升级；未知/非空旧版本拒绝启动，须单独评审。不对正式库做迁移演练。
 - 同库只允许一个后端；无第二数据库。故障与回滚见 [运行手册](../docs/engineering/operations.md)。
 
 ### V2 本机MCP工作区（固定兼容2025-11-25）
 - `workspace.list/get/prepare_change/prepare_schedule/operation_status`为真实JSON-RPC MCP工具。内部Bot经宿主client/session握手调用；非workspace旧工具不重写。模型provider只接收明确映射的`workspace_*`别名，宿主恢复成规范MCP名字；不是额外执行工具。
-- 先在原能力池与Bot配置显式分配workspace工具及`workspace:local`（或已绑定飞书对应`workspace:<sourceId>`），在Agent工作区面板独立授予Bot来源范围，并新建Task。旧Task不自动升级；配置迁移须用户查看差异明确确认。用户来源许可仍是上限。
-- stdio：面板发行10分钟受限client凭证，放入本地进程环境`PIDOT_MCP_TOKEN`；`PIDOT_MCP_URL=http://127.0.0.1:3001`指向运行中的同一后端。独立MCP client配置命令`node`、参数`server/workspace-mcp-stdio.mjs`（cwd为my-app）。不要把API管理员token、凭证写进模型、命令参数或版本库。
+- 机器人开着「日程与待办」就能用这些工具和所有已连接的日历、任务列表，见[能力与权限](../docs/architecture/capabilities.md)。
+- 外部 stdio 兼容接口（应用内 Agent 无需使用）：通过认证 API 发放受限client凭证，放入本地进程环境`PIDOT_MCP_TOKEN`；`PIDOT_MCP_URL=http://127.0.0.1:3001`指向运行中的同一后端。独立MCP client配置命令`node`、参数`server/workspace-mcp-stdio.mjs`（cwd为my-app）。不要把API管理员token、凭证写进模型、命令参数或版本库。
 - 桥只转发本机私有`/api/workspace/mcp-dispatch`，不打开SQLite、不加载.env、stdout仅逐行JSON-RPC；拒绝Origin、远程目标、任意路径、凭证URL及重定向。该relay不是公网HTTP MCP transport，远程MCP不支持。
 - Agent 与 client 共用精确 Operation；启用后本地/外部修改直接执行，全局暂停时由面板确认。确认5分钟绑定参数/原主体/版本/权限，拒绝保留cancelled；unknown禁止盲重发。断线后用原requestId查状态，桥关闭不取消已持久操作。
 - client凭证同库只存SHA256摘要，最多100个保留记录；会话内最多4096请求、同一ID拒绝重放。过期/撤销不可复活；用户可用已知clientId调用认证`client-revoke`，不删审计。MCP消息16KiB，来源分页保持业务覆盖信息，busy-only无标题正文。

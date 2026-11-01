@@ -1,6 +1,10 @@
 # 第四轮计划：降低使用负担（机器人能力三栏、对话、设置与文案）
 
+> **2026-11-01 未验收即归档。** 新建默认能力被 [ADR-023](../../../docs/decisions/README.md#adr-023-普通-bot-地位相同默认空白创建) 改为空白，历史回读被 ADR-025 改为默认自带；其余界面与权限收简仍是现行做法，见[能力与权限](../../../docs/architecture/capabilities.md)。以下正文保留当时的记录。
+
 状态：**实现完成，待用户验收**（2026-10-31，Asia/Shanghai）。用户选定全部决定，要求“一轮做完”；主管统筹六个子 agent 按完整模块交付，实际结果见 §8。基线：`9e4200d`（第三轮实现完成、待用户验收，与本轮并行，见 D11）。
+
+后续调整：2026-11-01 用户要求普通 Bot 地位相同、默认空白创建，本计划的新建默认能力由 [ADR-023](../../../docs/decisions/README.md#adr-023-普通-bot-地位相同默认空白创建) 替代；实施与验证见[后续计划](../../active/bot-equality/README.md)。下文保留第四轮当时的决定和验证记录。
 
 依据（用户原话）："bot设置来源那一块和 mcp 那一块要改动来源那一块没啥意义了 mcp 改为开关即可不需要那么麻烦细化的管理了"；"不止这些现在用户心智负担还是大"。改动前的走查截图与可见文字在 `.scratch/2026-10-31-load-audit/`（本机，不进仓库）。
 
@@ -88,7 +92,7 @@ D1–D11 是用户在选项里点选的答案；D12–D15 是主管提出、用�
 
 ### 4.1 波次
 
-- **W0（主管）**：提交计划；在 `my-app/` 下跑 `pnpm test`、`pnpm lint`、`pnpm build` 记录基线（上次为 test 1531/1531、lint 11 条既有 warning、build 通过）；跑 `node ../plans/active/r4-simplify/ui-audit.mjs --label before` 留改前截图（结构检查失败是预期）。
+- **W0（主管）**：提交计划；在 `my-app/` 下跑 `pnpm test`、`pnpm lint`、`pnpm build` 记录基线（上次为 test 1531/1531、lint 11 条既有 warning、build 通过）；跑 `node ../plans/done/2026-10-31-r4-simplify/ui-audit.mjs --label before` 留改前截图（结构检查失败是预期）。
 - **W1（6 个子 agent 并行）**：R4-01 … R4-06。前端各票按 CONTRACTS §6 与 UI.md 写死的接口直接写，不等 R4-01。
 - **W2（主管）**：改 §4.3 的共享测试；清理共享样式里不再使用的选择器；按 CONTRACTS §9 改文档和 ADR；全量 test / lint / build；`ui-audit.mjs --label after` 直到退出码 0；提交；按 §6 汇报。W2 里为修全量测试或 `ui-audit.mjs` 查出的问题，主管可以改任何文件（仍守 §0 的规则）。`ui-audit` 只报"提示"、没有失败时，主管对照提到的截图看一眼，没问题就算过。
 
@@ -190,7 +194,7 @@ R4-01 … R4-06 已完成，计划先单独提交，再在本地 `main` 按票�
 - `pnpm test`：**1537/1537 通过，0 fail / cancelled / skipped**（基线 1531/1531）。首轮仅 `server/routines.test.mjs` 仍断言旧事件标签，已只同步新文案并全量复跑通过；无放宽无关断言。
 - `pnpm lint`：退出 0，**10 条基线既有 warning、0 新增**（基线 11）。删除两个失效测试 helper 与创建页重复 state 重置后收口，未抑制规则。
 - `pnpm build`：退出 0，TypeScript 与 Vite 通过；保留既有大于 500 kB 的 chunk 提示，不扩展做性能重构。
-- `node ../plans/active/r4-simplify/ui-audit.mjs --label after`：退出 **0**，1440/375 两宽度共 **22 个画面**；无横向溢出、禁用词、结构失败、非白名单失败请求或页面错误，无人工提示项。已目视检查能力页、对话、定时任务、手机创建和手机设置截图。
+- `node ../plans/done/2026-10-31-r4-simplify/ui-audit.mjs --label after`：退出 **0**，1440/375 两宽度共 **22 个画面**；无横向溢出、禁用词、结构失败、非白名单失败请求或页面错误，无人工提示项。已目视检查能力页、对话、定时任务、手机创建和手机设置截图。
 - 截图与机器结果：`.scratch/r4-simplify/audit/before/`、`.scratch/r4-simplify/audit/after/`；日志与逐票交接在 `.scratch/r4-simplify/`（本机留存，不进仓库）。
 - 真实模型、Google / 飞书真实账号：**未手测**。全部自动验证使用临时库与脚本模型；**正式库未启动、未迁移**。
 

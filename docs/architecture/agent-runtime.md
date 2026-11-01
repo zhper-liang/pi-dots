@@ -1,112 +1,121 @@
-# Agent 运行架构
+# Agent 运行
 
-本文描述当前运行约束；业务对象与定时见 [工作区架构](unified-workspace-v2.md)，全局分层见 [系统架构图](system-overview.md)。
+本文讲一次执行怎么跑：谁在执行、输入怎么排队、模型拿到什么、额度和恢复怎么算。能用哪些工具见[能力与权限](capabilities.md)，记忆的读写见[记忆](memory.md)，全局分层见[架构总览](README.md)。
 
-## 长期身份与执行身份
-Bot 保存身份、职责、版本化配置及工具分配；Conversation 承载持续交流。Harness Task 是持久化执行实例，不能与 Todo、Schedule 或单轮模型调用混为一谈。Task 卡记录目标、主管、执行者、完成标准、blocker、结果和责任事件。
+## 三个身份
 
-复用唯一 Harness 处理执行与恢复，不为群聊、工作区或定时 Agent 再建一套执行引擎。定时工作流只保存触发定义与原 Task 关联。
+| 身份 | 是什么 | 不是什么 |
+|---|---|---|
+| 机器人（Bot） | 长期身份：名字、职责、版本化配置、能力开关。主管的 id 是 `chief`，界面叫 pipi | 不是一次执行 |
+| 主会话 | 每个机器人一个，用户日常对话的地方；按每条输入计额 | 不能普通删除或取消，只能“清空并开始新会话” |
+| Harness Task | 一段可恢复的执行：输入、固定的运行配置、等待项、用量、结果。主会话本身也是一个 Task；独立任务、委派、例行任务各是一个 Task | 不是待办事项，也不是一次模型调用 |
 
-## 配置装配与迁移
-1. 确定 Bot、来源会话、协作关系、目标和完成标准。
-2. 固定模型名、提示词等运行配置版本及调用额度；工具与资源按 Bot 当前分配解析，Skill 按当前可用依赖加载。
-3. 持久化 Task、conversation 与任务卡，装配上下文后执行。
+每个 Task 有一张任务卡（`TaskCard`），记录目标、执行者、主管、完成标准、阻塞和结果。
 
-权限以当前登记、ToolAccess / CapabilityAssignments 和撤销为准，没有能力池、Bot Grant、档位或 Task 权限快照/epoch 匹配。按 ADR-022，新机器人默认 `tool:todos` + `tool:history`，MCP / Skills 默认关闭，创建时可覆盖。日历和待办并为 `todos`；旧库只在生产入口进行一次合并与 ask 规则清理。工具集仅有能力开关，不再有写入模式。飞书 / Google 断开仍移除旧连接资源，重连按当前工具集与收窄项重新分发。
+会话列表包含已有聊天活动的机器人主会话及独立任务，主会话仍通过自己的 Task ID 读取历史。协作时模型可见精简的活跃机器人目录，目录内容只是资料而非指令；可用工具与来源仍以服务端当轮复核为准。宿主按容量提供当前时间，帮助模型计算相对日期。
 
-模型连接地址和 key 不属于 Task 固定运行配置：每次调用从服务端读取，按进程环境、app/root dotenv、同库目录 `model-settings.json` 的优先级选择。JSON 明文凭证用 0600 原子替换，不进 Harness/SQLite；认证设置接口只投影 hasKey。旧 Task 的 provider/baseUrl 兼容忽略，模型名不变；改连接不改变 Bot 版本或触发迁移。已持久化 Bot 目录保持权威，不因新 seed 哈希改变而重写版本；无配置首次启用时仅新 Task 使用真实模型，已有测试 Task 不变。
+## 一次执行
 
-配置更新使用 expectedVersion，保存不可变版本和幂等回执。显式迁移仅用于模型、提示词等运行配置，在无执行、无待消费输入和无等待事项的安全边界进行，检查依赖、容量与差异，保留原身份、历史、用量和责任；工具、资源和规则实时生效，无需迁移。
+```mermaid
+flowchart TD
+  In["用户消息 / 群里 @ / 后台触发"] --> Busy{"正在执行？"}
+  Busy -->|"忙"| Queue["持久队列，先进先出"]
+  Busy -->|"空闲"| Seg["开始一段执行"]
+  Queue --> Seg
+  Steer["用户点插入"] --> Seg
+  Seg --> Check["检查：机器人停用、取消、额度"]
+  Check --> Ctx["装配上下文；超容量先压缩"]
+  Ctx --> LLM["调用模型（或测试回复）"]
+  LLM -->|"文字回复"| Save["保存消息和用量"]
+  LLM -->|"工具调用"| Guard["能力检查 + decide()"]
+  Guard -->|"allow"| Run["执行，持久化结果"]
+  Guard -->|"ask，用户在场"| Card["确认卡，等用户"]
+  Guard -->|"ask，无人值守"| Skip["跳过并记“需要你来做”"]
+  Guard -->|"deny"| Deny["拒绝并记原因"]
+  Card -->|"同意后再复核"| Run
+  Run & Skip & Deny --> Check
+  Save --> Next{"队列里还有？"}
+  Next -->|"有"| Seg
+  Next -->|"没有"| Idle["空闲"]
+```
 
-主会话仅展示该 Bot 当前可用工具，写入直接执行，全局暂停时确认；task_create/task_status/automation_pause也不无条件授予未启用对应能力的机器人。legacy主会话固有工具单独投影，显式撤销优先；Chief管理职责及新配置工具通过真实宿主角色/授权提供。派生Task用于长任务，运行配置快照不是权限快照，历史/工具结果回读实时复核来源。例行任务仅开放当前工作区读工具，显式 writes=true 时再开放工作区变更与操作查询；测试运行、旧只读简报和“帮我想办法”任务保持只读，并限定原任务指定的来源范围。
+循环在 `tasks.mjs` 的 `chatDefinition()`，一次模型请求的适配在 `model-reply.mjs`。一条输入可以触发多轮模型和工具调用，直到回复、等待或结束。
 
-## 消息与调度
+## 输入怎么处理
+
 | 输入 | 行为 |
 |---|---|
-| 空闲普通消息 | 开始执行段 |
-| 忙碌普通消息 | 持久排队，在当前段结束后按 FIFO 消费 |
-| 显式插入 | 在安全边界使用 steer，不直接改正在运行的内部状态 |
-| 审批、阻塞答复、协作结果 | 满足关联条件后恢复原 Task |
-| 取消、撤权 | 直接约束后续调度和工具边界 |
+| 空闲时的普通消息 | 开始一段执行 |
+| 忙时的普通消息 | 进持久队列，当前段结束后按顺序消费 |
+| 插入（steer） | 在下一个安全边界插进当前执行，不直接改正在运行的状态 |
+| 等待用户补充时的新消息 | 将原输入挂起，处理新消息；待答问题保留 |
+| 确认结果、问题答复、协作结果 | 满足对应条件后恢复原输入；同一 Task 仍只有一个执行段 |
+| 取消、停用、撤权 | 立即约束后续调度和工具调用 |
 
-执行段可包含多轮模型与工具，直到回复、等待或结束。每次模型调用前检查输入、状态、限制和上下文；模型提出的动作必须再次经过可信工具边界。
+输入框里用 `/` 选的 Skill 只对这一条消息生效，处理完自动停用。主会话还可以对下一条消息选模型，选择固定在这条输入上，之后改模型不影响已排队的输入。
 
-## 工具与 Skill
-区分已安装、已授权、本轮展示三个集合。隐藏 schema 不是权限控制；每次实际派发和历史/结果回读都检查身份、来源、参数、授权、审批、预算与取消状态。凭证留在服务端，不进入模型上下文。
+### 问题表单与请求恢复（ADR-027）
 
-Skill 是工作方法；开启任一 Skill 自动带上 `skills` 组加载工具，关闭最后一个时移除，不授予 Skill 声明的业务依赖。活动 Skill 的选择、激活/退出、依赖检查及生命周期持久化；正文按当前阶段加载，不能用 Skill 绕过工具白名单或实时撤权。目录合并只读内置 `server/skills/` 与受控用户Skill包；发现不等于分配，新注册Skill不会自动给旧Bot启用。用户导入固定来源/内容hash和版本，更新不改运行Task固定快照，撤销/移除仍实时生效；能否使用取决于Skill选择、机制工具和声明依赖的当前分配。使用是按需的：Bot 从简要目录自己选（skill_activate），或用户在输入框打“/”选一个只对那条消息生效；每条输入处理完自动停用。没有手动激活面板；对话里每次使用留一行卡片（不进模型上下文），会话详情里有只读记录。
+`report_blocker` 可提供 1–3 题文本、单选或多选表单。题目、选项、回答和版本保存在 TaskBlockers；普通新消息不是答案，表单也不授予能力或批准操作。
 
-## 动态能力与配置 Host
+普通用户问题没有答案且队列出现新消息时，原输入让出 ChatInput，保留参数、任务限制、活动 Skill、主会话当前用量和压缩摘要。新消息在同一 Harness 执行；回答后原输入优先于普通队列恢复，当前回复段已经在执行时先等它到安全结束边界。主会话原模型和额度恢复，不重新激活新版本 Skill，也不重做成功工具。未回答的请求不会被当作已消费历史提供给其他输入。
 
-生产index装配受控externalMcp服务与Skill导入服务；每store动态目录投影进入schema、严格参数校验、实时分配/catalog版本、policy、预算/取消和回执。缓存只保存无秘密元数据，不作为授权权威，不修改全局installed。连接mutation revision与稳定工具catalog revision分离，正常重连不扩权，新schema/source须重新审阅。
+用户可以稍后回答、按声明默认跳过非必需问题、调整或取消这次请求。调整将问题标为 superseded，取消仅结束该输入。受管子任务保留绑定主管、精确输入与版本校验，只允许对应处理人回答，不开放普通消息/调整绕过主管。
 
-mcp_manage/skill_manage不走旧bot_manage执行分支。Host把实际已认证用户Entry、native tool turn、目标/动作/来源fingerprint/scope与精确确认绑定；只有Chief或真实显式管理赋权可执行。CapabilitySetups及既有TaskApprovals记录必要阶段和回执，不新增执行引擎。网络/导入FS在commit外进行，派发前再核对权限/预算；缺凭据时原输入等待安全UI续办。只读setup GET只核对原步骤账本，后续mutation须显式续办。
+保留旧 awaitBlocker 检查点：没有新消息时继续持久等待，不额外调用模型；有新消息时转换为输入挂起。恢复信息、队列与回答同库持久化；精确重复回答返回原结果，过期版本和冲突回答拒绝。
 
-MCP来源独立refs；context/history/产物/协作/digest/记忆走同一来源边界。新认证输入可退役旧无效来源的派生上下文并清compaction，原审计与真实直接用户偏好保留。超过8KiB的完整结果进入已有ToolResults，经当前alias/来源/catalog权限分页回读；未知调用或未完成配置只查原持久requestId，不能盲重派或凭同hash目录猜成功。
+## 运行配置和迁移
 
-## 会话删除与换新
+创建 Task 时固定模型名、提示词和调用额度；工具、日历、规则不固定，每次调用实时读取。所以改能力开关立即对所有现有 Task 生效，改模型或提示词则只影响新 Task。
 
-普通Task删除需确认既有持久停止标记，再隐藏列表/详情/发送，归档不等于删除。主会话不接受普通delete/cancel，而以clear-main停止旧入口并原子创建同Bot新上下文；Bot、子Task和原审计保留。stop/swap窗口结果用持久交接记录接到当前主会话，来源与去重跨连续清空/重启保持；普通cancel/root stop/实时撤权仍有效。
+旧 Task 要换模型或提示词，用显式迁移（`task-migration.mjs`）：只在没有执行、没有待处理输入、没有等待项时进行，保留原身份、历史、用量和责任记录。机器人配置更新带 `expectedVersion`，保存为不可变版本。
 
-## 工作区与动作裁决
-- 工作区来源和连接须 active，动作须属于来源能力且具有用户许可；local 由所有者隐式完整许可，外部来源保留用户 Grant/readScope。Bot 读需要当前分配 workspace.list/get，写需要 workspace.prepare_change，并分配对应 workspace:<sourceId> 资源；busy-only 仍只投影时段。单机器人可在「设置 → 高级」收窄日历和任务列表，用户 readScope 仍控制忙闲投影。
-- stdio MCP 保留独立凭证及 sources/actions/readScope、到期和撤销校验，实际权限不超过 Bot 当前分配和用户许可。凭证在「设置 → 高级」发放、列出和撤销；不再有 AgentWorkspace 面板。
-- `policy.decide()` 对读和内部协作工具直接 allow；写工具按 tool / action / sourceId / type 取最具体规则，同级 deny > ask > allow，无匹配直接执行（含删除）。已启用外部 MCP 与能力配置按 ADR-018 / ADR-022 同一路径执行，不因 annotations 获授权。删除 `switchGroup` 与 tool-groups HTTP 路由，不再在界面生成 ask 规则；`PolicyRules`、`decide()`、`setGroupMode`、`openGroup` 和审批卡保留。模型只看到当前日历/任务列表可用的工具，已委派子任务不再看到 task_assign。未登记工具拒绝，旧 preset/risk 规则不参与裁决。
-- 全局暂停把写入 allow 降为 ask，停止例行任务和事件触发，恢复后不补跑；模型/工具/token 调用预算仍独立保留。在场时按原操作和精确参数确认，本地提案保留 5 分钟；可点“以后直接做”清除该工具所在组的询问规则，暂停中和结果未知后的重做审批不提供该按钮。
-- origin 为 routine、event、detector 时遇到 ask，不出审批卡、不等待 30 分钟过期，跳过并在运行记录与结果中说明“已跳过：这一步需要你来做。”
-- 例行任务派发时实时复核 Bot active、当前读工具、来源资源及用户/连接许可；失效就取消并记录原因。仅更新 Bot 配置版本不使例行任务失效。用户提醒和内部计划的 authorizationSnapshot 不受此次简化影响。
+## 上下文、容量和压缩
 
-### 来源跟着工具集（ADR-022）
-`resource-sharing.mjs` 的 `holdsSchedule` / `grantResources` / `shareWithBots` 在分配层处理：持有 `todos` 组任一有效工具的机器人得到全部已连接日历/任务列表；`toolSets()` 与各读取方不改。飞书 bind、新同步来源和 Google `registerExternalSource` 在原事务内分发；开 `tool:todos` 与带能力创建时同样补入。
+每次调用模型前，`task-context.mjs` 按这个顺序装配：固定运行配置 → 任务目标和规则 → 当前 Skill → 人格、记忆、共享偏好 → 近期对话 → 压缩摘要。记忆是低优先级材料，不能挤掉目标、约束和当前输入。
 
-`changeConfiguration` 记录 `ToolAccess.excludedResources[botId]`：移除记排除，手动加回取消排除；重连、发现来源均跳过排除项。飞书换绑产生新 id 时旧排除不覆盖新 id。模拟日程从可分配列表与升级后的分配中移除，代码和测试保留。
+每个模型有上下文容量 `contextWindow`，没填就是 256K（256000 tokens），可填 8192 到 4000000，支持 K/M 写法（`shared/model-context.mjs`）。超出容量时在调用模型前同步压缩：
 
-生产 `server/index.mjs` 传 `r4Migration:true`，开库在旧工具组迁移之后执行 `migrateToR4`，只记一次 `r4MigratedAt`。顺序是合并组、同步 Skill 工具、分发资源、清非 preset ask、去模拟资源、更新未改过的预设说明、记标识；memoryFiles 打开后仅更新仍等于旧文案的人格。嵌入和普通测试库默认不迁移，手动备份见运行手册。
+- 复用 pi-durable 1.3.0 的 `selectCut` 和 `serializeConversation` 切分与序列化，摘要用 Pi 的结构化检查点格式（`pi-compaction.mjs`、`context-compaction.mjs`）。
+- 默认给输出留 16384 tokens，保留最近约 20000 tokens；小窗口按 20% 缩放。
+- 当前输入不压缩；工具正文截到 2000 字符，思考文本省略；原始记录和补读权限不变。
+- 压缩请求不带工具，不注入长期记忆。压缩会同时登记一个记忆整理作业（见[记忆](memory.md#自动整理)）。
 
-## 上下文与调用限制
-上下文按固定配置、任务规则、活动 Skill、近期交流、压缩摘要与按需证据装配。压缩不丢失目标、来源、未完成工作、审批、未知动作和责任信息。工具结果有界，必要时按引用读取原始结果；读取仍执行权限检查。
+工具结果超过 8KiB 时只给模型一个引用，模型用 `tool_result_read` 分页补读，补读时重新检查权限。
 
-记录模型/工具调用与 token 用量，达到额度进入“受限”等待，用户明确提额后恢复原 Task。不会通过新 Task 自动重置预算。长期文档仅限下述有来源、受限提取，不等于无限自动记忆。
+## 额度
 
-## 实时三文档记忆（T11）
-每个 Bot 独立人格与记忆，全部 Bot 共用用户偏好。人格替代当前模型提示中的旧职责描述：历史 Bot 配置仍保留，首次从现有描述初始化，之后只接受用户显式编辑，不随旧 Task 迁移重新覆盖。文档与修订/幂等回执使用新增的 Harness session 文档，不改原 Task/工作区 schemaVersion，不引入第二数据库或执行引擎。
+每个 Task 记录模型调用、工具调用和 token 用量。用完额度后 Task 进入“受限”等待，用户明确提额后在原 Task 继续。不会新建 Task 来重置额度或掩盖失败。主会话按每条输入计额。
 
-每次模型调用读最新文档；记忆/偏好是低优先级来源资料，受字数与上下文余量限制，不能挤掉目标、约束、活动 Skill 或当前输入。未来日程从当前 Task 有权访问的来源实时查询；不把日程写成长记忆或凭缺失数据推断空闲。
+## 协作
 
-生产入口启用约 30 秒空闲合并批处理；嵌入/测试 store 默认关闭。提取器没有工具 schema，独立记录调用额度，不消耗或重置业务 Task 调用预算、不重放业务工具、不阻塞原回复。默认按 UTC 日界最多 20 次调用、120000 token 预留预算；每批最多 8 条输入/12000 字符、输出最多 2048 token。额度不足、提取失败或来源校验失败保留原内容并显示待处理，不因重启重复同一未确认提取。
+| 方式 | 怎么做 |
+|---|---|
+| 委派 | `task_create` / `task_assign` 建父子 Task；目标机器人用自己的能力和权限执行（`collaboration.mjs`） |
+| 验收和返工 | 主管接受结果或带意见返工，最多两次，超过交给用户（`review-tools.mjs`） |
+| 阻塞上报 | 缺信息时 `report_blocker`，逐级上报；需要确认的动作只能由用户批准，主管不能代批（`blockers.mjs`） |
+| 群聊 | 管理员机器人接收普通消息；单目标 @ 从那条消息 fork 必要上下文；结果带原来源，不把定向材料广播给其他成员（`groups.mjs`） |
+| 共享信息 | `shared_publish` / `shared_read` 带来源，回读时实时检查（`shared-information.mjs`） |
+| 主管管理机器人 | `bot_manage` 创建、配置、停用机器人；不能停用主管自己（`chief-management.mjs`） |
 
-只接纳本 Bot 认证用户私聊、已经消费的来源 Entry；拒绝群聊、委派、外部/自动化资料、无来源猜测、日程和凭证。候选逐条引用真实来源、限制大小；共享偏好版本冲突只能有界重读合并不重叠条目，不能复活用户纠正/删除的旧事实。人格不由模型更新；新旧模型 key、API token 及常见凭证形态均过滤，读取当前文档与历史也不回显凭证。
+主会话派出去的任务，其确认、补充、结束以系统卡显示在主会话里；结束概述在下一轮带入。
 
-## 文件式记忆（R2）
-人格、记忆和共享偏好的内容真源是数据目录下 `bot-workspaces/` 的 Markdown 文件：每 Bot 的 `bots/<id>/PROFILE.md`、`bots/<id>/MEMORY.md`，全局的 `shared/USER.md`。用户可以直接用编辑器改。上节的 Harness 文档改作台账，继续保存版本、修订、来源、防复活标记、回执和提取水位；新增的 `pidot.bot-memory.file` 记录每个文件最后写回的版本和哈希。
+## 会话删除和换新
 
-只有 `memory-files.mjs` 的对账读写这些文件，每个文件一个串行队列。对账发生在启动时、每次模型调用注入前、记忆读取和编辑前、记忆修订提交后和关闭时，不用 `fs.watch`。手改以最后写回的版本为 base 三方合并进台账，同 id 以文件为准，记为 `actor: 'file'`；台账较新时原子写回。刚改过的文件先等两次读取一致再导入，避免把编辑器保存到一半的空文件当成全部删除。
+普通会话删除先写持久停止标记，再隐藏列表、详情和发送入口；审计不物理擦除。归档只是隐藏。主会话用“清空并开始新会话”（clear-main）：停掉旧入口，原子创建同一机器人的新上下文；机器人、独立子 Task 和审计保留，之后到达的子任务结果接到新的主会话（`session-lifecycle.mjs`、`main-session.mjs`）。
 
-文件手改只改内容，不写防复活标记；含密钥照常导入，读取脱敏和注入过滤不变。凭证检查只扫新写入的内容，已存内容里的 key 不挡后续提取和编辑。文件超限或无法解析时整份不用，Agent 只收到一行提示；对账出错时对话照常，用台账内容注入。`PIDOT_MEMORY_FILES=0` 回到只用台账，见[运行手册](../engineering/operations.md#文件式记忆的开关与回滚r2)和 ADR-019。
+## 副作用和恢复
 
-## Google 连接（R3）
-Calendar、Tasks 是 workspace-service 的两个原生 provider 适配（`workspace-google-calendar.mjs`、`workspace-google-tasks.mjs`），进 Event/Todo 文档，经 `workspace-sync` 后台重扫，日历视图和提醒照常使用；Bot 经 `workspace.*` 工具读写，对话路径由 `workspace-mcp-host.mjs` 按来源是否仍有效放行。Gmail、Drive、Docs、Sheets 经 workspace-mcp：一条凭据来源为“取自 Google 连接”的外部 MCP 连接，每次调用由 `google.accessToken()` 取当前令牌作 bearer，传输层 401 时作废该令牌并重试一次，工具已执行后不重试。令牌只在服务端凭据文件和内存里。
+恢复复用原 Task、等待项、输入、Operation、确认和累计用量，不创建替代执行。
 
-外部连接（飞书、Google）连上即获得用户许可；开着「日程与待办」的机器人自动拿到全部日历和任务列表，高级收窄跨重连保留。日程和待办共用 `todos` 工具集（ADR-022），写入直接执行，全局暂停时确认。见 ADR-020 / ADR-021 / ADR-022 与[运行手册](../engineering/operations.md#google-连接与-workspace-mcpr3)。
+1. 明确成功的动作不重复执行。
+2. 结果不确定时，优先按工具契约查询；查不到不代表没发生。
+3. 只有工具明确支持幂等、且原参数仍成立时，才按原标识有限重试。
+4. 没有可靠查询或幂等保证时保留 `unknown`，等人核查。
+5. 每次恢复、查询、派发都重新检查权限、额度、取消和原确认。
 
-## 协作、群聊与 Chief
-- Chief 普通创建/配置/停用及已授权配置能力按同一规则直接执行，全局暂停时确认；可配置自己的工具与来源，不能停用 Chief 自身，已停用 Bot 不自动重新启用。管理仍校验身份、目标、版本、精确参数及幂等回执。
-- 委派记录父子关系、主管、执行者、目标与结果来源；目标 Bot 独立检查能力和授权。
-- 群管理员接收普通消息，单目标 @ 从明确消息点 fork 必要上下文；结果回报保留原身份与来源，不能把定向材料广播给无权成员。
-- 阻塞逐级上报；需要确认的动作必须由认证用户按精确参数批准，主管不能代批。
-- 提交结果后由主管验收或带意见返工，返工上限两次，超限交用户；保留原提交与版本化责任记录。
-- 工作控制、暂停/停止与 Bot 停用不等于删除 Task，也不吞掉迟到结果。
+原生 bash/write/edit 也先持久登记派发意图；进程中断后没有回执就返回 `NATIVE_OUTCOME_UNKNOWN`，跳过原计划的剩余步骤，不自动重放。
 
-## 副作用与恢复
-恢复复用原 Task、等待项、输入、Operation、审批与累计用量，不创建替代执行来掩盖失败。
+## 源码入口
 
-1. 明确已成功的动作不重复执行。
-2. 结果不确定时优先按工具契约可靠查询；查询不到不代表未发生。
-3. 仅工具明确支持稳定幂等且窗口/原参数仍成立时才按原标识有限恢复。
-4. 无可靠查询或幂等保证时保留 unknown，等待人工核查；不通用自动重试。
-5. 每次恢复、查询和派发重新检查权限、预算、取消、有效期与原批准。已经发生的副作用保留真实回执。
-
-运行时的受限重试不能推导出飞书 provider 具有原子 CAS 或 exactly-once 保证。支付、任意 shell/HTTP 自动任务等不属于当前工作区承诺。
-
-## 源码职责
-[任务装配](../../my-app/server/tasks.mjs)、[模型循环](../../my-app/server/model-reply.mjs)、[上下文](../../my-app/server/task-context.mjs)、[配置迁移](../../my-app/server/task-migration.mjs)、[协作](../../my-app/server/collaboration.mjs)、[工具](../../my-app/server/tools.mjs)是实现核查入口。接口见 [HTTP](../interfaces/http-api.md)，日常恢复见 [运行手册](../engineering/operations.md)。
+[tasks.mjs](../../my-app/server/tasks.mjs)（装配和循环）· [model-reply.mjs](../../my-app/server/model-reply.mjs) · [task-context.mjs](../../my-app/server/task-context.mjs) · [context-compaction.mjs](../../my-app/server/context-compaction.mjs) · [task-migration.mjs](../../my-app/server/task-migration.mjs) · [steering.mjs](../../my-app/server/steering.mjs) · [collaboration.mjs](../../my-app/server/collaboration.mjs) · [main-session.mjs](../../my-app/server/main-session.mjs) · [session-lifecycle.mjs](../../my-app/server/session-lifecycle.mjs)

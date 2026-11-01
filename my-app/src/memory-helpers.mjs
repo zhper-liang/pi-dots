@@ -88,3 +88,20 @@ export async function resolveMemorySourceHash(token, source, signal, fetcher = (
   if (task?.taskId !== source.taskId || typeof task.bot?.id !== 'string' || !/^[a-z][a-z0-9-]*$/.test(task.bot.id) || task.kind === 'group' || task.groupId || !Array.isArray(task.messages) || !task.messages.some(message => message.id === source.entryId)) throw unavailable()
   return `#${new URLSearchParams({ bot: task.bot.id, task: String(source.taskId), message: String(source.entryId) })}`
 }
+
+export function memoryLearningReason(job) {
+  const reasons = {
+    MEMORY_BUDGET_EXHAUSTED: '今日整理额度已用完，稍后继续',
+    MEMORY_SOURCE_INVALID: '来源已不可用，停止整理',
+    MEMORY_SOURCE_UNAVAILABLE: '来源已删除或撤权，停止整理',
+    MEMORY_INPUT_TOO_LARGE: '材料超过本批容量，等待分批处理',
+    MEMORY_FOREGROUND_PRIORITY: '优先处理当前对话，稍后继续整理',
+    MEMORY_CONFLICT_NEEDS_REVIEW: '新旧事实需要核实，已保留现有内容。',
+    MEMORY_MODEL_UNAVAILABLE: '当前模型不可用，等待恢复',
+    MEMORY_VERSION_CONFLICT: '内容已被修改，需要重新核对',
+    SKILL_LEARNING_USER_CONFLICT: '保留你回退后的方法版本',
+    MEMORY_EXTRACTION_FAILED: '本次整理未完成，等待重试',
+  }
+  const states = { pending: '等待整理', running: '正在整理', applied: '已保存整理结果', 'no-change': '没有需要保存的新内容', 'retry-wait': '等待重试', blocked: '暂时无法整理', cancelled: '已取消' }
+  return reasons[job.code] ?? states[job.state] ?? '等待核对整理状态'
+}

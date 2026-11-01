@@ -32,10 +32,10 @@
 | 定时任务 | [BotRoutines](../../my-app/src/BotRoutines.tsx)、[ScheduleWorkspace](../../my-app/src/ScheduleWorkspace.tsx)、[routines](../../my-app/src/routines.mjs) | 已有规则构建、运行和历史；创建表单仍直铺、默认 `Asia/Shanghai`、有时区输入，列表带技术字段。应复用调度，不另造 cron 引擎。 |
 | 日历/刷新 | [CalendarBoard](../../my-app/src/CalendarBoard.tsx)、[LocalWorkspace](../../my-app/src/LocalWorkspace.tsx)、[工作区导航](../../my-app/src/workspace-navigation.mjs) | 日历已有网格、编辑弹窗和卡片基础；仍有刷新按钮、`datetime-local` 及今日待办块。不能误报为“没有日历弹窗”，只改缺口。 |
 | `@` 菜单 | [App](../../my-app/src/App.tsx)、[CommandMenu](../../my-app/src/CommandMenu.tsx) | 群聊目前有常驻 Bot 复选 chip；`/` 已有上下键、Enter/Tab、Esc 交互。`@` 候选出现时机和候选范围需要独立实现。 |
-| 工具开关 | [BotRules](../../my-app/src/BotRules.tsx)、[工具组服务](../../my-app/server/tool-group-settings.mjs)、[ADR-015](../../docs/decisions/README.md#adr-015-工具组默认开开即直接做) | 当前“开/关”实际上是“直接做/先问”，不是“启用/禁用”；只改文案会造成危险的权限误解。 |
-| MCP / Skill | [Bot 详情](../../my-app/src/BotTemplatePage.tsx)、[StdioCredentials](../../my-app/src/StdioCredentials.tsx)、[SkillControls](../../my-app/src/SkillControls.tsx)、[MCP 契约](../../docs/interfaces/mcp.md) | MCP 页是 Pidot 对外提供工具的凭证管理，不是接入外部 MCP Server；Skill 列表展示注册和依赖，不等于持久的 per-Bot 能力开关。 |
+| 工具开关 | `BotRules.tsx`（已删除）、[工具组服务](../../my-app/server/tool-group-settings.mjs)、[ADR-015](../../docs/decisions/README.md#adr-015-工具组默认开开即直接做) | 当前“开/关”实际上是“直接做/先问”，不是“启用/禁用”；只改文案会造成危险的权限误解。 |
+| MCP / Skill | [Bot 详情](../../my-app/src/BotTemplatePage.tsx)、`StdioCredentials.tsx`（已删除）、[SkillControls](../../my-app/src/SkillControls.tsx)、[MCP 契约](../../docs/interfaces/mcp.md) | MCP 页是 Pidot 对外提供工具的凭证管理，不是接入外部 MCP Server；Skill 列表展示注册和依赖，不等于持久的 per-Bot 能力开关。 |
 | 新 Bot | [Bot 创建](../../my-app/src/BotCreation.tsx)、[Bot 服务](../../my-app/server/bots.mjs)、[现行产品规范](../../docs/product/system-design.md) | 现行规范允许名字模板推断描述，默认全部工具组与本地资源；与空白起点不同，旧 Bot 不能无提示地被重置。 |
-| 文件记忆 | [记忆服务](../../my-app/server/bot-memory.mjs)、[记忆运行时](../../my-app/server/bot-memory-runtime.mjs)、[运行架构](../../docs/architecture/agent-runtime.md#实时三文档记忆t11) | 当前是 Harness Document 持久人格/记忆/共享偏好，不是每 Bot 的可见文件夹；已有来源、版本、预算、凭证过滤和删除防复活，迁移必须保留。 |
+| 文件记忆 | [记忆服务](../../my-app/server/bot-memory.mjs)、[记忆运行时](../../my-app/server/bot-memory-runtime.mjs)、[运行架构](../../docs/architecture/memory.md) | 当前是 Harness Document 持久人格/记忆/共享偏好，不是每 Bot 的可见文件夹；已有来源、版本、预算、凭证过滤和删除防复活，迁移必须保留。 |
 
 ## 3. Issue 拆分与实施顺序
 

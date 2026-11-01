@@ -13,7 +13,7 @@ import { PolicyRules, addRule } from './policy.mjs'
 import { initializeConfiguration, migrateToolGroups, changeConfiguration } from './bot-configuration.mjs'
 import { inferLegacyBotRole, inferBotRole } from './bot-templates.mjs'
 import { groupTools } from './tool-groups.mjs'
-import { listBotCapabilities, setCapabilityAssignment, assertCapabilityEnabled } from './capability-assignments.mjs'
+import { listBotCapabilities, setCapabilityAssignment, assertCapabilityEnabled, assignLearnedSkill, CapabilityAssignments } from './capability-assignments.mjs'
 
 const copy = value => JSON.parse(JSON.stringify(value))
 const mcp = { id: 'mcp:fixture', kind: 'mcp', name: '测试 MCP', description: '受控假服务，不是真实连接', status: 'ready', revision: '1', toolNames: ['mcp_fixture_read', 'mcp_fixture_write'], requirements: [] }
@@ -69,7 +69,7 @@ test('R1-08 static enable/disable includes read tools and shares connected resou
 test('R1-08 CAS shares the configuration version and receipt replays survive newer changes and restart', async t => {
   const f = await fixture(t)
   const initial = await f.commit(tx => listBotCapabilities(tx, 'todo'))
-  const input = { requestId: 'stable-capability-request', capabilityId: 'tool:history', expectedRevision: initial.revision, expectedCatalogRevision: 'static-1', enabled: true }
+  const input = { requestId: 'stable-capability-request', capabilityId: 'tool:reports', expectedRevision: initial.revision, expectedCatalogRevision: 'static-1', enabled: true }
   const first = await f.commit(tx => setCapabilityAssignment(tx, 'todo', input))
   await assert.rejects(f.commit(tx => setCapabilityAssignment(tx, 'todo', { ...input, requestId: 'different-request' })), { code: 'CONFIG_VERSION_CONFLICT' })
   const current = await f.store.getBotConfiguration('todo')
@@ -84,7 +84,7 @@ test('R1-08 CAS shares the configuration version and receipt replays survive new
 
 test('R1-08 concurrent capability updates choose one complete revision, failure rolls back', async t => {
   const f = await fixture(t), view = await f.commit(tx => listBotCapabilities(tx, 'todo'))
-  const results = await Promise.allSettled(['history', 'todos'].map(id => f.commit(tx => setCapabilityAssignment(tx, 'todo', {
+  const results = await Promise.allSettled(['reports', 'todos'].map(id => f.commit(tx => setCapabilityAssignment(tx, 'todo', {
     requestId: `concurrent-${id}`, expectedRevision: view.revision, expectedCatalogRevision: 'static-1', capabilityId: `tool:${id}`, enabled: true
   }))))
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
@@ -158,12 +158,12 @@ test('R1-08 missing auth never becomes ready, disabled and empty connections can
 
 test('R1-08 malformed/forged aliases, prototype ids, stopped Bots, no-op request conflicts fail closed', async t => {
   const f = await fixture(t)
-  for (const item of [{ ...mcp, toolNames: ['bot_manage'] }, { ...mcp, toolNames: ['task_create'] }, { ...mcp, toolNames: ['workspace.list'] }, { ...skill, toolNames: ['workspace.list'] }])
+  for (const item of [{ ...mcp, toolNames: ['bot_manage'] }, { ...mcp, toolNames: ['task_create'] }, { ...mcp, toolNames: ['workspace.list'] }, { ...mcp, toolNames: ['task_history_read'] }, { ...mcp, toolNames: ['tool_result_read'] }, { ...skill, toolNames: ['workspace.list'] }])
     await assert.rejects(f.commit(tx => listBotCapabilities(tx, 'todo', { catalog: [item] })), { code: 'INVALID_CAPABILITY_CATALOG' })
   const view = await f.commit(tx => listBotCapabilities(tx, 'todo'))
-  await assert.rejects(f.commit(tx => setCapabilityAssignment(tx, 'todo', { requestId: 'constructor', capabilityId: 'tool:history', enabled: true, expectedRevision: view.revision, expectedCatalogRevision: 'static-1' })), { code: 'INVALID_CAPABILITY_ASSIGNMENT' })
+  await assert.rejects(f.commit(tx => setCapabilityAssignment(tx, 'todo', { requestId: 'constructor', capabilityId: 'tool:reports', enabled: true, expectedRevision: view.revision, expectedCatalogRevision: 'static-1' })), { code: 'INVALID_CAPABILITY_ASSIGNMENT' })
   await f.commit(async tx => { (await tx.doc(BotDirectory)).items.find(item => item.id === 'todo').status = 'inactive' })
-  await assert.rejects(set(f, 'todo', 'tool:history', true), { code: 'BOT_INACTIVE' })
+  await assert.rejects(set(f, 'todo', 'tool:reports', true), { code: 'BOT_INACTIVE' })
 })
 
 test('R1-08 marker migration preserves every live assignment, revocation, resource, rule and v1 audit', () => {
@@ -207,4 +207,21 @@ test('R1-08 both old receipt generations replay inferred names, no regrant or pe
     assert.deepEqual(replay.bot, old)
     assert.throws(() => createDirectoryBot(directory, parseBotCreation({ name: parsed.name, description: 'changed', requestId: parsed.requestId })), { code: 'BOT_REQUEST_CONFLICT' })
   }
+})
+
+
+test('learning assignment retries preserve user disable and retained unbound provenance', async t => {
+  const f = await fixture(t)
+  const learned = { ...skill, id: 'skill:learned-method', ownerBotId: 'todo', requirements: [] }
+  await f.commit(tx => assignLearnedSkill(tx, 'todo', learned.id, [learned]))
+  assert.equal((await f.commit(tx => listBotCapabilities(tx, 'todo', { catalog: [learned] }))).items.find(item => item.id === learned.id).enabledForBot, true)
+  await set(f, 'todo', learned.id, false, [learned])
+  await f.commit(tx => assignLearnedSkill(tx, 'todo', learned.id, [learned]))
+  assert.equal((await f.commit(tx => listBotCapabilities(tx, 'todo', { catalog: [learned] }))).items.find(item => item.id === learned.id).enabledForBot, false)
+  // A retained unbinding record must also block auto-assignment, even if its selection is absent.
+  await f.commit(async tx => { const state = await tx.doc(CapabilityAssignments); delete state.skills.todo[learned.id] })
+  await f.commit(tx => assignLearnedSkill(tx, 'todo', learned.id, [learned]))
+  assert.equal((await f.commit(tx => listBotCapabilities(tx, 'todo', { catalog: [learned] }))).items.find(item => item.id === learned.id).enabledForBot, false)
+  await set(f, 'todo', learned.id, true, [learned])
+  assert.equal((await f.commit(tx => listBotCapabilities(tx, 'todo', { catalog: [learned] }))).items.find(item => item.id === learned.id).enabledForBot, true)
 })

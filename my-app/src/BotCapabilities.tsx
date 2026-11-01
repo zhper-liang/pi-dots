@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import CapabilityPicker from './CapabilityPicker'
 import { visibleCapabilities, type CapabilityItem } from './bot-capabilities.mjs'
 import { useWorkspaceRefresh } from './useWorkspaceRefresh'
+import { publishCapabilityChange } from './capabilities-changed.mjs'
 
 type BotCapability = CapabilityItem & { revision: string; enabledForBot: boolean; partiallyEnabled: boolean }
 type Capabilities = { botId: string; revision: string; items: BotCapability[] }
@@ -32,6 +33,7 @@ function BotCapabilitiesPanel({ token, botId, readOnly, active }: Props) {
   const [readError, setReadError] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [uncertain, setUncertain] = useState<string | null>(null)
+  const [notice, setNotice] = useState('')
   const retry = useRef<Mutation | null>(null)
   const saving = useRef(false)
   const live = useRef(true)
@@ -48,10 +50,10 @@ function BotCapabilitiesPanel({ token, botId, readOnly, active }: Props) {
   }
 
   function failedRead() {
-    if (live.current) setReadError('能力列表没读到，点「重新读取」。')
+    if (live.current) setReadError('能力状态暂未同步，将自动重试。')
   }
 
-  useWorkspaceRefresh({
+  const { refresh } = useWorkspaceRefresh({
     scopeKey: JSON.stringify([token, botId]), active: active && busy === null && uncertain === null,
     load: ({ signal, isCurrent }) => load(signal, isCurrent).then(() => {}),
     onError: failedRead,
@@ -69,6 +71,7 @@ function BotCapabilitiesPanel({ token, botId, readOnly, active }: Props) {
     retry.current = mutation
     setBusy(mutation.capabilityId)
     setError('')
+    setNotice('')
     try {
       await request(path, token, mutation)
       if (!live.current) return
@@ -76,6 +79,8 @@ function BotCapabilitiesPanel({ token, botId, readOnly, active }: Props) {
       if (!live.current) return
       retry.current = null
       setUncertain(null)
+      setNotice('已保存，当前会话从下一步使用最新能力。')
+      publishCapabilityChange({ botId })
     } catch (caught) {
       if (!live.current) return
       const failure = caught as Error & { definitive?: boolean; conflict?: boolean }
@@ -107,12 +112,13 @@ function BotCapabilitiesPanel({ token, botId, readOnly, active }: Props) {
     <h2>能力</h2>
     {readOnly && <p className="bot-edit-hint">这个机器人已停用，只能查看。</p>}
     {!view && !readError && <p role="status" className="bot-edit-hint">正在读取…</p>}
-    {view && <CapabilityPicker items={items} enabled={items.filter(item => item.enabledForBot).map(item => item.id)} partial={items.filter(item => item.partiallyEnabled).map(item => item.id)} disabled={readOnly || !active || !!readError} pendingId={busy ?? uncertain} onToggle={toggle} />}
+    {view && <CapabilityPicker items={items} enabled={items.filter(item => item.enabledForBot).map(item => item.id)} partial={items.filter(item => item.partiallyEnabled).map(item => item.id)} disabled={readOnly || !active || !!readError} pendingId={busy ?? uncertain} onToggle={toggle} sourceContext={{ token, botId, active, readOnly, onChanged: () => publishCapabilityChange({ botId }) }} />}
+    {notice && <p role="status" className="bot-edit-hint">{notice}</p>}
     {readError && <p role="alert" className="bot-edit-error">{readError}</p>}
     {error && <p role="alert" className="bot-edit-error">{error}</p>}
     <div className="capability-retry">
       {uncertain && <button type="button" disabled={readOnly || !active || busy !== null} onClick={() => { if (retry.current) void save(retry.current) }}>重试</button>}
-      {!uncertain && (error || readError) && <button type="button" disabled={!active || busy !== null} onClick={() => { setError(''); void load().catch(failedRead) }}>重新读取</button>}
+      {!uncertain && (error || readError) && <button type="button" disabled={!active || busy !== null} onClick={() => { setError(''); void refresh(true) }}>重新读取</button>}
     </div>
   </section>
 }

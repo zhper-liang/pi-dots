@@ -1,3 +1,10 @@
+import { memoryTaskSourceAllowed, memoryEvidence, evidenceFingerprint, successfulMemoryTool } from './memory-evidence.mjs'
+import { learningState, evidenceKey, enqueueMemoryEvidence } from './memory-learning-queue.mjs'
+import { executeSessionHistory, SESSION_HISTORY_TOOLS } from './history-search.mjs'
+import { createSkillLearningService } from './skill-learning.mjs'
+import { assignLearnedSkill } from './capability-assignments.mjs'
+import { MEMORY_TOOLS, executeMemoryTool } from './memory-tools.mjs'
+import { createNativeRuntime, NATIVE_TOOLS } from './native-tools.mjs'
 import { migrateToR4, PRESET_TEXT } from './r4-migration.mjs'
 import { createCapabilityManagement, CapabilitySetups } from './capability-management.mjs'
 import { CAPABILITY_MANAGEMENT_TOOLS, parseCapabilityManagementCall } from './capability-management-tools.mjs'
@@ -29,6 +36,7 @@ import { BLOCKER_ACTIONS } from './blocker-actions.mjs'
 import { sharedInformationService } from './shared-information.mjs'
 import { SHARED_TOOLS } from './shared-tools.mjs'
 import { admitNextInput } from './task-creation.mjs'
+import { parkQuestionInput, restoreQuestionInput } from './question-runtime.mjs'
 import { collaborationOverview } from './collaboration-overview.mjs'
 import { Collaboration, collaborationService, waitForChildren, publishChildResult, acknowledgeBlockerNotice, watchRootStop } from './collaboration.mjs'
 import { COLLABORATION_TOOLS } from './collaboration-tools.mjs'
@@ -38,7 +46,7 @@ import { registeredPolicyTool, AUTOMATION_PAUSE_TOOL, decide, unattended, setAut
 import { MainSessions, TaskDigest, mainSessionFor, createMainSession, ensureMainSession, mainSessionService, mainInputModel, markMainChildOver, mirrorToMain, claimDigest, settleDigest, beginMainInput, projectMainCard, MAIN_SYSTEM_PROMPT, MAIN_DELEGATION_PROMPT } from './main-session.mjs'
 import { MAIN_TOOLS, ROUTINE_PROPOSE_TOOL, ROUTINE_TIMEZONE, ROUTINE_CALL_LIMITS, FINDING_ASSIST_LIMITS, ASSIST_READ_TOOLS } from './main-tools.mjs'
 import { normalizeScheduleRule } from './workspace-schedule-rules.mjs'
-import { workspaceShareAllowed, workspaceHistoryAllowed } from './workspace-grants.mjs'
+import { workspaceDelegatedResultAllowed, workspaceHistoryAllowed } from './workspace-grants.mjs'
 import { Findings, createDetectorWorker, DETECTOR_LABELS, DETECTORS, dayKey, dayStart, dueInstant } from './detectors.mjs'
 import { markDirty } from './detector-state.mjs'
 import { summarizeApproval, summarizeOperation } from './inbox.mjs'
@@ -66,7 +74,7 @@ import { createTestReply } from './test-reply.mjs'
 import { createModelReply, modelParameters, ModelReplyError, MODEL_ERRORS } from './model-reply.mjs'
 import { listBots } from './bots.mjs'
 import { migrationApi } from './task-migration.mjs'
-import { configurationApi, initializeConfiguration, createConfiguredBot, migrateToolGroups } from './bot-configuration.mjs'
+import { configurationApi, initializeConfiguration, createConfiguredBot, migrateToolGroups, migrateMainAssignments } from './bot-configuration.mjs'
 import { CapabilityAssignments, listBotCapabilities, listCapabilityCatalog, setCapabilityAssignment } from './capability-assignments.mjs'
 import { BotDirectory, parseBotCreation, deactivateDirectoryBot, assertBotActive } from './bot-directory.mjs'
 import { inferBotRole } from './bot-templates.mjs'
@@ -76,7 +84,7 @@ import { createBotMemoryRuntime, MemoryExtraction, memorySourceAllowed } from '.
 import { MemoryFileLedger } from './memory-files.mjs'
 import { createMemoryFileStore } from './memory-file-store.mjs'
 import { openMemoryFiles } from './memory-files-migration.mjs'
-import { buildTaskContext, injectMemoryContext } from './task-context.mjs'
+import { withCurrentCapabilities, buildTaskContext, injectMemoryContext } from './task-context.mjs'
 import { boundToolResult, readToolResult, RESULT_READ_TOOL, ToolResults } from './tool-results.mjs'
 import { ToolAccess, CallUsage, CALENDAR_TOOL, toolSets, toolDefinitions, toolCatalog, checkToolCall,
   readMockSchedule, validSchedule, readMockEvent, validEventDetail,
@@ -128,11 +136,19 @@ async function waitForInput(runtime, ctx) {
 }
 
 async function finishReply(tx, runtime, card, entryId, { mode, failed = false, content, execution, compactionPlan, errorCode, limited }) {
+  // Harness table reads precede appendEntry. Prepare result evidence before the final reply/mirror writes.
+  const memoryResultRefs = []
+  if (!failed && !limited && card.mainParent) {
+    let cursor
+    do { const page = await tx.scanEntries({ conversationId: card.conversationId, order: 'ascending' }, 100, cursor); for (const item of page.items) if (item.byTaskId === card.taskId && successfulMemoryTool(item)) memoryResultRefs.push({ taskId: card.taskId, entryId: item.id }); cursor = page.next } while (cursor)
+  }
   if(!failed && !limited) await acknowledgeBlockerNotice(tx,runtime.taskId,entryId)
   const liveCard = await tx.doc(TaskCard, runtime.taskId)
   const steering = await tx.doc(ChatSteering, runtime.taskId)
+  const inputCancelled = errorCode === 'INPUT_CANCELLED'
+  if (inputCancelled) steering.pending = steering.pending.filter(item => item.targetInputId !== entryId)
   const inactive = (await tx.doc(BotDirectory)).items.find(b => b.id === card.bot.id)?.status === 'inactive'
-  const unresolvedChildren=(await tx.doc(Collaboration)).items.filter(r=>r.parentTaskId===card.taskId&&r.parentInputId===entryId&&(!r.consumedEntryId || r.reviewRequired && !['accepted','cancelled','failed'].includes(r.businessStatus)))
+  const unresolvedChildren=inputCancelled ? [] : (await tx.doc(Collaboration)).items.filter(r=>r.parentTaskId===card.taskId&&r.parentInputId===entryId&&(!r.consumedEntryId || r.reviewRequired && !['accepted','cancelled','failed'].includes(r.businessStatus)))
   if (card.kind === 'group') {
     const rows=(await tx.doc(Collaboration)).items.filter(r=>r.parentTaskId===card.taskId&&r.parentInputId===entryId&&r.result)
     if(rows.length) content = rows.map(r=>`【原群消息 #${entryId} · childTaskId=${r.childTaskId} · task_id=${r.childTaskId} · 修订 #${r.result.revision} · ${r.businessStatus==='accepted'?'主管已验收':r.result.status==='submitted'?'submitted：待主管验收，非accepted':r.result.status}】`).join('\n')+'\n'+content
@@ -154,7 +170,7 @@ async function finishReply(tx, runtime, card, entryId, { mode, failed = false, c
   // PLAN §8.1: a main session consumes its digest only with a committed reply; a derived Task
   // is over once its first brief input finished (P-21).
   if (!limited && card.kind === 'main') await settleDigest(tx, card.taskId, entryId, failed)
-  if (!limited && liveCard.mainParent?.briefEntryId === entryId) await markMainChildOver(tx, liveCard, failed ? 'failed' : 'succeeded', content)
+  if (!limited && liveCard.mainParent?.briefEntryId === entryId) await markMainChildOver(tx, liveCard, failed ? 'failed' : 'succeeded', content, memoryResultRefs)
   slot.entryId = null
   // Save the receipt and promote exactly one FIFO message atomically. Limits keep
   // the original input waiting; ordinary queued messages cannot resume it.
@@ -255,7 +271,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
       if (!check.ok) { await saveApprovalReceipt(tx, card, item, check); return next }
       await assertNotCancelled(tx, card.taskId, await tx.task(card.taskId))
       await collaboration.guard(tx, card.taskId)
-      const verdict = await decide(tx, { botId: card.bot.id, tool: call.name }, { externalTool: external })
+      const verdict = await decide(tx, { botId: card.bot.id, tool: call.name, args: call.arguments }, { externalTool: external })
       if (verdict.effect === 'deny') { await saveApprovalReceipt(tx, card, item, failure('POLICY_DENIED', '当前规则禁止该外部操作。')); return next }
       const operation = { id: randomUUID(), taskId: card.taskId, approvalId, inReplyTo: entryId, binding: item.binding,
         toolName: call.name, arguments: structuredClone(call.arguments), createdAt: new Date().toISOString(), retryable: false }
@@ -448,7 +464,9 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
       },
       awaitBlocker: async (task, runtime, ctx) => {
         const { blockerId, entryId } = task.state.checkpoint
-        await waitForBlocker(runtime, blockerId, ctx)
+        let questionScope
+        await runtime.commit(async tx => { questionScope = (await tx.doc(TaskBlockers, runtime.taskId)).items.find(item => item.id === blockerId)?.rootWorkId }, ctx)
+        await waitForBlocker(runtime, blockerId, ctx, questionScope ? null : ChatQueue)
         await runtime.commit(async (tx) => {
           if (await isCancelled(tx, runtime.taskId)) { await archiveCancelledTask(tx, runtime.taskId); return cancelledOutcome() }
           const state = await tx.doc(TaskBlockers, runtime.taskId)
@@ -456,9 +474,14 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           await assertBotActive(tx, card.bot.id)
           await guardBlocker(tx,{TaskCard,ChatInput,bots,collaboration},runtime.taskId)
           const item = state.items.find((item) => item.id === blockerId)
+          if (item?.status === 'pending' && !item.rootWorkId && (await tx.doc(ChatQueue, runtime.taskId)).entryIds.length) {
+            await parkQuestionInput(tx, card, item, { ChatInput, ChatQueue, admitNextInput, TaskCard })
+            return { status: 'running', checkpoint: { phase: 'awaitInput', lastInputId: entryId, lastOutcome: 'question-parked' } }
+          }
+          if (item?.status === 'cancelled' && item.answer?.action === 'cancel') return finishReply(tx, runtime, card, entryId, { mode: card.parameters.mode, failed: true, errorCode: 'INPUT_CANCELLED', content: '已取消这次请求。' })
           const answer = item?.answer ? await tx.entry(item.answer.id) : null
           if (!['pending', 'running'].includes(record.state.status) || record.state.checkpoint?.blockerId !== blockerId ||
-            item?.status !== 'resolved' || item.taskId !== card.taskId || item.conversationId !== card.conversationId || item.inReplyTo !== entryId ||
+            !['resolved', 'superseded', 'skipped'].includes(item?.status) || item.taskId !== card.taskId || item.conversationId !== card.conversationId || item.inReplyTo !== entryId ||
             (await tx.doc(ChatInput, runtime.taskId)).entryId !== entryId || answer?.kind !== 'pidot.blocker-resolved' ||
             answer.conversationId !== card.conversationId || !['authenticated-user','supervisor'].includes(answer.data.source) ||
             answer.data.taskId !== card.taskId || answer.data.blockerId !== blockerId || answer.data.inReplyTo !== entryId ||
@@ -473,7 +496,10 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           const card = await tx.doc(TaskCard, runtime.taskId)
           await assertBotActive(tx, card.bot.id)
           // Main session input boundary: per-input budget and permission refresh (D-04).
-          if (card.kind === 'main') await beginMainInput(tx, card, entryId, { TaskCard })
+          const restored = await restoreQuestionInput(tx, card, entryId)
+          const question = (await tx.doc(TaskBlockers, runtime.taskId)).items.find(item => item.inReplyTo === entryId && item.answer?.action === 'cancel')
+          if (question) return finishReply(tx, runtime, card, entryId, { mode: card.parameters.mode, failed: true, errorCode: 'INPUT_CANCELLED', content: '已取消这次请求。' })
+          if (!restored && card.kind === 'main') await beginMainInput(tx, card, entryId, { TaskCard })
           return { status: 'running', checkpoint: { phase: 'reply', entryId } }
         }, ctx)
       },
@@ -546,7 +572,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                 const source = archive?.documents[TaskCard.definition.kind] ?? await tx.doc(TaskCard, item.taskId)
                 if (source.bot.id !== card.bot.id || source.configRef.botId !== source.bot.id || record.input.botId !== source.bot.id ||
                   (await tx.conversation(source.conversationId))?.owner?.taskId !== item.taskId) continue
-                digestVisibility.set(item.taskId, workspaceShareAllowed(source, card, access) && await workspaceHistoryAllowed(tx, source, toolSets(source, bots, access)))
+                digestVisibility.set(item.taskId, workspaceDelegatedResultAllowed(source, card, access) && await workspaceHistoryAllowed(tx, source, toolSets(source, bots, access)))
               }
             }
             modelContext = await buildTaskContext(tx, card, entryId, { bots, skillDirectory })
@@ -590,6 +616,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
               // delegate again (COLLABORATION_DEPTH_DENIED), so it is not offered task_assign.
               const definitions = toolDefinitions(modelVisible(displayed, resources).filter(n => !(card.collaboration && n === 'task_assign')), { externalTools })
               if (definitions.length) modelContext.tools = definitions
+              modelContext.systemPrompt = withCurrentCapabilities(modelContext.systemPrompt, definitions.map(tool => tool.name), resources)
               await runtime.commit(async (tx) => {
                 const usage = await tx.doc(CallUsage, runtime.taskId)
                 if (task.state.checkpoint.limited) throw new CallLimitError(task.state.checkpoint.limited)
@@ -737,6 +764,13 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
           }
           const call = calls[callIndex]
           if (!call) throw new Error('Missing tool call')
+          if (task.state.checkpoint.inFlight?.kind === 'native-tool') {
+            await appendToolReceipt(tx, { card, call, entryId, turnId }, { ok: false,
+              error: { code: 'NATIVE_OUTCOME_UNKNOWN', message: '原生操作已登记派发，但没有保存结果；请核对实际状态，不自动重复执行。', retryable: false } })
+            for (const skipped of calls.slice(callIndex + 1)) await appendToolReceipt(tx, { card, call: skipped, entryId, turnId }, { ok: false,
+              error: { code: 'TOOL_SKIPPED_UNKNOWN', message: '前一步结果未确认，跳过旧计划剩余调用；请核对状态后重新规划。' } })
+            return { status: 'running', checkpoint: { phase: 'reply', entryId } }
+          }
           const usage = await tx.doc(CallUsage, runtime.taskId)
           const limits = callLimits(card.parameters)
           const sets = toolSets(card, bots, await tx.doc(ToolAccess))
@@ -789,7 +823,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                 const inputEntry = await tx.entry(entryId)
                 if ([CALENDAR_WRITE_TOOL, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) && !calendarToolMatches(inputEntry?.data.calendarCommand, call.name, args)) throw new TaskInputError(403, 'CALENDAR_COMMAND_MISMATCH', '模型写入参数必须与图形提案精确一致。')
                 const external = sets.externalTools?.find(tool => tool.name === call.name)
-                const writeVerdict = external ? await decide(tx, { botId: card.bot.id, tool: call.name }, { externalTool: external }) : [CALENDAR_WRITE_TOOL, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) ? await decide(tx, { botId: card.bot.id, tool: call.name, origin: card.origin ?? (card.scheduledWorkflow ? 'routine' : 'user') }) : null
+                const writeVerdict = external ? await decide(tx, { botId: card.bot.id, tool: call.name, args: call.arguments }, { externalTool: external }) : [CALENDAR_WRITE_TOOL, FEISHU_CREATE_TOOL, ...FEISHU_MUTATION_TOOLS].includes(call.name) ? await decide(tx, { botId: card.bot.id, tool: call.name, origin: card.origin ?? (card.scheduledWorkflow ? 'routine' : 'user') }) : null
                 if (writeVerdict?.effect === 'deny') throw new TaskInputError(403, 'POLICY_DENIED', '规则禁止该动作。')
                 const isSchedule = call.name === CALENDAR_TOOL
                 if (replay && !WORKSPACE_TOOLS.includes(call.name)) {
@@ -803,6 +837,13 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                     request = { card: JSON.parse(JSON.stringify(card)), call: structuredClone(call), entryId, turnId, callIndex, callCount: calls.length, remainingCalls: calls.slice(callIndex + 1).map(call => structuredClone(call)), capabilityManagement: true }
                     return { status: 'running', checkpoint: { phase: 'tools', entryId, turnId, callIndex, inFlight: { kind: 'capability-management', toolName: call.name } } }
                   }
+                } else if ((call.name === 'memory_review' || MEMORY_TOOLS.includes(call.name))) {
+                  result = await managementHooks.memory.execute(tx, card, call, entryId)
+                } else if (NATIVE_TOOLS.includes(call.name)) {
+                  request = { card: JSON.parse(JSON.stringify(card)), call: structuredClone(call), args, native: true,
+                    entryId, turnId, callIndex, callCount: calls.length, limit }
+                  return { status: 'running', checkpoint: { phase: 'tools', entryId, turnId, callIndex,
+                    inFlight: { kind: 'native-tool', callId: call.id, toolName: call.name } } }
                 } else if (external) {
                   result = await requestManagementApproval(tx, card, call, entryId, turnId,
                     payloadHash(['external-mcp', call.name, args, external.catalogRevision]), null, call.name, false,
@@ -853,6 +894,8 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                   }
                 } else if (call.name === BLOCKER_TOOL) {
                   result = await reportBlocker(tx, card, args, entryId, turnId, call.id)
+                } else if (SESSION_HISTORY_TOOLS.includes(call.name)) {
+                  result = await managementHooks.history.execute(tx, card, call, entryId)
                 } else if (call.name === HISTORY_TOOL) {
                   result = await readTaskHistory(tx, card, args, entryId, sets)
                 } else if (call.name === RESULT_READ_TOOL) {
@@ -932,7 +975,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
               call: request.call, displayed: [request.call.name], sets: toolSets(request.card, bots, await tx.doc(ToolAccess)), priorEventIds: args.eventId ? [args.eventId] : [] })
             // Invocation starts at this serialized permission boundary, before another revocation can commit.
             // Do not hold the transaction while waiting for the read transport.
-            if (permitted.ok) pendingData = () => dispatchForBot(request.card.bot.id, runtime.signal, signal => WORKSPACE_TOOLS.includes(request.call.name) ? workspaceMcp(runtime.taskId, request.call.name, args, { signal }) : FEISHU_TOOLS.includes(request.call.name) ? feishu.read(request.call.name, args, { signal, guard: () => feishuReadGuard(request) }) : isSchedule ? toolImpl(args, { signal }) : eventImpl(args, { signal }), async tx => {
+            if (permitted.ok) pendingData = () => dispatchForBot(request.card.bot.id, runtime.signal, signal => request.native ? managementHooks.native(request.call, { botId: request.card.bot.id, signal }) : WORKSPACE_TOOLS.includes(request.call.name) ? workspaceMcp(runtime.taskId, request.call.name, args, { signal }) : FEISHU_TOOLS.includes(request.call.name) ? feishu.read(request.call.name, args, { signal, guard: () => feishuReadGuard(request) }) : isSchedule ? toolImpl(args, { signal }) : eventImpl(args, { signal }), async tx => {
               await assertNotCancelled(tx, runtime.taskId, await tx.task(runtime.taskId))
               await collaboration.guard(tx, runtime.taskId)
               const live = checkToolCall({ card: request.card, record: await tx.task(runtime.taskId), conversation: await tx.conversation(request.card.conversationId), call: request.call, displayed: [request.call.name], sets: toolSets(request.card, bots, await tx.doc(ToolAccess)), priorEventIds: args.eventId ? [args.eventId] : [] })
@@ -945,13 +988,13 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
             if (received.failed) throw new Error('Read transport failed')
             const data = received.data
             const valid = WORKSPACE_TOOLS.includes(request.call.name) ? data !== undefined : FEISHU_TOOLS.includes(request.call.name) ? data?.source?.resource === args.resource : isSchedule ? validSchedule(data, args) : validEventDetail(data, args)
-            result = valid ? { ok: true, data } : data === null && !isSchedule
+            result = request.native ? data : valid ? { ok: true, data } : data === null && !isSchedule
               ? { ok: false, error: { code: 'TOOL_EVENT_NOT_FOUND', message: '模拟日程中没有该事件；未读取真实日历。' } }
               : { ok: false, error: { code: 'TOOL_INVALID_RESULT', message: '模拟工具返回格式无效。' } }
           }
         } catch (error) {
           result = { ok: false, error: { code: runtime.signal.aborted ? 'TOOL_ABORTED' : WORKSPACE_TOOLS.includes(request.call.name) && error instanceof TaskInputError ? error.code : 'TOOL_FAILED',
-            message: runtime.signal.aborted ? '已尝试中止在途工具；没有收到成功结果。' : WORKSPACE_TOOLS.includes(request.call.name) ? error instanceof TaskInputError ? error.message : '工作区只读请求失败或权限已变化；没有取得成功回执。' : FEISHU_TOOLS.includes(request.call.name) ? '飞书只读请求失败或权限已变化；没有取得可用日程。' : '模拟工具执行失败；未读取真实日历。' } }
+            message: runtime.signal.aborted ? '已尝试中止在途工具；没有收到成功结果。' : request.native ? '原生操作未确认结果；请核对实际状态。' : WORKSPACE_TOOLS.includes(request.call.name) ? error instanceof TaskInputError ? error.message : '工作区只读请求失败或权限已变化；没有取得成功回执。' : FEISHU_TOOLS.includes(request.call.name) ? '飞书只读请求失败或权限已变化；没有取得可用日程。' : '模拟工具执行失败；未读取真实日历。' } }
         }
         let stored = false
         try {
@@ -967,7 +1010,7 @@ function chatDefinition(reply, modelReply = createModelReply(), bots = listBots(
                 used.feishuUsedTools = [...new Set([...(used.feishuUsedTools ?? []), request.call.name])]
               }
             }
-            if (result.ok && !FEISHU_TOOLS.includes(request.call.name) && !WORKSPACE_TOOLS.includes(request.call.name)) {
+            if (result.ok && !request.native && !FEISHU_TOOLS.includes(request.call.name) && !WORKSPACE_TOOLS.includes(request.call.name)) {
               const data = await (request.isSchedule ? overlayMockSchedule(tx, result.data, request.args) : overlayMockEvent(tx, result.data, request.args))
               result = { ok: true, data, calendarRevision: (await tx.doc(MockCalendar)).revision ?? 0 }
             }
@@ -1030,6 +1073,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
   toolImpl = readMockSchedule, eventImpl = readMockEvent, skillDirectory, calendarWriteImpl, calendarQueryImpl, calendarQueryEnabled = true, calendarIdempotencyEnabled = true, workspaceEnabled = true, workspaceMigration, workspaceScheduleOptions = {}, workspaceSyncOptions = {}, workspaceReminderOptions = {}, detectorOptions = {}, memoryOptions = {}, memoryFiles: memoryFileOptions = {}, feishuClient = createFeishuClient(), google = null, toolGroupsMigration = true, r4Migration = false, readCapabilityCatalog = async () => [], externalMcp, capabilityManagementEnabled = false } = {}) {
   if (!file) throw new Error('Task storage file is required')
   if (typeof readCapabilityCatalog !== 'function') throw new Error('Capability catalog reader must be a server-owned function')
+  const nativeRuntime = createNativeRuntime({ root: resolve(dirname(file), 'bot-workspaces') })
   const skillImport = skillDirectory && typeof skillDirectory === 'object' ? skillDirectory.userSkills : null
   const skillImportCall = async (work) => {
     if (!skillImport) throw new TaskInputError(503, 'SKILL_IMPORT_UNAVAILABLE', '当前运行实例未启用用户 Skill 导入。')
@@ -1070,6 +1114,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
   const getMemorySecrets = async () => {
     const config = await readModelSettings()
     if (config?.apiKey) memorySecrets.add(config.apiKey)
+    for (const key of await modelSettings.secretKeys?.() ?? []) memorySecrets.add(key)
     return [...memorySecrets]
   }
   modelReply ??= createModelReply(readModelSettings)
@@ -1133,8 +1178,8 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         return { ok: true, data: { scheduleId: plan.id, title: plan.title, status: plan.status, rule: plan.rule, nextDueAt: plan.nextDueAt ?? null, notice: '用户已确认，例行任务已创建；在Bot资料页的例行任务区可以测试运行、暂停或取消。' } }
       } catch (error) { if (!error.status) throw error; return { ok: false, error: { code: error.code, message: error.message } } }
     }
-    let memoryService, memoryWorker, memoryFiles = null
-    const guardedModelReply = (message, options) => dispatchForBot(options.parametersBotId, options.signal, async signal => { const scheduled = options.taskId && (await harness.snapshot(TaskCard, options.taskId, context))?.scheduledWorkflow; if (scheduled) await workspaceScheduleOptions.boundary?.('model_request', { taskId: options.taskId }); await getMemorySecrets();
+    let memoryService, memoryWorker, skillLearning, memoryFiles = null
+    const guardedModelReply = (message, options) => { memoryWorker?.interrupt(options.parametersBotId); return dispatchForBot(options.parametersBotId, options.signal, async signal => { const scheduled = options.taskId && (await harness.snapshot(TaskCard, options.taskId, context))?.scheduledWorkflow; if (scheduled) await workspaceScheduleOptions.boundary?.('model_request', { taskId: options.taskId }); await getMemorySecrets();
       if (options.taskId) {
         const card = await harness.snapshot(TaskCard, options.taskId, context)
         if (options.purpose !== 'context-compaction') await appendLiveCalendar(options.context, card)
@@ -1144,11 +1189,11 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         await harness.commit(async tx => {
           await assertNotCancelled(tx, card.taskId, await tx.task(card.taskId))
           await assertBotActive(tx, card.bot.id)
-          await injectMemoryContext(options.context, options.parameters, maxChars => liveMemoryContext(tx, card.bot.id, maxChars))
+          if (options.purpose !== 'context-compaction') await injectMemoryContext(options.context, options.parameters, (maxChars, query) => liveMemoryContext(tx, card.bot.id, maxChars, query))
         }, context)
         signal.throwIfAborted()
       }
-      const result = await modelReply(message, { ...options, signal }); if (scheduled) await workspaceScheduleOptions.boundary?.('model_response', { taskId: options.taskId }); return result }, async tx => { if (options.taskId) { await collaboration.guard(tx, options.taskId); const card=await tx.doc(TaskCard,options.taskId); await validateWorkspaceHistory(tx, card, resolveWorkspaceTask); await feishu.sync(tx); if (!await feishuTaskAllowed(tx, card, toolSets(card, bots, await tx.doc(ToolAccess)))) throw new TaskInputError(403,'FEISHU_BINDING_DENIED','日历来源已撤权，不能继续使用历史正文。'); await sharedInformationService({TaskCard,ChatInput,bots}).validateContext(tx,card,(await tx.doc(ChatInput,options.taskId)).entryId,options.context?.sharedVersions); await validateGroupResults(tx,card,options.context?.groupResults,{TaskCard,ChatInput,bots}) } }, options.taskId)
+      const result = await modelReply(message, { ...options, signal }); if (scheduled) await workspaceScheduleOptions.boundary?.('model_response', { taskId: options.taskId }); return result }, async tx => { if (options.taskId) { await collaboration.guard(tx, options.taskId); const card=await tx.doc(TaskCard,options.taskId); await validateWorkspaceHistory(tx, card, resolveWorkspaceTask); await feishu.sync(tx); if (!await feishuTaskAllowed(tx, card, toolSets(card, bots, await tx.doc(ToolAccess)))) throw new TaskInputError(403,'FEISHU_BINDING_DENIED','日历来源已撤权，不能继续使用历史正文。'); await sharedInformationService({TaskCard,ChatInput,bots}).validateContext(tx,card,(await tx.doc(ChatInput,options.taskId)).entryId,options.context?.sharedVersions); await validateGroupResults(tx,card,options.context?.groupResults,{TaskCard,ChatInput,bots}) } }, options.taskId) }
     // Each original Harness phase parks on the durable directory; cancellation still
     // aborts this invocation through Harness, without making deactivation terminal.
     async function parkInactive(_task, runtime, _ctx) {
@@ -1181,13 +1226,17 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
     const registry = createRegistry()
     let createTask, capabilityManagement
     const collaboration = collaborationService({ TaskCard, ChatInput, bots, createTask: (...args) => createTask(...args) })
-    const definition = chatDefinition((message, options) => dispatchForBot(options.botId, options.signal, signal => reply(message, { signal })), guardedModelReply, bots, toolImpl, eventImpl, skillDirectory, saveCancelledReceipt, saveCancelledToolReceipt, saveCancelledActionReceipt, dispatchCalendarWrite, (...args) => recoverAction(...args), queryCapability, dispatchForBot, configuredModels, syncManagedCatalog, collaboration, id=>harness.commit(async tx=>{const card=await tx.doc(TaskCard,id);await validateWorkspaceHistory(tx, card, resolveWorkspaceTask);await assertBotActive(tx,card.bot.id);await collaboration.assertWorkOpen(tx,id);const r=(await tx.doc(Collaboration)).items.find(r=>r.childTaskId===id);if(r)await assertBotActive(tx,r.supervisorBotId)},context), feishu, (id, name, args, options) => options?.validateTx ? validateWorkspaceHistory(options.validateTx, { taskId: id, ...(options.card ?? {}) }, resolveWorkspaceTask) : workspaceMcp.invoke(id, name, args, options), { botCreated: async (tx, botId, chiefCard) => { await ensureMainSession(tx, botId, { ...mainDeps, rootConversationId: (await tx.task(chiefCard.taskId)).conversationId }) }, main: { execute: (...args) => mainService.execute(...args) }, external: { refresh: () => refreshExternalCatalog(), invoke: invokeExternalMcp }, capabilities: { enabled: capabilityManagementEnabled && Boolean(externalMcp && skillImport), request: requestCapabilityIntent, execute: executeCapabilityCall, approval: executeCapabilityApproval, wait: waitCapabilitySetup }, routine: { propose: (...args) => proposeRoutine(...args), create: (...args) => createProposedRoutine(...args) } })
+    const definition = chatDefinition((message, options) => dispatchForBot(options.botId, options.signal, signal => reply(message, { signal })), guardedModelReply, bots, toolImpl, eventImpl, skillDirectory, saveCancelledReceipt, saveCancelledToolReceipt, saveCancelledActionReceipt, dispatchCalendarWrite, (...args) => recoverAction(...args), queryCapability, dispatchForBot, configuredModels, syncManagedCatalog, collaboration, id=>harness.commit(async tx=>{const card=await tx.doc(TaskCard,id);await validateWorkspaceHistory(tx, card, resolveWorkspaceTask);await assertBotActive(tx,card.bot.id);await collaboration.assertWorkOpen(tx,id);const r=(await tx.doc(Collaboration)).items.find(r=>r.childTaskId===id);if(r)await assertBotActive(tx,r.supervisorBotId)},context), feishu, (id, name, args, options) => options?.validateTx ? validateWorkspaceHistory(options.validateTx, { taskId: id, ...(options.card ?? {}) }, resolveWorkspaceTask) : workspaceMcp.invoke(id, name, args, options), { history: { execute: (tx, card, call, entryId) => executeSessionHistory(tx, card, call.name, call.arguments, entryId, { TaskCard, taskKind: ChatTask.definition.name, readSource: readLearningSource }) }, memory: { execute: (tx, card, call, entryId) => executeMemoryTool(tx, card, call, entryId, { service: memoryService, readEntry: readMemoryEntry, files: memoryFiles, review: enqueueBotReview }) }, native: nativeRuntime, botCreated: async (tx, botId, chiefCard) => { await ensureMainSession(tx, botId, { ...mainDeps, rootConversationId: (await tx.task(chiefCard.taskId)).conversationId }) }, main: { execute: (...args) => mainService.execute(...args) }, external: { refresh: () => refreshExternalCatalog(), invoke: invokeExternalMcp }, capabilities: { enabled: capabilityManagementEnabled && Boolean(externalMcp && skillImport), request: requestCapabilityIntent, execute: executeCapabilityCall, approval: executeCapabilityApproval, wait: waitCapabilitySetup }, routine: { propose: (...args) => proposeRoutine(...args), create: (...args) => createProposedRoutine(...args) } })
     const phases = definition.definition.phases
     for (const [name, phase] of Object.entries(phases)) phases[name] = async (task, runtime, ctx) => {
       for (;;) {
         try {
           await runtime.commit(async tx=>{if(!await isCancelled(tx,runtime.taskId))await collaboration.assertWorkOpen(tx,runtime.taskId)},ctx)
           await parkInactive(task, runtime, ctx)
+          if (name === 'tools') {
+            const memoryCard = await harness.snapshot(TaskCard, runtime.taskId, context)
+            await memoryFiles?.reconcileBot(memoryCard.bot.id).catch(() => {})
+          }
           await runtime.commit(async tx => { if (!await isCancelled(tx, runtime.taskId)) await collaboration.guard(tx, runtime.taskId) }, ctx)
           return await phase(task, runtime, ctx)
         } catch (error) {
@@ -1274,21 +1323,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       await feishu.sync(tx)
       const access = await tx.doc(ToolAccess)
       initializeConfiguration(directory, access)
-      // Preserve legacy main-session intrinsic grants separately from ordinary Bot assignments.
-      // New blank Bots never inherit them; persisted revocations still win at projection time.
-      access.mainAssignments ??= { version: 1, bots: [] }
-      if (!Array.isArray(access.mainAssignments.bots)) access.mainAssignments.bots = []
-      for (const bot of directory.items) {
-        if (access.mainAssignments.bots.includes(bot.id)) continue
-        if (bot.capabilityDefaultsVersion !== 2) {
-          const assigned = access.assignments[bot.id]
-          // Older stores may already contain the implicit tools from an earlier migration.
-          // Move them out of the regular assignment so configuration edits and ordinary Tasks
-          // retain their exact business grants.
-          assigned.tools = assigned.tools.filter(name => !MAIN_TOOLS.includes(name) && name !== AUTOMATION_PAUSE_TOOL)
-          access.mainAssignments.bots.push(bot.id)
-        }
-      }
+      migrateMainAssignments(directory, access)
       if (toolGroupsMigration) migrateToolGroups(directory, access, await tx.doc(PolicyRules))
       if (r4Migration) await migrateToR4(tx)
       return JSON.parse(JSON.stringify(directory.items))
@@ -1302,7 +1337,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       if (!config) return
       const directory = await tx.doc(BotDirectory)
       initializeConfiguration(directory, await tx.doc(ToolAccess))
-      const model = modelParameters(config).model
+      const model = { ...modelParameters(config).model, contextWindow: modelParameters(config).contextWindows[config.selectionId ?? config.model] }
       for (const bot of directory.items) {
         if (bot.defaults.mode !== 'test') continue
         const history = directory.configurations[bot.id]
@@ -1313,7 +1348,8 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         bot.configRef = { botId: bot.id, version: `config-${history.length + 1}-${payloadHash(['model-enabled', bot.configRef.version, model.id]).slice(0, 12)}` }
         history.push({ ...JSON.parse(JSON.stringify(bot)), source: 'model-settings-enabled', savedAt: new Date().toISOString() })
       }
-      const models = [model, ...directory.items.filter(bot => bot.defaults.mode === 'model').map(bot => bot.defaults.model)]
+      const registered = (await modelSettings.list?.() ?? []).filter(entry => entry.id !== 'default').map(entry => ({ id: entry.selectionId, provider: entry.providerId, name: entry.model, contextWindow: entry.contextWindow }))
+      const models = [model, ...registered, ...directory.items.filter(bot => !config.selectionId && bot.defaults.mode === 'model' && !bot.defaults.model.id.startsWith('registered:') && bot.defaults.model.id !== model.id).map(bot => ({ ...bot.defaults.model, contextWindow: bot.defaults.contextWindows?.[bot.defaults.model.id] }))]
       configuredModels.splice(0, configuredModels.length, ...new Map(models.map(item => [item.id, JSON.parse(JSON.stringify(item))])).values())
     }
     await harness.commit(refreshModelSettings, context)
@@ -1551,7 +1587,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
             if (!check.ok) throw new TaskInputError(403, check.error.code, check.error.message)
             const usage = await tx.doc(CallUsage, card.taskId), limits = callLimits(card.parameters)
             if (usage.toolCalls > limits.toolCalls || limits.totalTokens !== undefined && (usage.unknownTokenCalls > 0 || usage.totalTokens >= limits.totalTokens)) throw new TaskInputError(409, 'CALL_LIMIT_REACHED', '当前预算不足，未派发外部调用。')
-            if ((await decide(tx, { botId: card.bot.id, tool: request.call.name }, { externalTool: external })).effect === 'deny') throw new TaskInputError(403, 'POLICY_DENIED', '当前规则禁止外部调用。')
+            if ((await decide(tx, { botId: card.bot.id, tool: request.call.name, args: request.call.arguments }, { externalTool: external })).effect === 'deny') throw new TaskInputError(403, 'POLICY_DENIED', '当前规则禁止外部调用。')
             if (!await workspaceHistoryAllowed(tx, card, sets)) throw new TaskInputError(403, 'MCP_SOURCE_REVOKED', '当前输入依赖的外部来源已失效。')
             const binding = (await tx.doc(CapabilityAssignments)).bindings[card.bot.id]?.[request.external.capabilityId]
             if (binding?.catalogRevision !== external.catalogRevision || !binding.toolNames.includes(request.call.name)) throw new TaskInputError(403, 'CAPABILITY_NOT_ENABLED', '外部能力绑定已失效。')
@@ -1643,26 +1679,53 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       requestApproval: requestCapabilityScopeApproval, readApproval: readCapabilityScopeApproval,
     })
     await syncManagedCatalog()
-    async function readMemoryEntry(tx, ref, scope = {}) {
-      const record = await tx.task(ref.taskId), entry = await tx.entry(ref.entryId)
-      if (!record || record.state.status === 'terminal' || await isCancelled(tx, ref.taskId)) return null
-      const card = await tx.doc(TaskCard, ref.taskId)
-      if (!memorySourceAllowed(card, entry) || (scope.kind === 'memory' || scope.actor === 'candidate') && scope.botId !== card.bot.id) return null
-      if ((await tx.conversation(card.conversationId))?.owner?.taskId !== ref.taskId) return null
+    async function readLearningSource(tx, taskId, { botId } = {}) {
+      const record = await tx.task(taskId)
+      if (!record || record.kind !== ChatTask.definition.name || await isDeleted(tx, taskId) || await isCancelled(tx, taskId)) return null
+      const card = await readLifecycleSession(tx, taskId, { TaskCard, taskKind: ChatTask.definition.name })
+      if (botId && card.bot?.id !== botId) return null
+      const parent = card.mainParent ? await readLifecycleSession(tx, card.mainParent.mainTaskId, { TaskCard, taskKind: ChatTask.definition.name }) : null
+      // Parent deletion does not delete independently completed Tasks. Identity remains durable.
+      if (!memoryTaskSourceAllowed(card, parent) || (await tx.conversation(card.conversationId))?.owner?.taskId !== taskId) return null
       const bot = (await tx.doc(BotDirectory)).items.find(item => item.id === card.bot.id)
       if (!bot || bot.status === 'inactive') return null
-      // memorySourceAllowed above accepts only genuine direct user entries, never MCP-derived replies.
-      if (!await workspaceHistoryAllowed(tx, { ...card, externalMcpUsedRefs: [] }, toolSets(card, bots, await tx.doc(ToolAccess)))) return null
-      if (scope.actor === 'candidate') {
-        let consumed = false, cursor
-        do {
-          const page = await tx.scanEntries({ conversationId: card.conversationId }, 100, cursor)
-          if (page.items.some(item => item.byTaskId === card.taskId && item.kind === 'pidot.model-reply' && !item.data.intermediate && item.data.inReplyTo === ref.entryId)) consumed = true
-          cursor = page.next
-        } while (cursor && !consumed)
-        if (!consumed) return null
+      const sets = toolSets(card, bots, await tx.doc(ToolAccess))
+      if (!await workspaceHistoryAllowed(tx, card, sets) || !await feishuTaskAllowed(tx, card, sets)) return null
+      return card
+    }
+    async function learningEntries(tx, card) {
+      const entries = []; let cursor
+      do { const page = await tx.scanEntries({ conversationId: card.conversationId, order: 'ascending' }, 100, cursor); entries.push(...page.items); cursor = page.next } while (cursor)
+      return entries
+    }
+    async function readMemoryEntry(tx, ref, scope = {}) {
+      const card = await readLearningSource(tx, ref.taskId, { botId: scope.kind === 'memory' || scope.actor === 'candidate' ? scope.botId : undefined })
+      const entry = await tx.entry(ref.entryId)
+      if (!card || !entry || entry.conversationId !== card.conversationId || entry.byTaskId !== undefined && entry.byTaskId !== card.taskId) return null
+      const user = memorySourceAllowed(card, entry), tool = successfulMemoryTool(entry)
+      if (!user && !tool || scope.kind === 'preferences' && !user) return null
+      if (tool) {
+        const sets = toolSets(card, bots, await tx.doc(ToolAccess))
+        if (card.externalMcpHistoryFloor && entry.id < card.externalMcpHistoryFloor || !sets.authorized.includes(entry.data.toolName) || entry.data.arguments?.resource && !sets.resources.includes(entry.data.arguments.resource)) return null
+      }
+      if (scope.actor === 'candidate' && user) {
+        const entries = await learningEntries(tx, card)
+        const inputId = user ? entry.id : entry.data.inReplyTo
+        if (!entries.some(item => item.byTaskId === card.taskId && item.kind === 'pidot.model-reply' && !item.data.intermediate && item.data.inReplyTo === inputId)) return null
       }
       return entry
+    }
+    async function validateLearningEvidence(tx, botId, evidence, requireSuccess = false) {
+      if (!Array.isArray(evidence) || !evidence.length || evidence.length > 16) return false
+      let success = false
+      for (const ref of evidence) {
+        const entry = await readMemoryEntry(tx, ref, { botId, kind: 'memory', actor: 'candidate' })
+        if (!entry) return false
+        const card = await readLifecycleSession(tx, ref.taskId, { TaskCard, taskKind: ChatTask.definition.name }), actual = memoryEvidence(card, entry)
+        if (!actual || ref.fingerprint && ref.fingerprint !== actual.fingerprint) return false
+        success ||= actual.kind === 'tool-result'
+      }
+      return !requireSuccess || success
     }
     memoryService = createBotMemoryService({ getSecrets: getMemorySecrets, readEntry: readMemoryEntry })
     async function ensureMemoryPersonality(tx, botId) {
@@ -1688,7 +1751,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       }) })
     const reconcileMemory = work => Promise.resolve(work).catch(error => { if (error instanceof TaskInputError) throw error; throw new TaskInputError(500, 'MEMORY_UNAVAILABLE', '记忆服务暂不可用。') })
     const withFile = (document, botId, kind) => { if (document && typeof document === 'object') document.file = memoryFiles ? memoryFiles.status({ botId, kind }) : null; return document }
-    async function liveMemoryContext(tx, botId, maxChars) {
+    async function liveMemoryContext(tx, botId, maxChars, query) {
       await ensureMemoryPersonality(tx, botId)
       const documents = await memoryService.get(tx, botId)
       for (const kind of ['memory', 'preferences']) {
@@ -1701,7 +1764,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         documents[kind].items = allowed
       }
       memoryFiles?.attach(documents, botId)
-      return buildMemoryContext(documents, { maxChars, secrets: await getMemorySecrets() })
+      return buildMemoryContext(documents, { maxChars, secrets: await getMemorySecrets(), query })
     }
     async function memoryTransaction(fn) {
       try { return await harness.commit(fn, context) }
@@ -1924,9 +1987,9 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           : !feishuVisible || entry.id < (card.externalMcpHistoryFloor ?? 0) || (!said.systemKind && denied.has(entry.data.inReplyTo))) continue
         if (said.systemKind) {
           const bot = (await tx.doc(BotDirectory)).items.find(b => b.id === entry.data.botId), botName = bot?.name ?? entry.data.botName
-          return { ...said, botName, content: bot?.status === 'inactive' ? `${botName}（已停用）的回复` : entry.data.content.slice(0, 400) }
+          return { ...said, botName, createdAt: entry.data.createdAt, content: bot?.status === 'inactive' ? `${botName}（已停用）的回复` : entry.data.content.slice(0, 400) }
         }
-        return { ...said, content: entry.data.content.slice(0, 400) }
+        return { ...said, createdAt: entry.data.createdAt, content: entry.data.content.slice(0, 400) }
       }
       return null
     }
@@ -1966,7 +2029,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
               if (entry.kind === 'pidot.context-compaction') compactionHistory.push({ ...entry.data, id: entry.id })
               if (entry.kind === 'pidot.call-limits') callLimitHistory.push({ ...entry.data, id: entry.id })
               if (['pidot.task-state', 'pidot.steer-applied'].includes(entry.kind)) taskStateHistory.push({ ...entry.data, id: entry.id })
-              if (['pidot.user', 'pidot.test-reply', 'pidot.test-error', 'pidot.model-reply', 'pidot.model-error', 'pidot.model-tool-turn', 'pidot.tool-result'].includes(entry.kind)) {
+              if (['pidot.user', 'pidot.test-reply', 'pidot.test-error', 'pidot.model-reply', 'pidot.model-error', 'pidot.model-tool-turn', 'pidot.tool-result', 'pidot.memory-review'].includes(entry.kind)) {
                 messages.push({ ...entry.data, id: entry.id, taskId: id, conversationId: entry.conversationId, byTaskId: entry.byTaskId ?? null })
               } else if (entry.kind === 'pidot.auto-applied') {
                 // System card (I-08): shown to the user, never part of model context.
@@ -2025,6 +2088,9 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         const steering = await doc(ChatSteering)
         const pendingSteers = new Map(steering.pending.map((item) => [item.entryId, item]))
         const appliedSteers = new Map(steering.applied.map((item) => [item.entryId, item]))
+        const questionItems = (await doc(TaskBlockers)).items
+        const parkedInputs = new Set(questionItems.filter(item => item.parked && item.status === 'pending').map(item => item.inReplyTo))
+        const cancelledInputs = new Set(questionItems.filter(item => item.answer?.action === 'cancel').map(item => item.inReplyTo))
         const queuedInputIds = [...(await doc(ChatQueue)).entryIds]
         const positions = new Map(queuedInputIds.map((entryId, index) => [entryId, index + 1]))
         const outcomes = new Map(messages.filter((message) => message.byTaskId === id && ['assistant', 'error'].includes(message.role) && !message.assistant && !message.intermediate)
@@ -2032,7 +2098,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         for (const message of messages) {
           if (message.role !== 'user') continue
           const outcome = outcomes.get(message.id)
-          message.deliveryStatus = (await tx.doc(Collaboration)).stops?.some(s=>s.parentTaskId===id&&s.parentInputId===message.id) ? 'cancelled' : pendingSteers.has(message.id) ? 'steer-pending' : appliedSteers.has(message.id) ? 'steer-applied' : slot.entryId === message.id ? (cancellation ? 'cancelled' : ['awaitBlocker', 'awaitApproval'].includes(record.state.checkpoint?.phase) ? 'blocked' : 'processing') : positions.has(message.id) ? 'queued'
+          message.deliveryStatus = cancelledInputs.has(message.id) ? 'cancelled' : parkedInputs.has(message.id) ? 'blocked' : (await tx.doc(Collaboration)).stops?.some(s=>s.parentTaskId===id&&s.parentInputId===message.id) ? 'cancelled' : pendingSteers.has(message.id) ? 'steer-pending' : appliedSteers.has(message.id) ? 'steer-applied' : slot.entryId === message.id ? (cancellation ? 'cancelled' : ['awaitBlocker', 'awaitApproval'].includes(record.state.checkpoint?.phase) ? 'blocked' : 'processing') : positions.has(message.id) ? 'queued'
             : outcome?.errorCode === 'CALL_LIMIT_REACHED' ? (cancellation ? 'cancelled' : 'waiting') : outcome?.role === 'error' ? 'failed'
               : outcome ? 'completed' : 'received'
           const steer = pendingSteers.get(message.id) ?? appliedSteers.get(message.id)
@@ -2072,7 +2138,10 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
               result: { ok: false, error: item.receipt.result.error } },
           })) }
         const stoppedRoots=new Set((collaborationState.stops??[]).map(s=>s.rootWorkId))
-        const projectBlocker=b=>({...b,...(b.status==='pending'&&(stoppedRoots.has(b.rootWorkId)||collaborationState.items.some(r=>r.childTaskId===b.taskId&&r.result?.status==='cancelled'))?{status:'cancelled'}:{})})
+        const projectBlocker = blocker => {
+          const { resumeState: _resumeState, ...visible } = blocker
+          return { ...visible, ...(blocker.status === 'pending' && (stoppedRoots.has(blocker.rootWorkId) || collaborationState.items.some(row => row.childTaskId === blocker.taskId && row.result?.status === 'cancelled')) ? { status: 'cancelled' } : {}) }
+        }
         const lastMessage = includeMessages ? undefined : await lastSaid(tx, card, feishuVisible)
         return { ...safeCard, capabilitySetups, archived: (await tx.doc(TaskArchive)).taskIds.includes(id), calendarAccess: feishuVisible, ...(lastMessage ? { lastMessage } : {}), ...(card.kind==='group'?{groupIssues:JSON.parse(JSON.stringify(groupIssues))}:{}), ...(groupView ? { group: groupView } : {}), collaborationOverview: await collaborationOverview(tx,id,{TaskCard,ChatInput,ChatQueue,CallUsage,TaskApprovals,TaskBlockers,bots}), sharedInformation: await sharedInformationService({TaskCard,ChatInput,bots}).userView(tx,card), collaborations: JSON.parse(JSON.stringify(await projectGroupRelations(tx,card,(await tx.doc(Collaboration)).items.filter(i => i.parentTaskId === id || i.childTaskId === id),{TaskCard,ChatInput,bots}))), botLifecycle: structuredClone((await tx.doc(BotDirectory)).items.find(b => b.id === card.bot.id)?.status ?? 'active'), approvals: JSON.parse(JSON.stringify(visibleApprovals)), blockers: JSON.parse(JSON.stringify({...await doc(TaskBlockers),items:(await doc(TaskBlockers)).items.map(projectBlocker),related:(card.kind==='group'?groupIssues.flatMap(c=>c.blockers.items):collaborationState.items.filter(r=>r.parentTaskId===id).flatMap(r=>r.blockers??[])).map(projectBlocker)})), cancellation: JSON.parse(JSON.stringify(cancellation)), messages, taskStateHistory, callLimitHistory, compactionHistory, recoveryHistory, migrationHistory,
           waiting: waitingSnapshot(record.state.checkpoint, slot, await doc(TaskBlockers), await doc(TaskApprovals), await doc(CallUsage), callLimits(card.parameters), cancellation),
@@ -2175,17 +2244,6 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       const enabled = ASSIST_READ_TOOLS.every(n => assigned.tools.includes(n) && !access.revoked.chief?.includes(n)) && assigned.resources.includes('workspace:local')
       return { available: workspaceEnabled, enabled }
     }
-    // The user's click on the settings page (I-05): add list/get + workspace:local to Chief's configuration
-    // as a new audited configuration version.
-    async function grantChiefRead() {
-      const status = await harness.commit(tx => chiefReadStatus(tx), context)
-      if (status.enabled) return
-      if (!status.available) throw new TaskInputError(409, 'FINDING_ASSIST_READ_UNAVAILABLE', '本地工作区当前不可用。')
-      const { bot, assigned } = await configuration.getBotConfiguration('chief')
-      const tools = [...new Set([...assigned.tools, ...ASSIST_READ_TOOLS])], resources = [...new Set([...assigned.resources, 'workspace:local'])]
-      if (tools.length !== assigned.tools.length || resources.length !== assigned.resources.length)
-        await configuration.updateBotConfiguration('chief', { requestId: `assist-read-${payloadHash(bot.configRef.version).slice(0, 32)}`, expectedVersion: bot.configRef.version, description: bot.description, tools, resources })
-    }
     const findingsApi = {
       list: () => harness.commit(async tx => { const d = await tx.doc(Findings); return JSON.parse(JSON.stringify({ items: d.items.filter(f => ['open', 'deferred'].includes(f.state)), muted: d.muted, labels: DETECTOR_LABELS, wakeAt: d.wakeAt, lastRunAt: d.lastRunAt, assist: d.assist === true, chiefRead: await chiefReadStatus(tx) })) }, context),
       // 处理 = derive a prefilled Task in Chief's main session; 忽略 = this version only; 这类别再提醒 = mute (restorable).
@@ -2194,7 +2252,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           (input.action === 'assist-setting') !== (typeof input.enabled === 'boolean') || (input.chiefRead !== undefined && (input.action !== 'assist-setting' || input.enabled !== true || typeof input.chiefRead !== 'boolean'))) throw new TaskInputError(400, 'INVALID_FINDING_ACTION', '仅接受 action=handle/dismiss/mute/unmute/assist 与 id 或 detector；assist-setting 须带 enabled，chiefRead 只能随开启一起提交。')
         // P-16 setting (default off). Turning it off keeps whatever Chief can read (change that on Chief's page).
         if (input.action === 'assist-setting') {
-          if (input.chiefRead === true) await grantChiefRead()
+          if (input.chiefRead !== undefined) throw new TaskInputError(409, 'FINDING_ASSIST_PERMISSION_MOVED', '读取权限已统一到机器人能力页，请在「日程与待办」中管理。')
           return harness.commit(async tx => { const d = await tx.doc(Findings); d.assist = input.enabled; return { assist: d.assist, chiefRead: await chiefReadStatus(tx) } }, context)
         }
         const result = await harness.commit(async tx => {
@@ -2257,6 +2315,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         const stop=(state.stops??[]).find(s=>s.parentTaskId===runtime.taskId&&s.parentInputId===slot.entryId)
         if(!stop) return
         const card=await tx.doc(TaskCard,runtime.taskId)
+        await restoreQuestionInput(tx, card, stop.parentInputId)
         const blockers=await tx.doc(TaskBlockers,runtime.taskId), approvals=await tx.doc(TaskApprovals,runtime.taskId)
         for(const item of blockers.items) if(item.inReplyTo===stop.parentInputId&&item.status==='pending') {item.status='cancelled';item.stoppedBy=stop.entryId}
         if(blockers.items.some(i=>i.id===blockers.activeId&&i.inReplyTo===stop.parentInputId))blockers.activeId=null
@@ -2378,59 +2437,127 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
 
     const copyMemory = value => JSON.parse(JSON.stringify(value))
     async function validateMemoryBatch(tx, batch) {
-      for (const entry of batch.entries) {
-        const actual = await readMemoryEntry(tx, { taskId: batch.card.taskId, entryId: entry.id }, { botId: batch.card.bot.id, kind: 'memory', actor: 'candidate' })
-        if (!actual || actual.data.content !== entry.data.content) return false
-      }
-      return true
+      return validateLearningEvidence(tx, batch.card.bot.id, batch.evidence ?? batch.entries.map(entry => memoryEvidence(batch.card, entry)).filter(Boolean))
     }
-    const gatherMemory = limits => memoryTransaction(async tx => {
-      const state = await tx.doc(MemoryExtraction), batches = []
-      let cursor
+    async function gatherLearningTask(tx, record) {
+      const card = await readLearningSource(tx, record.id)
+      if (!card) return null
+      const entries = await learningEntries(tx, card), selected = [], evidence = []
+      const consumed = new Set(entries.filter(entry => entry.byTaskId === card.taskId && entry.kind === 'pidot.model-reply' && !entry.data.intermediate).map(entry => entry.data.inReplyTo))
+      for (const entry of entries) {
+        const ref = memoryEvidence(card, entry)
+        if (!ref || ref.kind === 'user' && !consumed.has(entry.id)) continue
+        if (!await readMemoryEntry(tx, ref, { botId: card.bot.id, kind: 'memory', actor: 'candidate' })) continue
+        selected.push(copyMemory(entry)); evidence.push(ref)
+      }
+      const bot = (await tx.doc(BotDirectory)).items.find(bot => bot.id === card.bot.id)
+      const live = { ...copyMemory(card), parameters: copyMemory(bot.defaults) }
+      const input = (await tx.doc(ChatInput, record.id)).entryId, queue = (await tx.doc(ChatQueue, record.id)).entryIds
+      // Review bookkeeping commits cannot reset the clock: only foreground durable entries/slots count.
+      const foreground = entries.filter(entry => ['pidot.user', 'pidot.model-reply', 'pidot.model-error', 'pidot.tool-result', 'pidot.model-tool-turn', 'pidot.steer-applied'].includes(entry.kind))
+      return { card: live, entries: selected, evidence, active: input !== null || queue.length > 0, activityKey: evidenceFingerprint([foreground.at(-1)?.id ?? 0, input, [...queue]]) }
+    }
+    async function enqueueBotReview(tx, card) {
+      const state = learningState(await tx.doc(MemoryExtraction)); let cursor, queued = 0
       do {
         const page = await tx.scanTasks({ kind: ChatTask.definition.name }, 100, cursor)
         for (const record of page.items) {
-          if (!['pending', 'running'].includes(record.state.status)) continue
-          const card = await tx.doc(TaskCard, record.id)
-          if (!card.bot || card.parameters.mode !== 'model' || (await tx.doc(ChatInput, record.id)).entryId !== null) continue
-          if ((await tx.doc(ChatQueue, record.id)).entryIds.length) continue
-          const entries = []; let next
-          do { const p = await tx.scanEntries({ conversationId: card.conversationId, order: 'ascending' }, 100, next); entries.push(...p.items); next = p.next } while (next)
-          const consumed = new Set(entries.filter(e => e.byTaskId === card.taskId && e.kind === 'pidot.model-reply' && !e.data.intermediate).map(e => e.data.inReplyTo))
-          const selected = []; let chars = 0
-          for (const entry of entries) {
-            if (entry.id <= (state.jobs[String(card.taskId)]?.cursor ?? 0) || !consumed.has(entry.id) || !memorySourceAllowed(card, entry)) continue
-            if (selected.length >= limits.batchEntries || chars + entry.data.content.length > limits.inputChars) break
-            if (!await readMemoryEntry(tx, { taskId: card.taskId, entryId: entry.id }, { botId: card.bot.id, kind: 'memory' })) continue
-            selected.push(copyMemory(entry)); chars += entry.data.content.length
+          const batch = await gatherLearningTask(tx, record)
+          if (!batch || batch.card.bot.id !== card.bot.id) continue
+          const evidence = batch.evidence.filter(ref => !state.processed[evidenceKey(ref)])
+          for (let offset = 0; offset < evidence.length; offset += 8) {
+            const refs = evidence.slice(offset, offset + 8).map(({ content: _content, ...ref }) => ref)
+            if (await enqueueMemoryEvidence(tx, { botId: card.bot.id, sourceTaskId: record.id, refs, trigger: 'manual', dueAt: memoryOptions.now?.() ?? Date.now() })) queued++
           }
-          if (selected.length) batches.push({ card: copyMemory(card), entries: selected })
         }
+        cursor = page.next
+      } while (cursor)
+      return { ok: true, data: { queued, notice: '已登记后台整理；保存结果和待处理原因见机器人记忆页，尚未完成保存。' } }
+    }
+    const gatherMemory = () => memoryTransaction(async tx => {
+      const batches = []; let cursor
+      do {
+        const page = await tx.scanTasks({ kind: ChatTask.definition.name }, 100, cursor)
+        for (const record of page.items) { const batch = await gatherLearningTask(tx, record); if (batch) batches.push(batch) }
         cursor = page.next
       } while (cursor)
       return batches
     })
-    memoryWorker = createBotMemoryRuntime({ ...memoryOptions, transaction: memoryTransaction, service: memoryService, modelReply: (message, options) => dispatchForBot(options.parametersBotId, options.signal, signal => modelReply(message, { ...options, signal }), undefined, options.taskId), getSecrets: getMemorySecrets,
-      gather: gatherMemory, validate: validateMemoryBatch,
+    const loadMemoryJob = (job, limits) => memoryTransaction(async tx => {
+      const record = await tx.task(job.sourceTaskId)
+      if (!record) return null
+      const batch = await gatherLearningTask(tx, record)
+      if (!batch) return null
+      const ids = new Set(job.refs.map(ref => ref.entryId)), entries = await learningEntries(tx, batch.card)
+      // Compression segments may reference a tool turn or final reply; bind back to original receipts.
+      const inputs = new Set(entries.filter(entry => ids.has(entry.id)).map(entry => entry.kind === 'pidot.user' ? entry.id : entry.data.inReplyTo))
+      const evidence = batch.evidence.filter(ref => { const entry = entries.find(entry => entry.id === ref.entryId); return ids.has(ref.entryId) || job.trigger === 'compaction' && (ids.has(entry.data.turnId) || inputs.has(entry.kind === 'pidot.user' ? entry.id : entry.data.inReplyTo)) })
+      const state = learningState(await tx.doc(MemoryExtraction)), pending = evidence.filter(ref => !state.processed[evidenceKey(ref)])
+      let chars = 0
+      const selected = pending.filter(ref => { if (chars + ref.content.length > limits.inputChars - 1000) return false; chars += ref.content.length; return true }).slice(0, limits.batchEntries)
+      if (job.trigger === 'compaction' && selected.length < pending.length) await enqueueMemoryEvidence(tx, { botId: job.botId, sourceTaskId: job.sourceTaskId, refs: pending.filter(ref => !selected.includes(ref)).map(({ content: _content, ...ref }) => ref), trigger: 'compaction', revision: job.revision, dueAt: memoryOptions.now?.() ?? Date.now() })
+      return { ...batch, entries: batch.entries.filter(entry => selected.some(ref => ref.entryId === entry.id)), evidence: selected }
+    })
+    if (skillImport) {
+      skillLearning = createSkillLearningService({ userSkills: skillImport, getSecrets: getMemorySecrets,
+        isEvidenceReadable: ({ botId, evidence, tx, requireSuccess }) => tx ? validateLearningEvidence(tx, botId, evidence, requireSuccess) : memoryTransaction(tx => validateLearningEvidence(tx, botId, evidence, requireSuccess)),
+        getCapabilities: botId => memoryTransaction(async tx => { const bot = (await tx.doc(BotDirectory)).items.find(bot => bot.id === botId); if (!bot || bot.status === 'inactive') return { tools: [], resources: [] }; const sets = toolSets({ bot, parameters: bot.defaults, kind: 'chat' }, bots, await tx.doc(ToolAccess)); return { tools: sets.authorized, resources: sets.resources } }),
+        assign: async ({ botId, capabilityId }) => { const catalog = await skillCapabilityCatalog(skillDirectory); await memoryTransaction(tx => assignLearnedSkill(tx, botId, capabilityId, catalog)) },
+      })
+      skillDirectory.userSkills = skillLearning
+    }
+    memoryWorker = createBotMemoryRuntime({ ...memoryOptions, transaction: memoryTransaction, service: memoryService,
+      modelReply: async (message, options) => {
+        // Registered model selection must still exist at dispatch time; never silently fall back.
+        if (options.parameters.model.id.startsWith('registered:') && !await readModelSettings(options.parameters.model)) throw new Error('MEMORY_MODEL_UNAVAILABLE')
+        return dispatchForBot(options.parametersBotId, options.signal, signal => modelReply(message, { ...options, signal }), undefined, options.taskId)
+      }, getSecrets: getMemorySecrets, gather: gatherMemory, load: loadMemoryJob, validate: validateMemoryBatch,
+      reconcile: botId => memoryFiles?.reconcileBot(botId),
+      notify: async (tx, job) => {
+        const mainId = await mainSessionFor(tx, job.botId)
+        if (!mainId || await isDeleted(tx, mainId)) return
+        const main = await readLifecycleSession(tx, mainId, { TaskCard, taskKind: ChatTask.definition.name })
+        if (!main || main.runtime.status === 'terminal') return
+        await tx.appendEntry(main.conversationId, { kind: 'pidot.memory-review', data: { role: 'system', content: job.state === 'applied' ? '已整理长期记忆或学习方法，变更和来源可在机器人记忆页查看。' : '后台整理需要处理，请到机器人记忆页查看原因；原对话继续可用。', botId: job.botId, jobId: job.jobId, createdAt: new Date().toISOString() } })
+      },
+      filterDocuments: async (tx, botId, documents) => {
+        for (const kind of ['memory', 'preferences']) { const items = []; for (const item of documents[kind].items) { let allowed = true; for (const ref of item.sourceEntries) if (!await readMemoryEntry(tx, ref, { botId, kind })) { allowed = false; break }; if (allowed) items.push(item) }; documents[kind].items = items }
+        return documents
+      },
+      getSkills: skillImport ? async botId => {
+        const items = (await skillImport.skillCatalog()).skills.filter(skill => skill.source?.kind === 'learned' && skill.source.ownerBotId === botId)
+        return memoryTransaction(async tx => { const visible = []; for (const skill of items) if (await validateLearningEvidence(tx, botId, skill.source.evidence, true)) visible.push({ methodKey: skill.source.methodKey, hash: skill.hash, description: skill.manifest?.description?.slice(0, 160) ?? skill.description?.slice(0, 160) ?? '' }); return visible.slice(0, 16) })
+      } : undefined,
+      publishSkill: skillLearning ? async input => {
+        const requirements = await memoryTransaction(async tx => { const tools = [], resources = []; for (const ref of input.evidence) { const entry = await readMemoryEntry(tx, ref, { botId: input.botId, kind: 'memory', actor: 'candidate' }); if (entry?.kind !== 'pidot.tool-result') continue; tools.push(entry.data.toolName); if (entry.data.arguments?.resource) resources.push(entry.data.arguments.resource) }; return { requiredTools: [...new Set(tools)], requiredResources: [...new Set(resources)] } })
+        return skillLearning.publish({ ...input, candidate: { ...input.candidate, ...requirements } })
+      } : undefined,
       subscribe: schedule => harness.subscribeCommits(({ changes }) => {
         if (changes.some(c => c.type === 'task' || ['pidot.chat-input', 'pidot.chat-queue', 'pidot.context-compaction', 'pidot.bot-directory', 'pidot.task-cancellation'].includes(c.record?.kind))) schedule()
       }) })
-    memoryWorker.start()
+    await memoryWorker.start()
 
     const store = {
       memoryWorker,
+      skillLearning,
+      async reviewBotMemory(botId, input) {
+        await memoryTransaction(tx => assertMemoryBot(tx, botId, true))
+        if (!input || Object.keys(input).some(key => key !== 'action') || !['review', 'pause', 'resume'].includes(input.action)) throw new TaskInputError(400, 'MEMORY_INPUT', '请选择整理、暂停或恢复。')
+        return input.action === 'review' ? memoryWorker.request(botId) : memoryWorker.pause(botId, input.action === 'pause')
+      },
       registerMemorySecrets(token) { if (typeof token === 'string' && token) memorySecrets.add(token) },
       get memoryFiles() { return memoryFiles },
       // R2: reads/edits first let the ledger catch up with hand edits; successful edits report the written-back file state.
       getBotMemory: async botId => {
         await reconcileMemory(memoryFiles?.reconcileBot(botId))
+        const learning = await memoryWorker.status(botId)
         return memoryTransaction(async tx => {
           await assertMemoryBot(tx, botId)
           await ensureMemoryPersonality(tx, botId)
           const documents = await memoryService.get(tx, botId)
           for (const kind of ['personality', 'memory', 'preferences']) withFile(documents[kind], botId, kind)
           const personality = await memoryService.history(tx, { botId, kind: 'personality' }), memory = await memoryService.history(tx, { botId, kind: 'memory' })
-          return { ...documents, history: { personality: personality.items, memory: memory.items }, historyNextBeforeVersion: { personality: personality.nextBeforeVersion, memory: memory.nextBeforeVersion } }
+          return { ...documents, learning, history: { personality: personality.items, memory: memory.items }, historyNextBeforeVersion: { personality: personality.nextBeforeVersion, memory: memory.nextBeforeVersion } }
         })
       },
       editBotMemory: async (botId, input) => {
@@ -2462,6 +2589,15 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         return result
       },
       getModelSettings: () => modelSettings.get(),
+      listModelRegistrations: () => modelSettings.list(),
+      async saveModelRegistration(input) {
+        await getMemorySecrets()
+        const result = await modelSettings.saveRegistration(input)
+        await getMemorySecrets()
+        await harness.commit(refreshModelSettings, context)
+        await syncManagedCatalog()
+        return result
+      },
       async saveModelSettings(input) {
         await getMemorySecrets()
         const result = await modelSettings.save(input)
@@ -2589,7 +2725,13 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
       },
       ...outcomeApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, bots, collaboration, sync: tx => feishu.sync(tx) }),
       ...approvalApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, bots, collaboration, sync: tx => feishu.sync(tx) }),
-      ...blockerApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, bots, collaboration, sync: tx => feishu.sync(tx) }),
+      ...blockerApi({ harness, context, TaskCard, ChatInput, ChatQueue, admitNextInput,
+        afterQuestionAction: async (id, input) => {
+          if (input.action !== 'cancel') return
+          const roots = await harness.commit(async tx => (await tx.doc(Collaboration)).stops.filter(stop => stop.parentTaskId === id).map(stop => stop.rootWorkId), context)
+          for (const controller of taskControllers.get(id) ?? []) if (roots.includes(controller.rootWorkId)) controller.abort(new Error('Input cancelled'))
+          await propagateStops()
+        }, taskKind: ChatTask.definition.name, get, bots, collaboration, sync: tx => feishu.sync(tx) }),
       ...cancellationApi({ harness, context, TaskCard, ChatInput, taskKind: ChatTask.definition.name, get, bots, collaboration, propagateStops }),
       deleteSession: (id, input) => sessionLifecycle.deleteSession(id, input),
       clearMainSession: (id, input) => sessionLifecycle.clearMainSession(id, input),
@@ -2597,7 +2739,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         if (typeof requestId !== 'string' || !/^[\w:-]{1,160}$/.test(requestId)) throw new TaskInputError(400, 'INVALID_SESSION_REQUEST', '请求标识无效。')
         return sessionLifecycle.requestStatus(requestId)
       },
-      ...steeringApi({ harness, context, TaskCard, ChatInput, ChatQueue, taskKind: ChatTask.definition.name }),
+      ...steeringApi({ harness, context, TaskCard, ChatInput, ChatQueue, bots, collaboration, taskKind: ChatTask.definition.name }),
       ...skillApi({ harness, context, TaskCard, ChatInput, bots: catalog, get, directory: skillDirectory }),
       skillImportPrepare: source => skillImportCall(service => service.prepareSkillImport(source)),
       skillImportInstall: input => skillImportCall(service => service.importSkill(input)),
@@ -2737,7 +2879,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
           const mainCard = await tx.doc(TaskCard, mainId)
           let excerpt = ''
           const access = await tx.doc(ToolAccess)
-          if (workspaceShareAllowed(card, mainCard, access) && await workspaceHistoryAllowed(tx, card, toolSets(card, bots, access))) {
+          if (workspaceDelegatedResultAllowed(card, mainCard, access) && await workspaceHistoryAllowed(tx, card, toolSets(card, bots, access))) {
             const page = await tx.scanEntries({ conversationId: card.conversationId, order: 'descending' }, 100)
             const last = page.items.find(e => e.byTaskId === id && ['pidot.model-reply', 'pidot.test-reply'].includes(e.kind))
             excerpt = typeof last?.data.content === 'string' ? last.data.content.slice(0, 1500) : ''
@@ -2913,6 +3055,7 @@ export async function openTaskStore({ file, bots = listBots(), beforeCommit, rep
         return card.kind === 'group' ? [] : commandSkills(tx, await projectMainCard(tx, card), bots, skillDirectory)
       }, context),
       async send(id, message, calendarCommand, options = {}) {
+        memoryWorker?.interrupt()
         await refreshExternalCatalog()
         if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['skillId', 'model'].includes(key))) throw new TaskInputError(400, 'INVALID_MESSAGE', '消息选项仅支持 skillId 和 model。')
         const { skillId } = options

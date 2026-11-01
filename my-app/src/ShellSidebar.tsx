@@ -7,7 +7,7 @@ import { PIN_KEY, parsePins, togglePin, sessionSections, matchesQuery, removeSes
 import type { WorkspaceView } from './workspace-navigation.mjs'
 import { BellIcon, CloseIcon, GearIcon, GroupIcon, ItemsIcon, PinIcon, PlusIcon, SearchIcon, SidebarIcon } from './Icons'
 
-export type SidebarSession = SessionItem & { owner: string; botId: string; group: boolean; preview: string; running?: boolean; figure?: FigureMood; crew: string[] }
+export type SidebarSession = SessionItem & { owner: string; botId: string; group: boolean; main?: boolean; preview: string; running?: boolean; figure?: FigureMood; crew: string[] }
 export type SidebarBot = { id: string; name: string; inactive: boolean; mainTaskId: number | null; mainRunning?: boolean; mainFigure?: FigureMood; mainPreview?: string; mainConfirm?: boolean }
 type Props = {
   collapsed: boolean; onToggleCollapsed: () => void; onClose: () => void
@@ -100,7 +100,7 @@ export default function ShellSidebar(props: Props) {
               <span className="pd-session-text"><span className="pd-session-title">{item.title}</span><span className="pd-session-meta">{item.preview || (item.group ? '群聊' : item.botName)}</span></span>
             </button>
             <button type="button" className={`pd-pin${pins.includes(item.id) ? ' is-pinned' : ''}`} aria-pressed={pins.includes(item.id)} aria-label={`${pins.includes(item.id) ? '取消置顶' : '置顶'}：${item.title}`} title={pins.includes(item.id) ? '取消置顶' : '置顶'} onClick={() => pin(item.id)}><PinIcon size={13} filled={pins.includes(item.id)} /></button>
-            {actions({ taskId: item.id, title: item.title, botId: item.botId, kind: item.group ? 'group' : 'session', running: item.running, owner: item.owner }, true)}
+            {actions({ taskId: item.id, title: item.title, botId: item.botId, kind: item.main ? 'main' : item.group ? 'group' : 'session', running: item.running, owner: item.owner }, !item.main)}
           </li>)}</ul>
         </section>)}
       </div>

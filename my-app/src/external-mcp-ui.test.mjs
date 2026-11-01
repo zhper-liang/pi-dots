@@ -97,21 +97,24 @@ function replaceGlobal(t, key, value) {
   t.after(() => { if (previous) Object.defineProperty(globalThis, key, previous); else delete globalThis[key] })
 }
 
-test('R4-06 settings has five sections, a shared connection list and stdio credentials under advanced', async t => {
+test('R4-06 settings has five sections, a shared connection list and no Agent credential issuance', async t => {
   const h = await harness(t, './SettingsPage.tsx', { token: 'fixture-ui' })
   const tree = h.render()
   const sections = tree.props.children.filter(Boolean)
   assert.deepEqual(sections.map(section => text(find(section, 'h2'))), ['连接', '模型', '自动化', '偏好', '高级'])
   const connections = sections[0].props.children.filter(node => node?.type === 'details')
-  assert.deepEqual(connections.map(node => text(node.props.children[0]).replace('读取中…', '')), ['飞书日历', 'Google', 'MCP 连接'])
+  assert.deepEqual(connections.map(node => text(node.props.children[0]).replace('读取中…', '')), ['Google', 'MCP 连接'])
+  assert.ok(find(sections[0], 'a', props => props.href === '#bot=chief&tab=capabilities'))
+  assert.equal(find(sections[0], 'stub-ExternalWorkspace'), undefined)
+  assert.equal(find(sections[4], 'stub-WorkspaceStatus').props.active, false)
   assert.ok(find(sections[0], 'stub-ExternalMcpConnections'))
   assert.equal(find(sections[0], 'stub-StdioCredentials'), undefined)
-  assert.ok(find(sections[4], 'stub-StdioCredentials'))
+  assert.equal(find(tree, 'stub-StdioCredentials'), undefined)
   assert.ok(find(sections[4], 'details', props => props.className === 'tech-info'))
-  for (const [type, summary] of [['ExternalWorkspace', '工作日历'], ['GoogleConnection', 'me@example.test'], ['ExternalMcpConnections', '2 个']]) {
+  for (const [type, summary] of [['GoogleConnection', 'me@example.test'], ['ExternalMcpConnections', '2 个']]) {
     find(tree, `stub-${type}`).props.onSummary(summary)
   }
-  assert.deepEqual(h.render().props.children[0].props.children.filter(node => node?.type === 'details').map(node => text(find(node, 'span'))), ['工作日历', 'me@example.test', '2 个'])
+  assert.deepEqual(h.render().props.children[0].props.children.filter(node => node?.type === 'details').map(node => text(find(node, 'span'))), ['me@example.test', '2 个'])
 })
 
 test('external MCP component saves form configuration only, then explicitly checks and disables the connection', async t => {
@@ -438,4 +441,13 @@ test('real MCP settings component consumes production authenticated routes and a
   button(tree, '移除').props.onClick()
   for (let n = 0; n < 100; n++) { tree = await h.settle(); if (text(tree).includes('还没有 MCP 连接')) break; await new Promise(resolve => setTimeout(resolve, 5)) }
   assert.deepEqual(await client.connections(), [])
+})
+
+test('settings capability shortcut invokes navigation even when its destination hash is already selected', async t => {
+  let opened = 0, prevented = false
+  const h = await harness(t, './SettingsPage.tsx', { token: 'fixture-ui', onOpenCapabilities: () => opened++ })
+  const link = find(h.render(), 'a', props => props.href === '#bot=chief&tab=capabilities')
+  link.props.onClick({ preventDefault() { prevented = true } })
+  assert.equal(opened, 1)
+  assert.equal(prevented, true)
 })

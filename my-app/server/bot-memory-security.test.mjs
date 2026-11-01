@@ -32,7 +32,7 @@ async function fixture(t) {
     const taskId = await tx.createTask(Probe, {}, { conversationId: root.id, ownership: { kind: 'conversation' } })
     const child = await tx.createConversation({ ownership: { kind: 'task', taskId } })
     const entry = await tx.appendEntry(child.id, { kind: 'pidot.user', data: { role: 'user', content: sourceText } })
-    return { card: { taskId, conversationId: child.id, kind: 'main', initiatingUser: 'authenticated-user', bot: { id: 'chief' }, parameters: { mode: 'model', tools: ['workspace.prepare_change'], requestTimeoutMs: 5000 } }, entries: [JSON.parse(JSON.stringify(entry))] }
+    return { card: { taskId, conversationId: child.id, kind: 'main', initiatingUser: 'authenticated-user', bot: { id: 'chief' }, parameters: { mode: 'model', model: { id: 'security-scripted' }, tools: ['workspace.prepare_change'], requestTimeoutMs: 5000 } }, entries: [JSON.parse(JSON.stringify(entry))] }
   })
   const ref = { taskId: batch.card.taskId, entryId: batch.entries[0].id }
   const validate = async tx => (await tx.doc(Authorization)).allowed
@@ -56,6 +56,7 @@ async function fixture(t) {
   }
 }
 const patch = (f, id = 'tone', content = sourceText) => ({ action: 'add', id, content, sourceEntries: [f.ref] })
+const jobOf = state => Object.values(state.jobs)[0]
 const extracted = f => response({ memory: [], preferences: [{ content: sourceText, sourceEntries: [f.ref] }] })
 
 test('T11 security: extraction is read-only; model tool proposals cannot replay original tools or mutate documents', async t => {
@@ -68,7 +69,7 @@ test('T11 security: extraction is read-only; model tool proposals cannot replay 
   assert.equal(f.options.parameters.thinkingLevel, 'off')
   assert.equal(f.options.taskId, f.ref.taskId) // attribution only; no original tools or dispatch callback
   assert.deepEqual((await f.get()).preferences.items, [])
-  assert.equal((await f.state()).jobs[String(f.ref.taskId)].state, 'pending')
+  assert.equal(jobOf(await f.state()).state, 'retry-wait')
 })
 
 test('T11 security: hidden assistant toolCall cannot bypass read-only extraction envelope', async t => {
@@ -76,7 +77,7 @@ test('T11 security: hidden assistant toolCall cannot bypass read-only extraction
   f.setReply(async () => ({ ...extracted(f), assistant: { role: 'assistant', content: [{ type: 'toolCall', id: 'hidden', name: 'workspace.prepare_change', arguments: {} }] } }))
   await f.worker.tick()
   assert.deepEqual((await f.get()).preferences.items, [])
-  assert.equal((await f.state()).jobs[String(f.ref.taskId)].state, 'pending')
+  assert.equal(jobOf(await f.state()).state, 'retry-wait')
 })
 
 test('T11 security: real source ID is not evidence for an invented factual claim', async t => {
@@ -123,7 +124,7 @@ test('T11 security: credential rotation during extraction rejects newly-secret o
   release.release()
   await running
   assert.deepEqual((await f.get()).preferences.items, [])
-  assert.equal((await f.state()).jobs[String(f.ref.taskId)].state, 'pending')
+  assert.equal(jobOf(await f.state()).state, 'retry-wait')
   await f.scan([secret])
 })
 
@@ -137,31 +138,32 @@ test('T11 security: a credential-bearing source never reaches the extractor or d
   await f.scan([secret])
 })
 
-test('T11 security: persisted pending job restart must not charge or invoke the same extraction twice', async t => {
+test('T11 security: failed extraction can retry after restart without consuming its evidence', async t => {
   const f = await fixture(t)
   f.setReply(async () => { throw new Error('simulated transport interrupted') })
   await f.worker.tick()
   const before = await f.state()
   assert.equal(before.calls, 1)
-  assert.equal(before.jobs[String(f.ref.taskId)].state, 'pending')
+  assert.equal(jobOf(before).state, 'retry-wait')
   await f.restart()
   await f.worker.tick()
   const after = await f.state()
-  assert.equal(after.calls, before.calls, 'same reserved signature cannot spend a second model call after restart')
-  assert.equal(after.reservedTokens, before.reservedTokens)
-  assert.equal(f.called, 1)
+  assert.equal(after.calls, before.calls + 1, 'confirmed unsubmitted failure can retry within the persistent daily budget')
+  assert.ok(after.reservedTokens > before.reservedTokens)
+  assert.equal(f.called, 2)
+  assert.equal(Object.keys(after.processed).length, 0)
 })
 
-test('T11 security: a crash-boundary persisted running job cannot get a fresh call reservation on restart', async t => {
+test('T11 security: abandoned running work without a submitted proposal retries within the same persistent budget', async t => {
   const f = await fixture(t)
   f.setReply(async () => { throw new Error('simulated transport interrupted') })
   await f.worker.tick()
-  await f.transaction(async tx => { const job = (await tx.doc(MemoryExtraction)).jobs[String(f.ref.taskId)]; job.state = 'running'; job.code = null })
+  await f.transaction(async tx => { const job = jobOf(await tx.doc(MemoryExtraction)); job.state = 'running'; job.code = null })
   const before = await f.state()
   await f.restart()
   await f.worker.tick()
-  assert.equal((await f.state()).calls, before.calls)
-  assert.equal(f.called, 1)
+  assert.equal((await f.state()).calls, before.calls + 1)
+  assert.equal(f.called, 2)
 })
 
 test('T11 security: exhausted budget across restart retains pending state without another model call', async t => {
@@ -338,6 +340,32 @@ test('T11 security: delayed extraction cannot resurrect a user-deleted preferenc
   await running
   assert.deepEqual((await f.get()).preferences.items, [])
   assert.equal((await f.get()).preferences.version, 2)
-  assert.equal((await f.state()).jobs[String(f.ref.taskId)].state, 'pending')
+  assert.equal(jobOf(await f.state()).state, 'blocked')
   assert.equal(f.called, 1)
+})
+
+test('M02 durable proposal survives an actual SQLite reopen after a confirmed unsubmitted memory write failure', async t => {
+  const f = await fixture(t), original = f.service.applyCandidate
+  f.setReply(async () => extracted(f))
+  f.service.applyCandidate = async () => { throw new Error('isolated commit interruption') }
+  await f.worker.tick()
+  assert.equal(f.called, 1); assert.ok(jobOf(await f.state()).proposal)
+  assert.deepEqual((await f.get()).preferences.items, [])
+  f.service.applyCandidate = original
+  await f.restart(); await f.worker.tick()
+  assert.equal(f.called, 1, 'the persistent structured proposal is resumed without another generation')
+  assert.equal((await f.get()).preferences.version, 1); assert.equal((await f.get()).preferences.items.length, 1)
+})
+
+test('M02 committed receipt and applied-kind survive SQLite reopen when final review acknowledgement was interrupted', async t => {
+  const f = await fixture(t), original = f.service.applyCandidate
+  f.setReply(async () => extracted(f))
+  f.service.applyCandidate = async (tx, input) => { const result = await original(tx, input); (await tx.doc(Authorization)).allowed = false; return result }
+  await f.worker.tick()
+  assert.equal((await f.get()).preferences.version, 1); assert.ok(jobOf(await f.state()).applied.includes('preferences'))
+  assert.equal(Object.keys((await f.state()).processed).length, 0)
+  f.service.applyCandidate = original
+  await f.restore(); await f.restart(); await f.worker.tick()
+  assert.equal(f.called, 1); assert.equal((await f.get()).preferences.version, 1)
+  assert.ok((await f.state()).processed[`${f.ref.taskId}/${f.ref.entryId}`])
 })

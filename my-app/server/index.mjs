@@ -14,6 +14,8 @@ let tasks, externalMcp, google
 try {
   const config = readConfig()
   // R2 file memory is on by default; PIDOT_MEMORY_FILES=0 is the rollback switch (imports unsynced hand edits once).
+  const memoryLearningFlag = process.env.PIDOT_MEMORY_LEARNING ?? '1'
+  if (!['0', '1'].includes(memoryLearningFlag)) throw new Error('PIDOT_MEMORY_LEARNING 只能是 0 或 1。')
   const memoryFilesFlag = process.env.PIDOT_MEMORY_FILES ?? '1'
   if (!['0', '1'].includes(memoryFilesFlag)) throw new Error('PIDOT_MEMORY_FILES 只能是 0 或 1。')
   // Stable default independent of the shell cwd; tests may use a temporary DB.
@@ -27,7 +29,7 @@ try {
   // R3-02: fixed Google hosts; client config by ADR-016 order (env, my-app/.env, root .env, then the settings file).
   google = await openGoogleConnection({ dataDirectory: join(dirname(file), 'google') })
   externalMcp = await createExternalMcpService({ dataDirectory: join(dirname(file), 'external-mcp'), googleAccessToken: options => google.accessToken(options), googleRejectToken: token => google.rejectToken(token) })
-  tasks = await openTaskStore({ file, r4Migration: true, skillDirectory, externalMcp, google, capabilityManagementEnabled: true, readCapabilityCatalog: () => skillCapabilityCatalog(skillDirectory), workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, memoryOptions: { enabled: true }, memoryFiles: { enabled: memoryFilesFlag === '1', root: join(dirname(file), 'bot-workspaces') }, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
+  tasks = await openTaskStore({ file, r4Migration: true, skillDirectory, externalMcp, google, capabilityManagementEnabled: true, readCapabilityCatalog: tx => skillCapabilityCatalog(skillDirectory, { tx }), workspaceEnabled: process.env.PIDOT_WORKSPACE_ENABLED !== '0', workspaceMigration: process.env.PIDOT_WORKSPACE_MIGRATION, bots: listBots(modelConfig, readExecutionDefaults()), modelSettings, memoryOptions: { enabled: memoryLearningFlag === '1' }, memoryFiles: { enabled: memoryFilesFlag === '1', root: join(dirname(file), 'bot-workspaces') }, detectorOptions: { autoStart: true, onError: () => console.error('detector pass failed') } })
   const server = createApiServer({
     token: config.token, tasks, onError: console.error,
     staticDir: fileURLToPath(new URL('../dist/', import.meta.url)),

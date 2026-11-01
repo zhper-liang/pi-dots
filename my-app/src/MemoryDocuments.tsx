@@ -112,6 +112,7 @@ export function MemoryDocumentSection({ title, description, document: doc, histo
   return <section className="memory-section" aria-labelledby={`${id}-title`}>
     <div className="memory-section-head"><h2 id={`${id}-title`}>{title}</h2><span className="memory-meta">{memoryDate(doc.updatedAt)}</span></div>
     <p className="memory-hint">{description}</p>
+    <p className="memory-meta">已用 {doc.kind === 'personality' ? (doc.content ?? '').length : (doc.items ?? []).reduce((sum, item) => sum + item.content.length, 0)} / {doc.kind === 'personality' ? 8192 : 16384} 字{doc.kind !== 'personality' && ` · ${doc.items?.length ?? 0} / 64 条`}</p>
     <MemoryFileState file={doc.file} kind={doc.kind} />
     {doc.status.state === 'pending' && <p className="memory-pending" role="status">{memoryErrorMessage(doc.status.code)}</p>}
     {doc.kind === 'personality' ? <>

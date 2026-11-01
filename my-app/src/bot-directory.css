@@ -29,6 +29,7 @@
 .bot-tab-panel > .bot-edit-section { margin-bottom: 24px; }
 .bot-config-advanced { margin-block: 24px; }
 .bot-config-advanced > summary { min-height: 44px; cursor: pointer; }
+.bot-template-picker > summary { min-height: 44px; cursor: pointer; }
 @media (max-width: 600px) {
   .bot-detail-page .bot-detail-head { flex-wrap: wrap; gap: 12px; }
   .bot-detail-tabs button { flex: 1 0 auto; }

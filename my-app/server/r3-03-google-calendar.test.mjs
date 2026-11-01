@@ -139,7 +139,7 @@ test('R3-03 window reads fill the Event cache: cross-day, DST fall-back, time zo
     await assert.rejects(store.workspace.queryExternal({ sourceId: primary, ...bad }), e => e.code === 'WORKSPACE_EXTERNAL_INPUT')
   await assert.rejects(store.workspace.getExternal({ sourceId: primary, eventId: 'nope' }), e => e.code === 'WORKSPACE_EXTERNAL_NOT_FOUND')
 }))
-test('R3-03 end to end: an Agent creates, updates and deletes through workspace.prepare_change, directly with the group on (D4)', async () => calendarStore(async ({ store, fake, primary, holiday, record }) => {
+test('R3-03 end to end: an Agent creates, updates and deletes through workspace.prepare_change, create/update directly and delete only after confirmation', async () => calendarStore(async ({ store, fake, primary, holiday, record }) => {
   await assign(store, [`workspace:${primary}`])
   const call = await mcpClient(store, primary)
   const created = record(await call('workspace.prepare_change', { sourceId: primary, requestId: 'r3-03-create', action: 'create', change: { arguments: create } }))
@@ -165,7 +165,10 @@ test('R3-03 end to end: an Agent creates, updates and deletes through workspace.
   const fresh = (await call('workspace.get', { sourceId: primary, type: 'Event', eventId })).items[0]
   assert.deepEqual([fresh.title, fresh.version, Date.parse(fresh.start)], ['改到下午', 2, Date.parse('2026-11-04T14:00:00+08:00')])
   const removed = record(await call('workspace.prepare_change', { sourceId: primary, requestId: 'r3-03-delete', action: 'delete', change: { arguments: { eventId }, expectedVersion: fresh.version } }))
-  assert.equal(removed.state, 'succeeded')
+  assert.equal(removed.state, 'awaiting_confirmation')
+  assert.equal(write(fake, 'DELETE').length, 0)
+  await store.workspace.confirmExternal({ requestId: removed.requestId, payloadHash: removed.payloadHash, confirmed: true })
+  assert.equal((await store.workspace.executeExternal({ requestId: removed.requestId })).state, 'succeeded')
   const del = write(fake, 'DELETE')
   assert.deepEqual([del.length, del[0].ifMatch, del[0].query.sendUpdates], [1, fresh.remoteVersion, 'none'])
   assert.equal(fake.state.events.get('me@example.test').get(eventId).status, 'cancelled')

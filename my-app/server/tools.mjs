@@ -1,3 +1,6 @@
+import { SESSION_HISTORY_TOOLS, sessionHistoryTools, validSessionHistoryArgs } from './history-search.mjs'
+import { MEMORY_TOOLS, MAIN_MEMORY_TOOLS, memoryTools, validMemoryCall } from './memory-tools.mjs'
+import { nativeTools, NATIVE_TOOLS, validNativeCall } from './native-tools.mjs'
 import { capabilityManagementTools, CAPABILITY_MANAGEMENT_TOOLS, validCapabilityManagementArgs } from './capability-management-tools.mjs'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv'
 import { boundedMcpJson } from './external-mcp-config.mjs'
@@ -20,6 +23,9 @@ import { RESULT_READ_TOOL, resultReadTool, validDate, validResultReadArgs } from
 import { AUTOMATION_PAUSE_TOOL, automationPauseTool, validAutomationPauseArgs } from './policy.mjs'
 import { mainTools, MAIN_TOOLS, MAIN_READ_TOOLS, validMainArgs } from './main-tools.mjs'
 import { TOOL_GROUPS } from './tool-groups.mjs'
+
+export const RECALL_TOOLS = Object.freeze([RESULT_READ_TOOL, HISTORY_TOOL])
+export const INTRINSIC_TOOLS = Object.freeze([...NATIVE_TOOLS, ...RECALL_TOOLS, ...MEMORY_TOOLS])
 
 export const CALENDAR_TOOL = 'calendar_read_schedule'
 export const CALENDAR_EVENT_TOOL = 'calendar_read_event'
@@ -59,20 +65,20 @@ export const calendarEventTool = Object.freeze({
       } },
   } },
 })
-const installed = [...managementTools, calendarTool, calendarEventTool, resultReadTool, historyTool, ...skillTools, blockerTool, calendarWriteTool, ...collaborationTools, reviewTool, ...sharedTools, ...blockerActions, ...feishuTools, feishuCreateTool, ...feishuMutationTools, ...workspaceTools, automationPauseTool, ...mainTools, ...capabilityManagementTools]
+const installed = [...nativeTools, ...managementTools, calendarTool, calendarEventTool, resultReadTool, historyTool, ...sessionHistoryTools, ...memoryTools, ...skillTools, blockerTool, calendarWriteTool, ...collaborationTools, reviewTool, ...sharedTools, ...blockerActions, ...feishuTools, feishuCreateTool, ...feishuMutationTools, ...workspaceTools, automationPauseTool, ...mainTools, ...capabilityManagementTools]
 const copy = (value) => JSON.parse(JSON.stringify(value))
 export function toolSets(card, bots, access) {
   const bot = bots.find((item) => item.id === card.bot.id)
   // This metadata is a per-store cache, never a grant; live assignments and provider checks still win.
   const externalTools = copy(access.externalMcp?.tools ?? [])
-  const names = [...installed, ...externalTools].map((tool) => tool.name).filter(name => (!CAPABILITY_MANAGEMENT_TOOLS.includes(name) || access.capabilityManagementReady === true) && (!MANAGEMENT_TOOLS.includes(name) || card.bot.id === 'chief' && card.managementTools?.includes(name)) && (!MAIN_TOOLS.includes(name) || card.kind === 'main'))
+  const names = [...installed, ...externalTools].map((tool) => tool.name).filter(name => (![...SESSION_HISTORY_TOOLS, ...MAIN_MEMORY_TOOLS].includes(name) || card.kind === 'main') && (!CAPABILITY_MANAGEMENT_TOOLS.includes(name) || access.capabilityManagementReady === true) && (!MANAGEMENT_TOOLS.includes(name) || card.bot.id === 'chief' && card.managementTools?.includes(name)) && (!MAIN_TOOLS.includes(name) || card.kind === 'main'))
   const assigned = access.assignments?.[card.bot.id] ?? { tools: bot?.defaults.tools ?? [], resources: bot?.defaults.toolResources ?? [] }
-  const intrinsic = card.kind === 'main' && access.mainAssignments?.bots?.includes(card.bot.id)
+  const intrinsic = card.bot.id === 'chief' && card.kind === 'main' && access.mainAssignments?.bots?.includes(card.bot.id)
     ? [...MAIN_TOOLS, AUTOMATION_PAUSE_TOOL]
     : []
-  const effectiveTools = new Set([...assigned.tools, ...intrinsic])
-  // S1: authorized = installed ∩ current assignment − revoked. No pool, no snapshot, no epoch.
-  const authorized = names.filter((name) => effectiveTools.has(name) && !access.revoked[card.bot.id]?.includes(name) &&
+  const effectiveTools = new Set([...INTRINSIC_TOOLS, ...(card.kind === 'main' ? [...SESSION_HISTORY_TOOLS, ...MAIN_MEMORY_TOOLS] : []), ...assigned.tools, ...intrinsic])
+  // Native abilities are intrinsic. Optional tools use installed ∩ assignment − revoked.
+  const authorized = names.filter((name) => effectiveTools.has(name) && (INTRINSIC_TOOLS.includes(name) || SESSION_HISTORY_TOOLS.includes(name) || MAIN_MEMORY_TOOLS.includes(name) || !access.revoked[card.bot.id]?.includes(name)) &&
     (!externalTools.some(tool => tool.name === name) || externalTools.find(tool => tool.name === name).enabledBotIds.includes(card.bot.id)))
   if (card.bot.id === 'chief') for (const name of [...MANAGEMENT_TOOLS, BLOCKER_TOOL]) {
     if (card.managementTools?.includes(name) && !access.revoked.chief?.includes(name) && !authorized.includes(name)) authorized.push(name)
@@ -87,7 +93,7 @@ export function toolSets(card, bots, access) {
   // Routine runs keep to workspace tools (D-12). Only writes=true routines (never test runs or
   // legacy read-only briefs, D-13) may propose changes, and decide() still arbitrates each one.
   if (card.scheduledWorkflow) {
-    const allowed = new Set(['workspace.list', 'workspace.get', ...(card.scheduledWorkflow.writes === true && !card.scheduledWorkflow.test ? ['workspace.prepare_change', 'workspace.operation_status'] : [])])
+    const allowed = new Set([...RECALL_TOOLS, 'workspace.list', 'workspace.get', ...(card.scheduledWorkflow.writes === true && !card.scheduledWorkflow.test ? ['workspace.prepare_change', 'workspace.operation_status'] : [])])
     authorized.splice(0, authorized.length, ...authorized.filter(n => allowed.has(n)))
     resources = resources.filter(r => (card.scheduledWorkflow.resources ?? card.parameters.toolResources ?? []).includes(r))
   }
@@ -114,6 +120,7 @@ function resourceReady(name, resources) {
 // Chinese labels for model tool descriptions and Bot settings. Kept here (not in tool-groups.mjs) so the
 // pure toolSets() module graph stays free of policy/rule storage imports.
 export const TOOL_LABELS = Object.freeze({
+  memory_review: '整理长期记忆', memory_read: '读取长期记忆', memory_edit: '修改长期记忆', bash: '执行命令', read: '读取文件', write: '写入文件', edit: '编辑文件',
   mcp_manage: '配置 MCP 能力', skill_manage: '配置 Skill 能力',
   skill_activate: '按需加载 Skill', skill_deactivate: '结束 Skill', skill_read_resource: '读取 Skill 资料',
   calendar_read_schedule: '读取模拟日程', calendar_read_event: '读取模拟日程详情', calendar_reschedule_event: '调整模拟日程',
@@ -123,7 +130,7 @@ export const TOOL_LABELS = Object.freeze({
   routine_propose: '创建定时任务', 'workspace.prepare_schedule': '提议定时计划',
   collaborators_list: '查看其他机器人', task_assign: '派发任务', task_review: '验收结果', shared_publish: '发布共享信息', shared_read: '读取共享信息', shared_link: '分享给其他机器人',
   report_blocker: '上报阻塞', blocker_resolve: '解除阻塞', blocker_escalate: '升级阻塞', task_status: '查看任务进度',
-  task_history_read: '回读会话历史', tool_result_read: '回读工具结果', automation_pause: '暂停自动化', bot_manage: '管理机器人', bot_inspect: '查看机器人', task_create: '派给独立任务',
+  session_search: '搜索本Bot历史', session_history_read: '补读历史来源', task_history_read: '回读会话历史', tool_result_read: '回读工具结果', automation_pause: '暂停自动化', bot_manage: '管理机器人', bot_inspect: '查看机器人', task_create: '派给独立任务',
 })
 export const toolLabel = (name) => TOOL_LABELS[name] ?? name
 
@@ -134,7 +141,7 @@ export function toolDefinitions(names, { externalTools = [] } = {}) {
     return copy({ name, description: label === name ? description : `【${label}】${description}`, parameters })
   })
 }
-export function toolCatalog({ externalTools = [] } = {}) { return copy([...installed, ...externalTools.map(tool => ({ ...tool, parameters: tool.inputSchema }))].filter(t => !MANAGEMENT_TOOLS.includes(t.name) && (!MAIN_TOOLS.includes(t.name) || TOOL_GROUPS.some(group => group.tools.includes(t.name))))) }
+export function toolCatalog({ externalTools = [] } = {}) { return copy([...installed, ...externalTools.map(tool => ({ ...tool, parameters: tool.inputSchema }))].filter(t => !INTRINSIC_TOOLS.includes(t.name) && !SESSION_HISTORY_TOOLS.includes(t.name) && !MAIN_MEMORY_TOOLS.includes(t.name) && !MANAGEMENT_TOOLS.includes(t.name) && (!MAIN_TOOLS.includes(t.name) || TOOL_GROUPS.some(group => group.tools.includes(t.name))))) }
 export function callLimits(parameters) {
   return { ...DEFAULT_CALL_LIMITS, ...(parameters.callLimits ?? {}) }
 }
@@ -149,7 +156,7 @@ export function checkModelLimit(usage, parameters) {
 export function parseRevocation(input, bot) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1 ||
     !Array.isArray(input.revoked) || input.revoked.length > installed.length || new Set(input.revoked).size !== input.revoked.length ||
-    input.revoked.some((name) => typeof name !== 'string' || !(bot.defaults.tools?.includes(name) || bot.id === 'chief' && MANAGEMENT_TOOLS.includes(name)) || !installed.some((tool) => tool.name === name))) {
+    input.revoked.some((name) => typeof name !== 'string' || INTRINSIC_TOOLS.includes(name) || !(bot.defaults.tools?.includes(name) || bot.id === 'chief' && MANAGEMENT_TOOLS.includes(name)) || !installed.some((tool) => tool.name === name))) {
     throw new TaskInputError(400, 'INVALID_TOOL_ACCESS', 'revoked 仅接受该 Bot 预置白名单内的工具名数组；不能扩大授权。')
   }
   return [...input.revoked]
@@ -167,6 +174,8 @@ export function checkToolCall({ card, record, conversation, call, displayed, set
   }
   if (!sets.installed.includes(call.name)) return denied('TOOL_NOT_INSTALLED', '工具未登记。')
   if (!sets.authorized.includes(call.name) || !displayed.includes(call.name)) return denied('TOOL_NOT_AUTHORIZED', '工具未授权、已撤权或未在本轮展示。')
+  if (NATIVE_TOOLS.includes(call.name)) return validNativeCall(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '原生能力参数无效。')
+  if ([...MEMORY_TOOLS, ...MAIN_MEMORY_TOOLS].includes(call.name)) return (!MAIN_MEMORY_TOOLS.includes(call.name) || card.kind === 'main') && validMemoryCall(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '记忆工具参数无效。')
   const external = sets.externalTools?.find(tool => tool.name === call.name)
   if (external) {
     try {
@@ -185,6 +194,7 @@ export function checkToolCall({ card, record, conversation, call, displayed, set
   if (WORKSPACE_TOOLS.includes(call.name)) return !call.argumentsError && validWorkspaceArgs(call.name, args) && sets.resources.includes(`workspace:${args.sourceId}`) ? { ok: true } : denied('TOOL_RESOURCE_DENIED', '工作区参数、来源或固定权限无效。')
   if (BLOCKER_ACTIONS.includes(call.name)) return validBlockerAction(call) ? { ok:true } : denied('TOOL_INVALID_ARGUMENTS','具体阻塞事项参数无效。')
   if (call.name === BLOCKER_TOOL) return !call.argumentsError && validBlockerArgs(args) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '问题、必要信息和用户处理人参数无效。')
+  if (SESSION_HISTORY_TOOLS.includes(call.name)) return card.kind === 'main' && !call.argumentsError && validSessionHistoryArgs(call.name, args) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '历史搜索或补读参数无效。')
   if (call.name === HISTORY_TOOL) return !call.argumentsError && validHistoryArgs(args) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '历史读取参数无效。')
   if (call.name === AUTOMATION_PAUSE_TOOL) return validAutomationPauseArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '只能暂停自动化；恢复只能由用户在设置页操作。')
   if (MAIN_TOOLS.includes(call.name)) return card.kind === 'main' && validMainArgs(call) ? { ok: true } : denied('TOOL_INVALID_ARGUMENTS', '主会话工具参数无效；task_create 不能指定其他Bot。')

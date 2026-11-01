@@ -1,3 +1,4 @@
+import { NATIVE_TOOLS } from './native-tools.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -77,7 +78,7 @@ test('second round sends fixed Bot, task state and ordered consumed user/assista
   assert.ok(prompt.includes('每次回复和后续行动均须遵守'))
   assert.ok(prompt.includes('1. 只使用北京时间\n2. 不改动日历'))
   assert.equal(second.messages.length, 4)
-  assert.deepEqual(calls[1].tools.map((tool) => tool.function.name), ['calendar_read_schedule', 'calendar_read_event', 'tool_result_read', 'task_history_read', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'])
+  assert.deepEqual(calls[1].tools.map((tool) => tool.function.name), [...NATIVE_TOOLS, 'calendar_read_schedule', 'calendar_read_event', 'tool_result_read', 'task_history_read', 'memory_read', 'memory_edit', 'skill_activate', 'skill_deactivate', 'skill_read_resource', 'report_blocker', 'calendar_reschedule_event'])
   assert.equal(JSON.stringify(calls).includes(config.apiKey), false)
 })
 

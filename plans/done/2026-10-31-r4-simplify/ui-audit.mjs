@@ -1,4 +1,4 @@
-// R4 acceptance walk. Run from my-app/: node ../plans/active/r4-simplify/ui-audit.mjs --label before|after
+// R4 acceptance walk. Run from my-app/: node ../plans/done/2026-10-31-r4-simplify/ui-audit.mjs --label before|after
 // Isolated: temp DB, scripted model, Feishu client without credentials, no Google, no network, never .env.
 // Exit code: "after" returns 1 on any finding; "before" always 0 (it only keeps screenshots).
 import { once } from 'node:events'

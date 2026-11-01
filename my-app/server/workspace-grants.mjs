@@ -74,3 +74,9 @@ export function workspaceShareAllowed(author, reader, access) {
     (author.externalMcpUsedRefs ?? []).every(ref => assigned.tools.includes(ref.toolName) && !access.revoked?.[reader.bot.id]?.includes(ref.toolName) &&
       access.externalMcp?.tools?.some(tool => tool.name === ref.toolName && tool.connectionId === ref.connectionId && tool.catalogRevision === ref.catalogRevision && tool.enabledBotIds.includes(reader.bot.id)))
 }
+
+// A delegated result belongs to its bound recipient. Source selections govern direct tool use,
+// not whether that recipient may read the answer it requested. Author provenance is checked separately.
+export function workspaceDelegatedResultAllowed(_author, reader, access) {
+  return !!access?.assignments?.[reader?.bot?.id]
+}
