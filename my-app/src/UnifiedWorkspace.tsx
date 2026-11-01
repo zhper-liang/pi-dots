@@ -76,7 +76,7 @@ export default function UnifiedWorkspace({ bots, onOpenTask, token, view, itemTa
           <div id="items-panel-calendar" role="tabpanel" aria-labelledby="items-tab-calendar" hidden={visibleItemTab !== 'calendar'} className="workspace-page"><CalendarBoard token={token} refreshKey={refreshKey} onChanged={onChanged} initialMode="day" active={view === 'items' && visibleItemTab === 'calendar'} /></div>
           <div id="items-panel-routines" role="tabpanel" aria-labelledby="items-tab-routines" hidden={visibleItemTab !== 'routines'} className="workspace-page">
             <BotRoutines bots={routineChoices} refreshKey={refreshKey} onChanged={onChanged} token={token} onOpenTask={onOpenTask} />
-            <details className="tech-info"><summary>技术信息</summary><ScheduleWorkspace token={token} view="schedules" /></details>
+            <details className="tech-info"><summary>高级：全部计划</summary><ScheduleWorkspace token={token} view="schedules" /></details>
           </div>
           <div id="items-panel-runs" role="tabpanel" aria-labelledby="items-tab-runs" hidden={visibleItemTab !== 'runs'} className="workspace-page"><ScheduleWorkspace token={token} view="runs" /></div>
         </section>

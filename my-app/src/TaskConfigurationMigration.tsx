@@ -5,6 +5,23 @@ type Ref = { botId: string; version: string }
 type Migration = { id: number; previous: Ref; next: Ref; source: string; createdAt: string }
 type OwnedTask = { taskId: number; bot: { id: string }; configRef: Ref; migrationHistory?: Migration[] }
 type Preview = { taskId: number; conversationId: number; previous: Ref; next: Ref; previewToken: string; changes: { field: string; previous: unknown; next: unknown }[]; retainedOverrides: string[]; activeSkills: { id: string; version: string; sha256: string }[]; capacity: { contextWindow: number; estimatedTokens: number; nextInputReserveTokens: number } | null; usage: { modelCalls: number; toolCalls: number; totalTokens: number; unknownTokenCalls: number } }
+const fieldLabels: Record<string, string> = { 'bot.description': '职责', 'parameters.mode': '回复方式', 'parameters.model': '模型', 'parameters.thinkingLevel': '思考深度', 'parameters.requestTimeoutMs': '单次等待上限', 'parameters.maxOutputTokens': '单次回复长度上限', 'parameters.callLimits': '调用上限', 'parameters.contextWindows': '模型容量' }
+const fieldLabel = (field: string) => fieldLabels[field] ?? '其他设置'
+// A setting value in words: model by name, lists joined, objects as short key: value pairs.
+function settingValue(value: unknown): string {
+  if (value === null || value === undefined) return '未设置'
+  if (value === 'model') return '真实模型'
+  if (value === 'test') return '测试回复'
+  if (value === 'low') return '低'
+  if (value === 'high') return '高'
+  if (Array.isArray(value)) return value.length ? value.join('、') : '无'
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    if (typeof record.id === 'string') return record.id
+    return Object.entries(record).map(([key, item]) => `${key} ${typeof item === 'object' ? JSON.stringify(item) : String(item)}`).join('，')
+  }
+  return String(value)
+}
 export default function TaskConfigurationMigration<T extends OwnedTask>({ task, token, onUpdated }: { task: T; token: string; onUpdated: (task: T) => void }) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [confirmed, setConfirmed] = useState(false)
@@ -41,19 +58,14 @@ export default function TaskConfigurationMigration<T extends OwnedTask>({ task, 
   }
   return <details className="bot-configuration task-migration"><summary>更新本会话的模型与提示词</summary>
     <p className="muted small">空闲时可以更新，已有历史和调用次数保留。</p>
-    <details className="tech-info"><summary>技术信息</summary><code data-testid="task-migration-version">{task.configRef.version}</code></details>
-    <button type="button" disabled={busy} onClick={() => void perform(false)}>{busy ? '正在核对…' : '查看迁移差异'}</button>
+    <button type="button" disabled={busy} onClick={() => void perform(false)}>{busy ? '正在比较…' : '看看会改什么'}</button>
     {error && <p className="error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-    {preview && <section aria-label="迁移差异预览">
-      <details className="tech-info"><summary>技术信息</summary><p><code>{preview.previous.version}</code> → <code>{preview.next.version}</code></p>
-      <p>保留原 Task #{preview.taskId} / conversation #{preview.conversationId}、历史、任务要求、成功回执和累计用量：模型 {preview.usage.modelCalls} / 工具 {preview.usage.toolCalls} / 已知 Token {preview.usage.totalTokens} / 未知 {preview.usage.unknownTokenCalls}。</p>
-      <p>保留用户参数覆盖：{preview.retainedOverrides.join('、') || '无'}。保留活动固定 Skill：{preview.activeSkills.map((s) => `${s.id}@${s.version}`).join('、') || '无'}。</p>
-      {preview.capacity && <p>已配置模型容量 {preview.capacity.contextWindow} Token；保守估算上下文 {preview.capacity.estimatedTokens}，另预留下一次输入 {preview.capacity.nextInputReserveTokens}。不会为迁移静默压缩或删减规则。</p>}
-      <div className="table-scroll"><table><caption>模型、提示词与运行配置变化</caption><thead><tr><th>字段</th><th>原配置</th><th>目标配置</th></tr></thead><tbody>{preview.changes.filter((c) => !['parameters.tools', 'parameters.toolResources'].includes(c.field)).map((c) => <tr key={c.field}><th>{c.field}</th><td><pre>{JSON.stringify(c.previous, null, 2)}</pre></td><td><pre>{JSON.stringify(c.next, null, 2)}</pre></td></tr>)}</tbody></table></div>
-      </details>
-      <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={(e) => setConfirmed(e.target.checked)} />将本会话更新为这个模型和提示词。</label>
-      <button className="primary" type="button" disabled={busy || !confirmed} onClick={() => void perform(true)}>确认迁移本会话</button>
+    {preview && <section aria-label="会改什么">
+      <p>聊天记录、任务要求和已用调用次数都保留{preview.retainedOverrides.length ? '，你单独改过的设置也保留' : ''}。</p>
+      {(() => { const rows = preview.changes.filter((c) => !['parameters.tools', 'parameters.toolResources'].includes(c.field)); return rows.length ? <div className="table-scroll"><table><caption>会改的设置</caption><thead><tr><th>设置</th><th>现在</th><th>改成</th></tr></thead><tbody>{rows.map((c) => <tr key={c.field}><th>{fieldLabel(c.field)}</th><td>{settingValue(c.previous)}</td><td>{settingValue(c.next)}</td></tr>)}</tbody></table></div> : <p>只更新了内部配置，用起来没有区别。</p> })()}
+      <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={(e) => setConfirmed(e.target.checked)} />把这个会话改成上面的设置。</label>
+      <button className="primary" type="button" disabled={busy || !confirmed} onClick={() => void perform(true)}>更新这个会话</button>
     </section>}
-    <details className="tech-info"><summary>技术信息 · 更新记录（{task.migrationHistory?.length ?? 0}）</summary><ol>{task.migrationHistory?.map((m) => <li key={m.id}>#{m.id} · {m.previous.version} → {m.next.version} · {m.source} · {new Date(m.createdAt).toLocaleString('zh-CN')}</li>)}</ol></details>
+    {!!task.migrationHistory?.length && <p className="muted small">上次更新：{new Date(task.migrationHistory.at(-1)!.createdAt).toLocaleString('zh-CN')}</p>}
   </details>
 }

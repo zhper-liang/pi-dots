@@ -9,8 +9,6 @@ export default function ActionOutcomeControls<T extends OutcomeTask>({ task, ite
   const [note, setNote] = useState(''), [busy, setBusy] = useState(false)
   const submitting = useRef(false), request = useRef<AbortController | null>(null)
   useEffect(() => () => request.current?.abort(), [])
-  const labels: Record<string, string> = { retrying: '正在复用原幂等键恢复', unconfirmed: '本次结果未确认', querying: '查询中', completed: '确认完成', unknown: '暂未查明', error: '本次调用失败', timeout: '本次调用超时', interrupted: '尝试中断，结果未知', 'invalid-evidence': '证据不匹配' }
-  const stopReasons: Record<string, string> = { IDEMPOTENCY_WINDOW_EXPIRED: '工具保障窗口已失效或尚未生效', IDEMPOTENCY_ATTEMPTS_EXHAUSTED: '幂等恢复次数已用完', QUERY_ATTEMPTS_EXHAUSTED: '已达本操作查询次数上限', CALL_LIMIT_REACHED: '当前调用额度不足', TOOL_NOT_AUTHORIZED: '工具已撤权或未授权', TOOL_RESOURCE_DENIED: '当前资源不允许访问', TOOL_IDENTITY_DENIED: 'Task身份不匹配', ACTION_BINDING_MISMATCH: '原操作与批准记录不匹配' }
   const operation = item.operation
   if (!operation) return null
   const cancelled = Boolean(task.cancellation) || task.runtime.outcome?.status === 'aborted'
@@ -32,28 +30,10 @@ export default function ActionOutcomeControls<T extends OutcomeTask>({ task, ite
   return <div className="action-outcome" data-testid="action-outcome">
     <h4>核对上次操作</h4>
     {!item.receipt && <p role="status">还没确认结果，请核对日历中的时间，再填写下面的说明。</p>}
-    <details className="tech-info"><summary>技术信息</summary>
-      <p>原操作 {operation.id} · 意图 #{operation.intentEntryId} · {operation.createdAt}</p>
-    {operation.capabilities.query && <p className="muted small">可靠查询：{operation.capabilities.query.name} · 标识：{operation.capabilities.query.identity.join(' / ')} · 最多 {operation.capabilities.query.maxAttempts} 次，跨重启累计，计入工具额度。稳定幂等：{operation.capabilities.stableIdempotency ? '已声明（见保障条件）' : '未声明'}。</p>}
-    {operation.capabilities.idempotency && <section aria-label="原操作幂等恢复证据">
-      <h4>稳定幂等恢复 · 原标识、原参数、一次业务效果</h4>
-      <p className="muted small">工具保障：{operation.capabilities.idempotency.name} · {operation.capabilities.idempotency.source}。仅模拟资源 {operation.capabilities.idempotency.scope}；精确绑定原批准参数。从原意图时间起 {operation.capabilities.idempotency.windowMs / 3600000} 小时内有效，截止 {new Date(Date.parse(operation.createdAt) + operation.capabilities.idempotency.windowMs).toLocaleString('zh-CN')}。最多 {operation.capabilities.idempotency.maxAttempts} 次，跨重启累计，每次计入工具额度；派发前复查权限、限额与取消。</p>
-      {operation.idempotency?.attempts.map((attempt) => <div key={attempt.id} className="blocker-answer"><p>幂等恢复 {attempt.number} / {operation.capabilities.idempotency?.maxAttempts} · {labels[attempt.status] ?? attempt.status} · 原操作 {attempt.operationId}<br /><small>{attempt.source} · 审计 #{attempt.resultEntryId ?? attempt.id}</small></p>
-        {attempt.replayed !== undefined && <p>{attempt.replayed ? '工具返回已保存的原结果；没有第二次业务修改。' : '原操作此前尚无效果，本次在保障窗口内安全完成首次修改。'}</p>}
-        {attempt.evidence !== undefined && <details><summary>工具幂等证据（原请求哈希、保障窗口与原结果）</summary><pre>{JSON.stringify(attempt.evidence, null, 2)}</pre></details>}</div>)}
-      {operation.idempotency?.stopped && <p role="status">幂等恢复已停止：{stopReasons[operation.idempotency.stopped.reason] ?? operation.idempotency.stopped.reason}（{operation.idempotency.stopped.reason}）。不进行无保障重试；有可靠查询则只读核实，否则保留未知等待。</p>}
-    </section>}
-    {querying && !cancelled && <p role="status">正在按工具契约核实或安全恢复原操作，暂不能提交用户核实；不会新建操作标识。</p>}
-    {operation.query && <section aria-label="原操作自动查询证据">
-      <h4>自动核实 · 只读，不重复改期</h4>
-      {operation.query.attempts.map((attempt) => <div key={attempt.id} className="blocker-answer"><p>查询 {attempt.number} / {operation.capabilities.query?.maxAttempts} · {labels[attempt.status] ?? attempt.status} · 原操作 {attempt.operationId}<br /><small>{attempt.source} · {new Date(attempt.createdAt).toLocaleString('zh-CN')} · 审计 #{attempt.resultEntryId ?? attempt.id}</small></p>
-        {attempt.evidence !== undefined && <details><summary>工具查询证据（原操作账本，不是相似会议）</summary><pre>{JSON.stringify(attempt.evidence, null, 2)}</pre></details>}</div>)}
-      {querying && !cancelled && <p role="status">正在核实原操作结果，暂不能提交用户核实；不会执行新的写入。</p>}
-      {operation.query.stopped && <p role="status">自动核实已停止：{stopReasons[operation.query.stopped.reason] ?? operation.query.stopped.reason}（{operation.query.stopped.reason}）。原结果仍未知，保留等待；查不到不代表失败，不自动重做。</p>}
-    </section>}
-    </details>
+    {querying && !cancelled && <p role="status">正在自动核对结果，先别提交。</p>}
+    {!querying && (operation.query?.stopped || operation.idempotency?.stopped) && <p role="status">自动核对没能确认结果，请你看一下日历。</p>}
     {cancelled && !item.receipt && <p>会话已取消，上次操作的结果还没确认。</p>}
-    {operation.verifications.map((entry) => <p key={entry.id} className="blocker-answer">用户核实 #{entry.id} · {entry.outcome === 'completed' ? '确认完成' : entry.outcome === 'retry' ? '申请重新操作（尚需精确批准）' : '仍无法确认'}：{entry.note}<br /><time>{new Date(entry.createdAt).toLocaleString('zh-CN')}</time></p>)}
+    {operation.verifications.map((entry) => <p key={entry.id} className="blocker-answer">你核对过：{entry.outcome === 'completed' ? '已完成' : entry.outcome === 'retry' ? '要求重做（需要再确认）' : '还不能确认'}。{entry.note}<br /><time>{new Date(entry.createdAt).toLocaleString('zh-CN')}</time></p>)}
     {operation.resolution?.outcome === 'retry' && <p>上次结果还没确认，请处理新的确认卡。</p>}
     {available && <div className="approval-actions">
       <label htmlFor={`verify-note-${item.id}`}>核对说明（必填）</label>

@@ -83,7 +83,7 @@ function CredentialFields({ connectionId, expectedRevision, transport, secretEnv
       <button className="primary" type="submit">{busy ? '正在安全保存…' : retryable ? '重试' : '保存凭据'}</button>
     </fieldset>
     {unavailable && <p role="status">此配置未声明可输入的凭据字段，请先修改连接配置。</p>}
-    {uncertain && <div role="status"><details className="tech-info"><summary>技术信息</summary><p>待核查请求：<code>{uncertain.requestId}</code></p></details><button type="button" disabled={disabled || busy} onClick={() => void verify()}>核对上次操作</button></div>}
+    {uncertain && <div role="status"><p>上次保存的结果还没确认。</p><button type="button" disabled={disabled || busy} onClick={() => void verify()}>核对上次操作</button></div>}
     {notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
   </form>
 }

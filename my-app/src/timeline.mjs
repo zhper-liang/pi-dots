@@ -10,6 +10,7 @@ export const TOOL_LABELS = {
   report_blocker: '提问', blocker_resolve: '回答问题', blocker_escalate: '转交问题', task_assign: '分派子任务', task_review: '验收子任务',
   shared_publish: '发布共享信息', shared_link: '关联共享信息', shared_read: '读取共享信息', collaborators_list: '查看协作者',
   bot_inspect: '查看机器人', bot_manage: '管理机器人', mcp_manage: 'MCP 配置', skill_manage: 'Skill 配置', skill_activate: '启用技能', skill_deactivate: '停用技能', skill_read_resource: '读取技能资料',
+  memory_read: '读取记忆', memory_edit: '修改记忆', memory_review: '整理记忆',
 }
 export const STATUS_LABELS = { ok: '成功', error: '未成功', running: '进行中', waiting: '等你处理', done: '完成', muted: '' }
 const SYSTEM_TITLES = { 'auto-applied': '已自动执行', mirror: '任务动态', finding: '主动提醒', 'context-floor': '权限变化', skill: 'Skill' }

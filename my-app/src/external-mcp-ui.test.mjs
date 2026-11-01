@@ -188,7 +188,10 @@ test('external MCP component preserves the original unknown request and verifies
   assert.match(find(tree, 'stub-EditorDialog').props.error, /上次操作没确认结果/)
   assert.equal(find(tree, 'stub-EditorDialog').props.pending, false)
   const requestId = f.calls[0].input.requestId
-  assert.match(text(find(tree, 'details', props => props.className === 'tech-info')), new RegExp(requestId))
+  // The pending notice is one sentence; the request id stays internal.
+  const shown = nodes(tree).map(node => typeof node.props.children === 'string' ? node.props.children : '').join(' ')
+  assert.match(shown, /上次操作的结果还没确认/)
+  assert.doesNotMatch(shown, new RegExp(requestId))
   button(tree, '核对上次操作').props.onClick()
   tree = await h.settle()
   assert.deepEqual(f.checks, [requestId])

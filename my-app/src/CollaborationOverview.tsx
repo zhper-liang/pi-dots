@@ -25,10 +25,5 @@ export default function CollaborationOverview<T extends { taskId: number; bot: {
       <p>{node.cancelled ? '已取消' : node.botStatus === 'inactive' ? '已停用' : node.permissionRevoked ? '权限已撤销' : node.runtime.checkpoint?.lastOutcome === 'failed' ? '执行失败' : node.runtime.checkpoint?.lastOutcome === 'limited' ? '已到调用上限' : node.runtime.checkpoint?.phase === 'awaitChildren' ? '等子任务结果' : node.businessStatus === 'accepted' ? '已验收' : node.businessStatus === 'submitted' ? '等主管验收' : node.activeInputId !== null ? '正在处理' : '空闲'}</p>
       {node.pending.map(item => <p key={`${item.kind}:${item.id}:${item.version ?? 0}`}><a href={nodeLink(node)}>待处理 · {item.summary}</a></p>)}
     </li>)}</ul>
-    <details className="tech-info"><summary>技术信息</summary>
-      {view.totals && <p data-testid="collaboration-total">各任务累计：模型 {view.totals.modelCalls} · 工具 {view.totals.toolCalls} · Token {view.totals.totalTokens} · 未知 {view.totals.unknownTokenCalls}</p>}
-      {view.nodes.map(node => <p key={node.taskId}>任务 #{node.taskId} · 模型 {node.usage.modelCalls}/{node.limits.modelCalls} · 工具 {node.usage.toolCalls}/{node.limits.toolCalls} · Token {node.usage.totalTokens}/{node.limits.totalTokens ?? '未设阈值'} · 未知 {node.usage.unknownTokenCalls}</p>)}
-      <ol>{view.events.map(event => <li key={event.id}>{event.at} · {event.kind} · Task #{event.taskId} · {event.rootWorkId}</li>)}</ol>
-    </details>
   </section>
 }

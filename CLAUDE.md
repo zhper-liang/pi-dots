@@ -45,7 +45,7 @@ pnpm build                                                 # tsc -b + vite build
 - **记忆**：每 Bot 的 `PROFILE.md`、`MEMORY.md` 和共享的 `shared/USER.md` 放在数据库同级的 `bot-workspaces/`，是内容真源；`pidot.bot-memory.*` Document 改作台账（版本、来源、防复活、提取水位）。只有 `memory-files.mjs` 的对账读写这些文件，读之前对账，不用 fs.watch。测试 store 默认只用台账，文件模式用 `openTaskStore({ memoryFiles: { enabled: true } })` 开启（ADR-019）。
 - **Google**：Calendar、Tasks 是 workspace-service 的原生 provider 适配，进 Event/Todo；Gmail、Drive、Docs、Sheets 经 loopback HTTP 上固定版本的 workspace-mcp，Pidot 登录 Google 一次，每次调用把访问令牌传给它。refresh token 只在数据库同级的 `google/credentials.json`。测试只打 `fixtures/fake-google.mjs` 与 `fixtures/fake-workspace-mcp.mjs`，请求真实 Google 主机即失败（ADR-020、ADR-021）。
 - **会话删除**：`session-lifecycle.mjs` 负责持久删除和主会话换新；读取时会过滤已删除的来源，不新增会话库。
-- **前端**：React 19 + React Compiler（babel 插件），没有 UI 框架和路由库，使用 hash 路由。纯逻辑放在 `src/*.mjs` 并配手写的 `*.d.mts` 类型声明，这样 `server/*.test.mjs` 能直接 import 测试。外壳 2026-10-31 由 Hermes 直角风格改为圆润风格：大圆角、胶囊按钮、轻阴影、动效、对话气泡，深色跟随系统。颜色、圆角、阴影、动效全是 `shell.css` `:root` 里的 token（深色在同文件的 `prefers-color-scheme` 块），新样式只引用 token，不写死颜色；动效要在 `prefers-reduced-motion` 下停住。机器人形象是同一个电视机器人（`BotAvatar.tsx` + `bot-figure.css`，颜色和配饰存在 localStorage），按运行状态播放动作；颜文字只留在状态胶囊和「正在回复」里。主管 Bot 的 id 仍是 `chief`，显示名 2026-10-31 起叫 pipi；应用图标 `public/favicon.svg` 是平面版 pipi。开关用 `Switch.tsx`，弹窗和时间选择复用 `EditorDialog.tsx`、`LocalTimePicker.tsx`。
+- **前端**：React 19 + React Compiler（babel 插件），没有 UI 框架和路由库，使用 hash 路由。纯逻辑放在 `src/*.mjs` 并配手写的 `*.d.mts` 类型声明，这样 `server/*.test.mjs` 能直接 import 测试。外壳 2026-10-31 由 Hermes 直角风格改为圆润风格：大圆角、胶囊按钮、轻阴影、动效、对话气泡，深色跟随系统。颜色、圆角、阴影、动效全是 `shell.css` `:root` 里的 token（深色在同文件的 `prefers-color-scheme` 块），新样式只引用 token，不写死颜色；动效要在 `prefers-reduced-motion` 下停住。机器人形象是同一个电视机器人（`BotAvatar.tsx` + `bot-figure.css`，颜色和配饰存在 localStorage），按运行状态播放动作；颜文字只留在状态胶囊和「正在回复」里。主管 Bot 的 id 仍是 `chief`，显示名 2026-10-31 起叫 pipi；应用图标 `public/favicon.svg` 是平面版 pipi。开关用 `Switch.tsx`，弹窗和时间选择复用 `EditorDialog.tsx`、`LocalTimePicker.tsx`。机器人回复用 `Markdown.tsx`（react-markdown + remark-gfm，原始 HTML 按文本显示）渲染；两段回复之间的工具调用由 `tool-steps.mjs` 折成一行「调用了 N 个工具」，展开看每个工具，再展开看参数和结果。界面不显示内部编号（调用 ID、版本号、requestId、原始 JSON），参数和结果只出现在工具调用的展开里，其他卡片用一句话说结果。
 
 ## 测试写法
 
@@ -58,7 +58,7 @@ pnpm build                                                 # tsc -b + vite build
 - 不要碰 `my-app/data/`（正式库 `pidot.sqlite`，以及同目录的 `bot-workspaces/` 记忆文件、`skills/`、`external-mcp/` 凭据）和 `my-app/.env`（含真实 token 与飞书凭据）。手测时用 `PIDOT_DB_PATH` 指向 /tmp 的临时库、一次性 32–256 位 `PIDOT_API_TOKEN` 和单独端口，结束后清理。
 - 模型配置从项目根 `.env` 读取（`OPENAI_BASE_URL`/`base_url`、`OPENAI_API_KEY`、`MODEL`），进程环境和 `my-app/.env` 优先；`PIDOT_REPLY_MODE=test` 强制测试回复。配置不完整会拒绝启动。
 - UI 改动要在 1440 和 375 两种宽度手测；没做就说没做，不能把自动测试通过写成已手测。
-- 新依赖先问用户。`pnpm-workspace.yaml` 设有发布冷却期策略，只对已批准的 `@earendil-works/*@1.3.0` 例外；`@modelcontextprotocol/sdk@1.32.2` 和 `zod@4.6.7` 是 2026-10-29 单独批准的固定版本。
+- 新依赖先问用户。`pnpm-workspace.yaml` 设有发布冷却期策略，只对已批准的 `@earendil-works/*@1.3.0` 例外；`@modelcontextprotocol/sdk@1.32.2` 和 `zod@4.6.7` 是 2026-10-29 单独批准的固定版本。`react-markdown@10.1.0` 和 `remark-gfm@4.0.1` 是 2026-11-01 批准的固定版本。
 - 现有约定：面向用户的文案、错误和日志用中文，代码注释用英文；错误响应和日志不输出 provider 配置、文件路径或 SQL 细节。
 
 你可以拒绝，反驳，派遣子agent

@@ -212,29 +212,62 @@ body { background: var(--c-canvas); color: var(--c-text); font-family: system-ui
 .shell-chat-column .message-user > :not(.message-heading, .message-body) { order: 2; align-self: flex-end; }
 .shell-chat-column .message-user .message-heading strong { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .shell-chat-column .message-user :is(.text-button, .text-button:hover:not(:disabled), .late-receipt, summary) { color: inherit; }
-.shell-chat-column .message-user .tech-info { background: color-mix(in srgb, #000000 14%, transparent); color: inherit; }
 .shell-chat-column .message-user + .message-user { margin-top: calc(-1 * var(--space-2)); }
 .shell-chat-column .message-bot { display: grid; grid-template-columns: 32px minmax(0, 1fr); column-gap: var(--space-3); align-items: start; }
 .shell-chat-column .message-bot > * { grid-column: 2; min-width: 0; }
 .shell-chat-column .message-bot > .message-avatar { grid-column: 1; grid-row: 1 / span 2; margin-top: 2px; }
-.shell-chat-column .message-bot.is-cont, .shell-chat-column .message-tool { margin-top: calc(-1 * var(--space-2)); }
-.shell-chat-column .message-assistant.is-cont .message-heading strong { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.shell-chat-column .message-bot > .message-body, .shell-chat-column .message-bot .tool-calls > p { justify-self: start; max-width: 100%; margin: 0; padding: 10px 16px; border-radius: var(--radius-xs) var(--radius-lg) var(--radius-lg) var(--radius-lg); background: var(--c-bubble); color: var(--c-text); font-size: var(--fs-body); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
-.shell-chat-column .message-bot .tool-calls { display: grid; gap: var(--space-2); justify-items: start; }
+.shell-chat-column .message-bot.is-cont { margin-top: calc(-1 * var(--space-2)); }
+/* A run from the same bot shows its name and time once; later rows keep only a tag such as 插入前返回的结果. */
+.shell-chat-column .message-bot.is-cont > .message-heading:not(:has(.delivery-status)) { display: none; }
+.shell-chat-column .message-bot.is-cont > .message-heading :is(strong, time) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.shell-chat-column .message-bot > .message-body { justify-self: start; max-width: 100%; margin: 0; padding: 10px 16px; border-radius: var(--radius-xs) var(--radius-lg) var(--radius-lg) var(--radius-lg); background: var(--c-bubble); color: var(--c-text); font-size: var(--fs-body); line-height: 1.65; overflow-wrap: anywhere; }
 .shell-chat-column .message-error > .message-body { background: var(--c-danger-bg); color: var(--c-danger); }
-.shell-chat-column .message-tool, .shell-chat-column .tool-calls { font-size: 13px; color: var(--c-muted); }
-.shell-chat-column .message-tool .tool-receipt { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-.shell-chat-column .message-tool .tool-receipt > p { margin: 0; }
-.shell-chat-column .message-tool .tool-receipt > :not(p, .tech-info) { flex-basis: 100%; }
-/* Raw call data folds into a small chip beside the step; open, it takes the full row. */
-.shell-chat-column :is(.message-tool, .tool-calls) .tech-info { margin: 0; padding: 3px 12px; border-radius: var(--radius-pill); }
-.shell-chat-column :is(.message-tool, .tool-calls) .tech-info[open] { width: 100%; box-sizing: border-box; padding: 8px 14px; border-radius: var(--radius-sm); }
+/* A reply with more than one block (lists, tables, code) uses the full width; a short line stays snug. */
+.shell-chat-column .message-bot > .md:has(> :nth-child(2), > :is(table, .md-table, pre, ul, ol)) { justify-self: stretch; }
+/* Tool calls: one quiet folded row ("调用了 3 个工具"), a line per call inside, arguments one click further. */
+.shell-chat-column .message-tool { row-gap: var(--space-2); font-size: var(--fs-ui); color: var(--c-muted); }
+.tool-run { justify-self: start; max-width: 100%; }
+/* Undo the page-wide details border and top padding (App.css); the pill is its own frame. */
+:is(.tool-run, .tool-step) { border: 0; padding-top: 0; }
+.tool-run[open] { justify-self: stretch; }
+.tool-run > summary, .tool-step > summary { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; list-style: none; }
+:is(.tool-run, .tool-step) > summary::-webkit-details-marker { display: none; }
+.tool-run > summary { width: fit-content; max-width: 100%; min-height: 32px; padding: 4px 12px 4px 10px; border-radius: var(--radius-pill); background: var(--c-fill); color: var(--c-text-2); transition: background var(--dur-1) var(--ease-out); }
+.tool-run > summary:hover { background: var(--c-border); }
+/* The chevron turns as the fold opens. */
+.tool-run > summary::after { content: ""; width: 6px; height: 6px; margin-left: 2px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; rotate: -45deg; opacity: .6; transition: rotate var(--dur-2) var(--ease-out); }
+.tool-run[open] > summary::after { rotate: 45deg; }
+.tool-mark { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; font-size: 10px; line-height: 1; font-weight: 700; }
+[data-tone="ok"] > summary > .tool-mark { background: var(--c-ok-bg); color: var(--c-ok); }
+[data-tone="ok"] > summary > .tool-mark::before { content: "✓"; }
+[data-tone="failed"] > summary > .tool-mark { background: var(--c-danger-bg); color: var(--c-danger); }
+[data-tone="failed"] > summary > .tool-mark::before { content: "!"; }
+:is([data-tone="waiting"], [data-tone="none"]) > summary > .tool-mark { background: var(--c-attention-bg); color: var(--c-attention); }
+:is([data-tone="waiting"], [data-tone="none"]) > summary > .tool-mark::before { content: "…"; }
+[data-tone="running"] > summary > .tool-mark::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+.tool-steps { list-style: none; margin: var(--space-2) 0 0 var(--space-3); padding: 0 0 0 var(--space-3); border-left: 2px solid var(--c-border); display: grid; gap: 2px; }
+.tool-step > summary { min-height: 30px; padding: 2px 8px; border-radius: var(--radius-xs); }
+.tool-step > summary:hover { background: var(--c-fill); }
+.tool-step-name { min-width: 0; color: var(--c-text-2); overflow-wrap: anywhere; }
+.tool-step-state { margin-left: auto; flex: none; font-size: var(--fs-small); }
+[data-tone="failed"] > summary > .tool-step-state { color: var(--c-danger); }
+.tool-step[open] { padding-bottom: var(--space-2); }
+.tool-step > :not(summary) { margin: var(--space-1) 8px 0 32px; }
+.tool-step > p { line-height: 1.6; }
+.tool-step .tool-step-label { margin-top: var(--space-2); font-size: var(--fs-tiny); font-weight: 600; color: var(--c-muted); }
+.tool-step pre { margin-top: 2px; max-height: 280px; overflow: auto; }
+.management-result { display: grid; justify-items: start; gap: var(--space-1); padding: var(--space-3) var(--space-4); border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-elevated); color: var(--c-text); }
+.management-result > :is(strong, p) { margin: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  [data-tone="running"] > summary > .tool-mark::before { animation: pd-bob 1s ease-in-out infinite; }
+  .tool-run[open] > .tool-steps { animation: pd-fade var(--dur-2) var(--ease-out); }
+}
 .shell-chat-column .message-user ::selection { background: rgb(255 255 255 / .35); color: inherit; }
-.shell-chat-column .message-heading { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; font-size: 12px; color: var(--c-muted); margin-bottom: var(--space-1); }
+.shell-chat-column .message-heading { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: var(--space-2); align-items: baseline; font-size: 12px; color: var(--c-muted); margin-bottom: var(--space-1); }
 .shell-chat-column .message-heading strong { color: var(--c-text); font-weight: 600; }
-.shell-chat-column .message-tool .message-heading { margin-bottom: 2px; }
-.shell-chat-column .message-tool .message-heading strong { color: var(--c-text-2); font-weight: 500; }
-.message-body { margin: 0; white-space: pre-wrap; line-height: 1.65; }
+/* Plain text keeps its line breaks; a rendered reply (div.md) spaces its blocks by margin instead. */
+.message-body { margin: 0; line-height: 1.65; }
+p.message-body { white-space: pre-wrap; }
 .shell-chat-column pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: var(--c-fill); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); }
 .shell-typing { display: inline-flex; align-items: center; gap: var(--space-2); align-self: flex-start; color: var(--c-muted); font-size: 13px; margin: 0; padding: 6px 16px 6px 12px; border-radius: var(--radius-pill); background: var(--c-bubble); }
 .conversation-empty { text-align: center; color: var(--c-muted); margin: 10vh 0; }
@@ -264,7 +297,6 @@ body { background: var(--c-canvas); color: var(--c-text); font-family: system-ui
 .shell-details-header h3 { margin: 0; font-size: 15px; }
 .shell-details details > summary { cursor: pointer; font-weight: 500; }
 .shell-details section, .shell-details fieldset { margin: 0; min-width: 0; }
-.shell-details .identity-grid { grid-template-columns: 1fr; }
 
 .shell-login { max-width: 420px; margin: 16vh auto 0; padding: var(--space-8); border: 1px solid var(--c-border); border-radius: var(--radius-xl); background: var(--c-elevated); box-shadow: var(--shadow-lg); text-align: center; animation: pd-pop var(--dur-3) var(--ease-spring); }
 .shell-login .shell-brand-mark { width: 64px; height: 64px; margin: 0 auto var(--space-4); }
@@ -640,7 +672,13 @@ body { background: var(--c-canvas); color: var(--c-text); font-family: system-ui
 .chat-status.tone-neutral, .chat-status.tone-busy { background: color-mix(in srgb, var(--bot) 12%, var(--c-bg)); color: var(--c-text-2); }
 .chat-status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Small screens keep the bubble layout but use the narrower avatar column. */
+/* Phones: the avatar sits beside the name, and the reply gets the whole width below it. */
 @media (max-width: 719px) {
-  .shell-chat-column .message-bot { grid-template-columns: 32px minmax(0, 1fr); column-gap: var(--space-2); }
+  .shell-chat-column .message-bot { grid-template-columns: 24px minmax(0, 1fr); column-gap: var(--space-2); }
+  .shell-chat-column .message-bot > * { grid-column: 1 / -1; }
+  .shell-chat-column .message-bot > .message-avatar { grid-column: 1; grid-row: 1; margin-top: 0; align-self: center; }
+  .shell-chat-column .message-bot > .message-avatar .bot-avatar { width: 24px !important; height: 24px !important; }
+  .shell-chat-column .message-bot > .message-avatar svg { width: 24px; height: 24px; }
+  .shell-chat-column .message-bot > .message-avatar + .message-heading { grid-column: 2; grid-row: 1; align-self: center; margin-bottom: 0; }
+  .shell-chat-column .message-bot > .md { justify-self: stretch; }
 }

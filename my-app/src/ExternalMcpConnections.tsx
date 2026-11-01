@@ -98,7 +98,7 @@ function ConnectionPanel({ token, client: provided, onSummary }: Props) {
     }
     finally { working.current = false; if (live.current && !controller.signal.aborted) { active.current = null; setBusy(false) } }
   }
-  const recovery = pending && <div className="external-mcp-pending" role="status"><details className="tech-info"><summary>技术信息</summary><p>原请求：<code>{pending.input.requestId}</code>。原操作与配置保持不变。</p></details>
+  const recovery = pending && <div className="external-mcp-pending" role="status"><p>上次操作的结果还没确认，配置没有改动。</p>
     {pending.retryable ? <div className="external-mcp-actions"><button type="button" disabled={busy} onClick={() => void mutate(pending.operation, pending.input, true)}>重试</button><button type="button" disabled={busy} onClick={() => { setPending(null); setError('已取消重试，可以重新读取后再改。') }}>取消重试</button></div>
       : <button type="button" disabled={busy} onClick={() => void verify()}>核对上次操作</button>}
   </div>

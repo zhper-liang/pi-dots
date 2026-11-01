@@ -91,7 +91,7 @@ test('Bot view keeps shared preferences read-only, detail uses live memory and l
   assert.doesNotMatch(page, /将在 T11|bot-memory-placeholder/)
   assert.doesNotMatch(config, /setDescription|<textarea|职责与模型/)
   assert.match(config, /description: view.bot.description/)
-  assert.match(config, /<details className="tech-info">[\s\S]*?<summary>技术信息<\/summary>/)
+  assert.match(config, /<details className="tech-info">[\s\S]*?<summary>修改记录<\/summary>/)
 })
 
 

@@ -45,18 +45,17 @@ export default function TaskBlockerControls<T extends BlockedTask>({ task, token
   return <section className="task-blockers" aria-label="待处理问题" data-testid="task-blockers">
     <h3>待处理问题</h3>
     <p className="muted small">在下面回答，机器人就能接着处理。</p>
-    {items.map((item) => <SystemCard key={item.id} className={`blocker-item ${item.status}`} card={{ kind: 'blocker', state: item.status === 'pending' && !cancelled ? 'pending' : item.status }} title={`问题 #${item.id}`} state={item.status === 'resolved' ? '已回答' : cancelled || item.status==='cancelled' ? '已取消 · 问题保留' : item.assignee==='supervisor'?'等待主管处理':'已转用户 / 等待用户回答'}>
+    {items.map((item) => <SystemCard key={item.id} className={`blocker-item ${item.status}`} card={{ kind: 'blocker', state: item.status === 'pending' && !cancelled ? 'pending' : item.status }} title="需要你回答" state={item.status === 'resolved' ? '已回答' : cancelled || item.status==='cancelled' ? '已取消' : item.assignee==='supervisor'?'等派活的机器人处理':'等你回答'}>
       <p className="blocker-question">{item.question}</p>
-      <details className="tech-info"><summary>技术信息</summary><p className="muted small">需要：{item.requiredInformation} · 处理人：{item.assignee==='supervisor'?`主管 ${item.supervisorBotId} / Task #${item.parentTaskId}`:'认证用户'} · 子任务 #{item.taskId} · v{item.version??1} · {new Date(item.createdAt).toLocaleString('zh-CN')}</p></details>
-      <details className="tech-info"><summary>技术信息</summary>{item.history?.map((event,index)=><p className="muted small" key={index}>{event.action} → {event.assignee} {event.reason??''} · {new Date(event.createdAt).toLocaleString('zh-CN')}</p>)}</details>
-      {item.answer ? <div className="blocker-answer"><strong>回答</strong><p>{item.answer.content}</p><span className="muted small">{new Date(item.answer.createdAt).toLocaleString('zh-CN')} · 已保存到此事项，仅处理一次</span></div>
+      {item.requiredInformation && <p className="muted small">需要：{item.requiredInformation}</p>}
+      {item.answer ? <div className="blocker-answer"><strong>回答</strong><p>{item.answer.content}</p><span className="muted small">{new Date(item.answer.createdAt).toLocaleString('zh-CN')}</span></div>
         : cancelled || item.status==='cancelled' ? <p className="muted">会话已取消，回答已保留。</p>
-          : !own(item.id) ? <p className="muted">此为子任务同一事项；请<a href={`#bot=${encodeURIComponent(task.collaborations?.find(r=>r.childTaskId===item.taskId)?.executorBotId??'')}&task=${item.taskId}`}>打开子任务 #{item.taskId}</a> 精准处理。</p>
-          : item.assignee!=='user' ? <p className="muted">仅绑定主管可回答或显式转用户；普通消息不解除等待。</p>
+          : !own(item.id) ? <p className="muted">这个问题在子任务里，<a href={`#bot=${encodeURIComponent(task.collaborations?.find(r=>r.childTaskId===item.taskId)?.executorBotId??'')}&task=${item.taskId}`}>去子任务回答</a>。</p>
+          : item.assignee!=='user' ? <p className="muted">由派活的机器人回答，它答不了会转给你。</p>
           : <form onSubmit={(event) => void resolve(event, item.id)}>
-            <label htmlFor={`blocker-answer-${item.id}`}>回答问题 #{item.id}</label>
+            <label htmlFor={`blocker-answer-${item.id}`}>你的回答</label>
             <textarea id={`blocker-answer-${item.id}`} rows={2} maxLength={4000} value={drafts[item.id] ?? ''} disabled={busy || task.blockers?.activeId !== item.id}
-              placeholder="例如 Asia/Shanghai；此处回答只对应这个问题" onChange={(event) => setDrafts((current) => ({ ...current, [item.id]: event.target.value }))} />
+              placeholder="在这里回答这个问题" onChange={(event) => setDrafts((current) => ({ ...current, [item.id]: event.target.value }))} />
             <button className="primary" disabled={busy || task.blockers?.activeId !== item.id || !(drafts[item.id] ?? '').trim()}>{busy ? '正在提交回答…' : '提交回答并继续'}</button>
             <p className="muted small">回答后接着处理这个问题。</p>
           </form>}

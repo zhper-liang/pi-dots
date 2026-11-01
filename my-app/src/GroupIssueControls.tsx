@@ -9,6 +9,5 @@ export default function GroupIssueControls({items,token,onRefresh,onError}:{item
     {item.restricted && <p role="status">暂时看不了这条记录，请核对连接权限。</p>}
     <TaskBlockerControls task={{ ...item, groupChild: true }} token={token} onUpdated={onRefresh} onError={onError} />
     <TaskApprovalControls task={{ ...item, groupChild: true }} token={token} onUpdated={onRefresh} onError={onError} />
-    <details className="tech-info"><summary>技术信息</summary><p>任务 #{item.taskId} · 群消息 #{item.sourceMessageId} · 工作 {item.rootWorkId}</p></details>
   </article>)}</section>
 }

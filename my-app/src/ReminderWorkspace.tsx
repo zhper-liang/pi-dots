@@ -55,7 +55,6 @@ export default function ReminderWorkspace({ token, onOpenTask }: { token: string
         <p>{n.redacted ? '当前权限不允许查看旧正文与原任务。' : n.taskId ? '定时任务运行完了，打开原会话看结果。' : '到提醒时间了，看一下这件事。'}</p>
         {!n.redacted && n.taskId && <a href={`#task=${n.taskId}`} onClick={e => { if (onOpenTask) { e.preventDefault(); onOpenTask(n.taskId!, n.botId ?? 'chief') } }}>打开原会话</a>}
         {n.status !== 'read' && <button disabled={busy} onClick={() => void action(async () => { await api('notification-read', { id: n.id }); await reload() })}>标记已读</button>}
-        <details className="tech-info"><summary>技术信息</summary><pre>{JSON.stringify({ id: n.id, deliveryId: n.deliveryId, occurrenceId: n.occurrenceId, taskId: n.taskId, status: n.status, recordedAt: n.recordedAt, readAt: n.readAt, notice: n.notice }, null, 2)}</pre></details>
       </article>)}
       {data.next !== undefined && <button disabled={busy} onClick={() => void action(async () => { const next = await api<Inbox>('reminder-list', { cursor: data.next }); setData({ ...next, items: [...data.items, ...next.items] }) })}>加载更多通知</button>}
     </>}

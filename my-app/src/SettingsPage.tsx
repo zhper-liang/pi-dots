@@ -38,7 +38,7 @@ export default function SettingsPage({ token, footer }: { token: string; footer?
     <section className="today-card" aria-labelledby="settings-advanced">
       <h2 id="settings-advanced">高级</h2>
       <StdioCredentials key={token} token={token} />
-      <details className="tech-info"><summary>技术信息</summary><WorkspaceStatus token={token} /></details>
+      <details className="tech-info"><summary>存储诊断</summary><WorkspaceStatus token={token} /></details>
     </section>
     {footer && <section className="today-card settings-account" aria-label="连接">{footer}</section>}
   </div>

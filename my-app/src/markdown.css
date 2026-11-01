@@ -1,0 +1,26 @@
+/* Rendered replies. Block spacing comes from margins, so the bubble's pre-wrap is turned off.
+   .md.md lifts a rule over the chat column's generic pre style, which loads later. */
+.md { white-space: normal; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md :is(p, ul, ol, blockquote, pre, .md-table) { margin: 0 0 var(--space-2); }
+.md p { line-height: inherit; }
+.md :is(ul, ol) { padding-left: 1.4em; }
+.md li + li { margin-top: 2px; }
+.md li > :is(ul, ol) { margin: 2px 0 0; }
+.md :is(h1, h2, h3, h4, h5, h6) { margin: var(--space-3) 0 var(--space-1); font-size: 1em; font-weight: 650; line-height: 1.45; letter-spacing: 0; }
+.md :is(h1, h2) { font-size: 1.12em; }
+.md a { color: var(--c-accent); text-decoration: underline; text-underline-offset: 2px; }
+/* Code and table heads sit on the page color so they stand apart from the bubble in both themes. */
+.md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; padding: 1px 5px; border-radius: var(--radius-xs); background: color-mix(in srgb, var(--c-text) 7%, transparent); }
+.md.md pre { max-width: 100%; overflow-x: auto; white-space: pre; padding: var(--space-2) var(--space-3); border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-bg); font-size: 12px; line-height: 1.6; }
+.md pre code { padding: 0; background: transparent; font-size: inherit; }
+.md blockquote { padding-left: var(--space-3); border-left: 3px solid var(--c-border-strong); color: var(--c-text-2); }
+.md hr { margin: var(--space-3) 0; border: 0; border-top: 1px solid var(--c-border); }
+.md .md-table { max-width: 100%; overflow-x: auto; }
+.md table { border-collapse: collapse; font-size: .94em; }
+.md.md :is(th, td) { font-size: inherit; color: inherit; padding: 4px 10px; border: 1px solid var(--c-border); text-align: left; vertical-align: top; }
+.md table { background: var(--c-bg); }
+.md th { background: color-mix(in srgb, var(--c-text) 5%, var(--c-bg)); font-weight: 600; }
+.md input[type=checkbox] { width: auto; margin: 0 6px 0 0; padding: 0; vertical-align: middle; }
+.md li:has(> input[type=checkbox]) { list-style: none; margin-left: -1.2em; }

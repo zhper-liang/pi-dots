@@ -190,7 +190,7 @@ test('consumers use one shared hook, preserve mounted drafts and scroll, and rem
   assert.equal((shell.match(/<BotRoutines /g) ?? []).length, 1)
   assert.doesNotMatch(shell, /routineBot|items-panel-automation|自动化视图/)
   assert.match(shell, /<ScheduleWorkspace token=\{token\} view="runs"/)
-  assert.match(shell, /<details className="tech-info"><summary>技术信息<\/summary><ScheduleWorkspace token=\{token\} view="schedules"/)
+  assert.match(shell, /<details className="tech-info"><summary>高级：全部计划<\/summary><ScheduleWorkspace token=\{token\} view="schedules"/)
   assert.doesNotMatch(shell, /setInterval|refreshRoutines/)
 })
 
@@ -218,14 +218,14 @@ test('one routine list spans robots, defaults new routines to Chief, and opens r
   assert.match(routines, /key=\{props\.token\}/)
 })
 
-test('notifications keep attention and reminders, collapse technical details, and preserve proposal-only reuse', () => {
+test('notifications keep attention and reminders, show no technical dumps, and preserve proposal-only reuse', () => {
   assert.match(inbox, />需要你处理\{/)
   assert.match(inbox, />提醒<\/h2>/)
   assert.match(inbox, /proposalTaskId === undefined && <section/)
   assert.match(inbox, /proposalTaskId !== undefined && items\.length === 0/)
   assert.match(inbox, /<ReminderWorkspace token=\{token\} onOpenTask=\{onOpenTask\}/)
   for (const source of [inbox, reminders]) {
-    assert.match(source, /<details className="tech-info"><summary>技术信息<\/summary>/)
+    assert.doesNotMatch(source, /<summary>技术信息<\/summary>|JSON\.stringify\(\{ (id|taskId):/)
     assert.doesNotMatch(source, /<summary>诊断<\/summary>|仅应用内记录|工具组允许直接执行/)
   }
   assert.match(reminders, /<details className="tech-info"><summary>管理提醒<\/summary>/)

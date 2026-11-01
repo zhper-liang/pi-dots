@@ -129,6 +129,5 @@ export function MemoryDocumentSection({ title, description, document: doc, histo
     {error && <p className="memory-error" role="alert">{error}</p>}
     {notice && <p className="memory-notice" role="status">{notice}</p>}
     {(history !== undefined || editable) && <MemoryHistory history={history} truncated={truncated} onOpenSource={onOpenSource} />}
-    <details className="tech-info"><summary>技术信息</summary><dl><dt>当前版本</dt><dd>{doc.version}</dd><dt>状态</dt><dd>{doc.status.state === 'pending' ? '待处理' : '已就绪'}</dd>{doc.status.code && <><dt>技术信息</dt><dd>{doc.status.code}</dd></>}</dl></details>
   </section>
 }

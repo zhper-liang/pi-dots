@@ -1,4 +1,3 @@
-import WorkspaceIdentity from './WorkspaceIdentity'
 import { createWorkspaceRequestGuard } from './workspace-request-guard.mjs'
 import ExternalSync from './ExternalSync'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -53,7 +52,7 @@ export default function ExternalWorkspace({ token, onSummary }: { token: string;
     <p>绑定一个飞书日历后，开着「日程与待办」的机器人都能读写它。</p>
     {busy && <p role="status">正在处理…</p>}{error && <p role="alert">{error}</p>}
     <button disabled={busy} onClick={() => void run(async () => { await refresh() })}>刷新飞书日历</button>
-    {source ? <><WorkspaceIdentity sourceId={source.id} authority="external" scope={source.authorized ? source.readScope : 'none'} epoch={source.epoch} /><p>已绑定日历：{source.calendarId}</p>
+    {source ? <><p>已绑定日历：{source.calendarId}</p>
       {!source.authorized && <button disabled={busy} onClick={() => void run(async () => { await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: true, readScope: 'full', confirmed: true }); await refresh() })}>恢复使用这个日历</button>}
       <button disabled={busy || !source.authorized} onClick={() => void run(async () => { await api('grant', { sourceId: source.id, expectedEpoch: source.epoch, enabled: false, readScope: 'full', confirmed: true }); setEvents([]); setOp(null); setTarget(null); setForm(initial); setMessage(''); await refresh() })}>停用这个日历</button>
       {source.authorized && <>

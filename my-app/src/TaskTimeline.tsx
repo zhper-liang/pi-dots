@@ -25,7 +25,6 @@ export default function TaskTimeline({ task, toolLabels = {} }: { task: unknown;
           {e.at && <time dateTime={e.at}>{when(e.at)}</time>}
         </div>
         {(e.summary || e.result) && <p className="timeline-summary">{[e.summary, e.result].filter(Boolean).join(' → ')}</p>}
-        {e.detail !== undefined && <details className="tech-info timeline-detail"><summary>技术信息</summary><pre>{typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail, null, 2)}</pre></details>}
       </div>
     </li>)}
   </ol>

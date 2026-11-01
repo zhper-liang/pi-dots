@@ -61,6 +61,6 @@ test('R1 shell defaults to today calendar, keeps calendar, routines and runs mou
   assert.match(shell, /hidden=\{visibleItemTab !== 'routines'\}/)
   assert.match(shell, /hidden=\{visibleItemTab !== 'runs'\}/)
   assert.match(shell, /<BotRoutines/)
-  assert.match(shell, /<details className="tech-info"><summary>技术信息<\/summary><ScheduleWorkspace token=\{token\} view="schedules" \/><\/details>/)
+  assert.match(shell, /<details className="tech-info"><summary>高级：全部计划<\/summary><ScheduleWorkspace token=\{token\} view="schedules" \/><\/details>/)
   assert.match(shell, /<ScheduleWorkspace token=\{token\} view="runs" \/>/)
 })

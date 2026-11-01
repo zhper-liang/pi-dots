@@ -79,7 +79,7 @@ export default function BotTemplatePage({ bot, token, tab, mainTaskId, onTab, on
       {!chief && !inactive && <section className="bot-edit-section bot-danger" aria-label="停用机器人"><h2>停用机器人</h2><p>停用后不能再和它对话，记录都保留。</p><button type="button" onClick={() => {
         if (window.confirm(`停用 ${bot.name}？停用后不能再和它对话，正在做的事会尽量停下，记录都保留，暂时不能重新启用。`)) onDeactivate()
       }}>停用机器人</button></section>}
-      <details className="tech-info"><summary>技术信息</summary><FeishuCalendarPanel token={token} taskId={mainTaskId} /></details>
+      <details className="tech-info"><summary>飞书日历</summary><FeishuCalendarPanel token={token} taskId={mainTaskId} /></details>
     </div>
   </div>
 }

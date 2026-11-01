@@ -119,13 +119,10 @@ export default function BotConfiguration({ botId, token, onSaved, readOnly = fal
     {error && <p role="alert" className="bot-edit-error">{error}</p>}
     {notice && <p role="status" className="bot-edit-hint">{notice}</p>}
     <details className="tech-info">
-      <summary>技术信息</summary>
+      <summary>修改记录</summary>
       <ol className="bot-edit-history">{view.versions.map((v) => <li key={v.configRef.version}>
-        <strong>{v.configRef.version}</strong> · {v.source} · {new Date(v.savedAt).toLocaleString('zh-CN')} · 模型 {v.defaults.model?.id ?? '测试模式'} · 资源 {v.defaults.toolResources.join('、') || '无'}
+        {new Date(v.savedAt).toLocaleString('zh-CN')} · 模型 {v.defaults.model?.id ?? '测试回复'}
         <p>当时的职责（历史记录）：{v.description}</p>
-      </li>)}</ol>
-      <ol className="bot-edit-history">{view.audit.map((e) => <li key={e.id}>#{e.id} · {e.type} · {e.source}{e.code ? ` · ${e.code}` : ''} · {new Date(e.createdAt).toLocaleString('zh-CN')}
-        <pre>{JSON.stringify({ previous: e.previous, next: e.next, initiatingUser: e.initiatingUser, executingChief: e.executingChief, taskId: e.taskId, operationId: e.operationId }, null, 2)}</pre>
       </li>)}</ol>
     </details>
   </>

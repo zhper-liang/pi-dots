@@ -34,7 +34,7 @@ export default function TaskCancellationControls<T extends CancellableTask>({ ta
     {cancelled ? <div role="status" data-testid="task-cancelled">
       <strong>会话已取消</strong>
       <p>后续工作已停止，已有记录都保留。</p>
-      <details className="tech-info"><summary>技术信息</summary><p className="muted small">{task.cancellation && `${new Date(task.cancellation.requestedAt).toLocaleString('zh-CN')} · `}{task.runtime.status === 'terminal' ? '执行已停止。' : '已请求中止在途调用，等待真实回执。'}不能保证撤回已发生动作；迟到结果按实际成功或失败保存。</p></details>
+      <p className="muted small">{task.runtime.status === 'terminal' ? '已经做完的操作不会撤回。' : '正在停下进行中的操作；已经做完的不会撤回。'}</p>
     </div> : <>
       <div><strong>取消这个会话</strong><p className="muted small">停止这个会话及其进行中的子任务，保留历史消息。</p></div>
       <button type="button" className="cancel-task-button" disabled={busy || !['pending', 'running', 'waiting'].includes(task.runtime.status)} onClick={() => void cancel()}>{busy ? '正在取消…' : '取消会话'}</button>

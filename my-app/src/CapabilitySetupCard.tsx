@@ -117,6 +117,5 @@ function SetupCard({ token, receipt, targetName, botNames = {}, readOnly = false
       <McpCredentialForm connectionId={credential.connectionId} expectedRevision={credential.revision} transport={credential.transport} secretEnvKeys={credential.secretEnvKeys} hasCredential={credential.hasCredential}
         disabled={busy || readOnly || unknown} onSave={(input, signal) => mcp.saveCredential(input, signal)} onVerify={(requestId, signal) => mcp.requestStatus(requestId, signal)} onSaved={() => { void credentialSaved() }} onPendingChange={setCredentialPending} />
     </section>}
-    <details className="tech-info capability-setup-details"><summary>技术信息</summary><dl><dt>setup</dt><dd>{current.setupId}</dd><dt>request</dt><dd>{current.requestId}</dd><dt>operation</dt><dd>{current.operationId}</dd><dt>Task / 输入</dt><dd>{current.taskId} / {current.inputId}</dd>{current.capabilityId && <><dt>能力</dt><dd>{current.capabilityId}</dd></>}</dl></details>
   </SystemCard>
 }
